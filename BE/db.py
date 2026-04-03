@@ -1,0 +1,84 @@
+import os
+from sqlalchemy import (
+    create_engine, Table, Column,
+    String, Boolean, Integer, Text, TIMESTAMP, MetaData,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import func
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL) if DATABASE_URL else None
+SessionLocal = sessionmaker(bind=engine) if engine else None
+metadata = MetaData()
+
+jobs_table = Table(
+    "jobs", metadata,
+    Column("job_id", String, primary_key=True),
+    Column("youtube_url", String, nullable=False),
+    Column("is_vertical", Boolean, nullable=False),
+    Column("is_subtitles", Boolean, nullable=False),
+    Column("is_slice", Boolean, nullable=False),
+    Column("is_background", Boolean, nullable=False),
+    Column("is_circle", Boolean, nullable=False),
+    Column("trace", String, nullable=True),
+    Column("status", String, nullable=False),
+)
+
+sub_job_table = Table(
+    "sub_job", metadata,
+    Column("sub_job_id", String, primary_key=True),
+    Column("job_id", String, nullable=False),
+    Column("banner_id", Integer, nullable=True),
+    Column("account_ids", ARRAY(Integer), nullable=True),
+    Column("platform", String, nullable=False),
+    Column("publish_datetime", TIMESTAMP(timezone=True), nullable=True),
+)
+
+jobs_metadata_table = Table(
+    "jobs_metadata", metadata,
+    Column("job_id", String, primary_key=True),
+    Column("create_datetime", TIMESTAMP(timezone=True), server_default=func.now()),
+    Column("last_change_datetime", TIMESTAMP(timezone=True), server_default=func.now()),
+)
+
+accounts_table = Table(
+    "accounts", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("platform", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("url", String, nullable=True),
+    Column("note", Text, nullable=True),
+    Column("bucket", String, nullable=True),
+    Column("file_name", String, nullable=True),
+)
+
+banners_table = Table(
+    "banners", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    Column("note", Text, nullable=True),
+    Column("bucket", String, nullable=True),
+    Column("file_name", String, nullable=True),
+)
+
+backgrounds_table = Table(
+    "backgrounds", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    Column("note", Text, nullable=True),
+    Column("bucket", String, nullable=True),
+    Column("file_name", String, nullable=True),
+)
+
+
+def get_db():
+    if SessionLocal is None:
+        yield None
+        return
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

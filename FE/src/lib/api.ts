@@ -1,0 +1,126 @@
+import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord } from "@/types";
+
+const BASE_URL = "/api";
+
+export async function fetchBackgrounds(): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/backgrounds`);
+  if (!res.ok) throw new Error("Failed to fetch backgrounds");
+  return res.json();
+}
+
+export async function fetchBanners(): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/banners`);
+  if (!res.ok) throw new Error("Failed to fetch banners");
+  return res.json();
+}
+
+export async function fetchAccounts(): Promise<AccountsResponse> {
+  const res = await fetch(`${BASE_URL}/accounts`);
+  if (!res.ok) throw new Error("Failed to fetch accounts");
+  return res.json();
+}
+
+export async function fetchJobs(): Promise<JobData[]> {
+  const res = await fetch(`${BASE_URL}/jobs`);
+  if (!res.ok) throw new Error("Failed to fetch jobs");
+  return res.json();
+}
+
+export async function updateJob(jobId: string, data: Partial<JobData>): Promise<JobData> {
+  const res = await fetch(`${BASE_URL}/jobs/${jobId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update job");
+  return res.json();
+}
+
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/jobs/${jobId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete job");
+}
+
+export async function updateSubJob(subJobId: string, data: {
+  platform?: string;
+  publish_datetime?: string | null;
+  account_names?: string[];
+  banner_name?: string | null;
+}): Promise<SubJobData> {
+  const res = await fetch(`${BASE_URL}/sub_jobs/${subJobId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update sub_job");
+  return res.json();
+}
+
+export async function deleteSubJob(subJobId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/sub_jobs/${subJobId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete sub_job");
+}
+
+// ── Accounts ─────────────────────────────────────────────────────────────────
+export async function fetchAccountsList(): Promise<AccountRecord[]> {
+  const res = await fetch(`${BASE_URL}/accounts/list`);
+  if (!res.ok) throw new Error("Failed to fetch accounts list");
+  return res.json();
+}
+export async function updateAccount(id: number, data: Partial<AccountRecord>): Promise<AccountRecord> {
+  const res = await fetch(`${BASE_URL}/accounts/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update account");
+  return res.json();
+}
+export async function deleteAccount(id: number): Promise<void> {
+  await fetch(`${BASE_URL}/accounts/${id}`, { method: "DELETE" });
+}
+
+// ── Banners ───────────────────────────────────────────────────────────────────
+export async function fetchBannersList(): Promise<AssetRecord[]> {
+  const res = await fetch(`${BASE_URL}/banners/list`);
+  if (!res.ok) throw new Error("Failed to fetch banners list");
+  return res.json();
+}
+export async function updateBanner(id: number, data: { name?: string; note?: string }): Promise<AssetRecord> {
+  const res = await fetch(`${BASE_URL}/banners/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update banner");
+  return res.json();
+}
+export async function deleteBanner(id: number): Promise<void> {
+  await fetch(`${BASE_URL}/banners/${id}`, { method: "DELETE" });
+}
+
+// ── Backgrounds ───────────────────────────────────────────────────────────────
+export async function fetchBackgroundsList(): Promise<AssetRecord[]> {
+  const res = await fetch(`${BASE_URL}/backgrounds/list`);
+  if (!res.ok) throw new Error("Failed to fetch backgrounds list");
+  return res.json();
+}
+export async function updateBackground(id: number, data: { name?: string; note?: string }): Promise<AssetRecord> {
+  const res = await fetch(`${BASE_URL}/backgrounds/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update background");
+  return res.json();
+}
+export async function deleteBackground(id: number): Promise<void> {
+  await fetch(`${BASE_URL}/backgrounds/${id}`, { method: "DELETE" });
+}
+
+export async function submitJobs(cards: VideoCardData[]): Promise<{ status: string; job_id: string }[]> {
+  const results = await Promise.all(
+    cards.map((card) =>
+      fetch(`${BASE_URL}/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(card),
+      }).then((r) => r.json())
+    )
+  );
+  return results;
+}

@@ -1,0 +1,111 @@
+name: Build and Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  IMAGE_BE: registry.legendary-trio.me/lt-inc/terex-be
+  IMAGE_FE: registry.legendary-trio.me/lt-inc/terex-fe
+
+jobs:
+  build-be:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: registry.legendary-trio.me
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASS }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_BE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: BE
+          file: BE/docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.IMAGE_BE }}:latest
+          cache-to: type=inline
+
+  build-fe:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: registry.legendary-trio.me
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASS }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_FE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: FE
+          file: FE/docker/Dockerfile.prod
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.IMAGE_FE }}:latest
+          cache-to: type=inline
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build-be, build-fe]
+    steps:
+      - uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: set image deployment/terex-be terex-be=${{ env.IMAGE_BE }}:${{ needs.build-be.outputs.image-tag }} -n admin
+
+      - uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout restart deployment/terex-be -n admin
+
+      - uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: set image deployment/terex-fe terex-fe=${{ env.IMAGE_FE }}:${{ needs.build-fe.outputs.image-tag }} -n admin
+
+      - uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout restart deployment/terex-fe -n admin

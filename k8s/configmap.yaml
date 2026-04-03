@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: terex-config
+  namespace: admin
+data:
+  S3_ENDPOINT: "minio:9000"
+  S3_BUCKET_BANNERS: "banners"
+  S3_BUCKET_BACKGROUNDS: "backgrounds"
+  S3_BUCKET_COOKIES: "cookies"
+  OTEL_SERVICE_NAME: "terex-be"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+  BACKEND_URL: "http://terex-be:8000"

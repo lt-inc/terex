@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terex-be
+  namespace: admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: terex-be
+  template:
+    metadata:
+      labels:
+        app: terex-be
+    spec:
+      containers:
+        - name: terex-be
+          image: registry.legendary-trio.me/lt-inc/terex-be:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: terex-config
+            - secretRef:
+                name: terex-secret
+          env:
+            - name: DEV
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /docs
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

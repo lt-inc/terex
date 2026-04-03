@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terex-fe
+  namespace: admin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: terex-fe
+  template:
+    metadata:
+      labels:
+        app: terex-fe
+    spec:
+      containers:
+        - name: terex-fe
+          image: registry.legendary-trio.me/lt-inc/terex-fe:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: BACKEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: terex-config
+                  key: BACKEND_URL
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
