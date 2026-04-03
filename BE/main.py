@@ -62,11 +62,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MOCK_ACCOUNTS = {
-    "youtube": ["SENATOR", "LTINC", "funny_cliper2000"],
-    "tiktok": ["@senator_tiktok", "@ltinc_official"],
-    "instagram": ["@senator_ig", "@ltinc_ig"],
-}
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -493,8 +488,16 @@ def get_banners():
 
 
 @app.get("/api/accounts")
-def get_accounts():
-    return MOCK_ACCOUNTS
+def get_accounts(db: Session = Depends(get_db)):
+    if db is None:
+        return {"youtube": [], "tiktok": [], "instagram": []}
+    rows = db.execute(select(accounts_table.c.platform, accounts_table.c.name)).fetchall()
+    result: dict[str, list[str]] = {"youtube": [], "tiktok": [], "instagram": []}
+    for row in rows:
+        platform = row.platform.lower()
+        if platform in result:
+            result[platform].append(row.name)
+    return result
 
 
 @app.post("/api/jobs")
