@@ -11,6 +11,7 @@ const EXTERNAL_LINKS = [
   { label: "RabbitMQ", href: "https://rabbitmq.legendary-trio.me" },
   { label: "PgAdmin", href: "https://pgadmin.legendary-trio.me" },
   { label: "Portainer", href: "https://portainer.legendary-trio.me" },
+  { label: "Vault", href: "https://vault.legendary-trio.me" },
 ];
 
 function ChevronIcon({ open }: { open: boolean }) {
