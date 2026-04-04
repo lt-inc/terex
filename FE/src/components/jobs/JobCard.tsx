@@ -14,18 +14,22 @@ interface JobCardProps {
   onDeleted: () => void;
 }
 
-const STATUS_OPTIONS = ["pending", "running", "done", "failed"];
+const STATUS_OPTIONS = ["pending", "ready", "running", "done", "failed"];
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-yellow-900/40 text-yellow-300",
-  running: "bg-blue-900/40 text-blue-300",
-  done: "bg-green-900/40 text-green-300",
-  failed: "bg-red-900/40 text-red-300",
+  pending:  "bg-yellow-900/40 text-yellow-300",
+  ready:    "bg-emerald-900/40 text-emerald-300",
+  running:  "bg-blue-900/40 text-blue-300",
+  done:     "bg-green-900/40 text-green-300",
+  failed:   "bg-red-900/40 text-red-300",
 };
+
+const LOCKED_STATUSES = new Set(["ready", "running", "done", "failed"]);
 
 export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDeleted }: JobCardProps) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   const [youtubeUrl, setYoutubeUrl] = useState(job.youtube_url);
   const [status, setStatus] = useState(job.status);
@@ -35,6 +39,8 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
   const [isSlice, setIsSlice] = useState(job.is_slice);
   const [isBackground, setIsBackground] = useState(job.is_background);
   const [isCircle, setIsCircle] = useState(job.is_circle);
+
+  const locked = LOCKED_STATUSES.has(job.status);
 
   function resetEdit() {
     setYoutubeUrl(job.youtube_url);
@@ -68,6 +74,17 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
     }
   }
 
+  async function handleStartJob() {
+    if (!confirm(`Start job ${job.job_id}? It will be locked for editing.`)) return;
+    setStarting(true);
+    try {
+      const updated = await updateJob(job.job_id, { status: "ready" });
+      onUpdated({ ...updated, sub_jobs: job.sub_jobs });
+    } finally {
+      setStarting(false);
+    }
+  }
+
   async function handleDelete() {
     if (!confirm(`Delete job ${job.job_id}? This will also delete all sub-jobs.`)) return;
     await deleteJob(job.job_id);
@@ -97,7 +114,18 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
           <span className="text-sm text-slate-400 truncate">{job.youtube_url}</span>
           <span className="text-xs text-slate-500 ml-auto shrink-0">{job.sub_jobs.length} sub</span>
         </button>
-        <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-xl leading-none px-1">×</button>
+        {!locked && (
+          <button
+            onClick={handleStartJob}
+            disabled={starting}
+            className="text-xs font-medium bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white px-3 py-1 rounded-md transition-colors shrink-0"
+          >
+            {starting ? "…" : "Start"}
+          </button>
+        )}
+        {!locked && (
+          <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-xl leading-none px-1">×</button>
+        )}
       </div>
 
       {/* Body */}
@@ -105,30 +133,32 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
         <div className="border-t border-slate-700 px-5 py-4 flex flex-col gap-4">
           {!editing ? (
             <>
-              {/* Job fields */}
               <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
                 <Row label="YouTube URL" value={job.youtube_url || "—"} />
                 <Row label="Status" value={job.status} />
                 <Row label="Trace" value={job.trace ?? "—"} />
+                <Row label="Background" value={job.background_name ?? "—"} />
                 <Row label="Created" value={job.create_datetime ? new Date(job.create_datetime).toLocaleString() : "—"} />
                 <Row label="Updated" value={job.last_change_datetime ? new Date(job.last_change_datetime).toLocaleString() : "—"} />
               </div>
               <div className="flex flex-wrap gap-3 text-sm">
-                {[
+                {([
                   ["Vertical", job.is_vertical],
                   ["Subtitles", job.is_subtitles],
                   ["Slice", job.is_slice],
                   ["Background", job.is_background],
                   ["Circle", job.is_circle],
-                ].map(([label, val]) => (
-                  <span key={label as string} className={`px-2 py-0.5 rounded text-xs ${val ? "bg-indigo-900/50 text-indigo-300" : "bg-slate-700 text-slate-500"}`}>
-                    {label as string}
+                ] as [string, boolean][]).map(([label, val]) => (
+                  <span key={label} className={`px-2 py-0.5 rounded text-xs ${val ? "bg-indigo-900/50 text-indigo-300" : "bg-slate-700 text-slate-500"}`}>
+                    {label}
                   </span>
                 ))}
               </div>
-              <button onClick={() => setEditing(true)} className="self-start text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-                Edit
-              </button>
+              {!locked && (
+                <button onClick={() => setEditing(true)} className="self-start text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                  Edit
+                </button>
+              )}
             </>
           ) : (
             <div className="flex flex-col gap-3">
@@ -178,6 +208,7 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
                   subJob={sj}
                   accounts={accounts}
                   bannerOptions={bannerOptions}
+                  locked={locked}
                   onUpdated={handleSubJobUpdated}
                   onDeleted={() => handleSubJobDeleted(sj.sub_job_id)}
                 />

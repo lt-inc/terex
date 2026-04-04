@@ -9,6 +9,7 @@ interface SubJobCardProps {
   subJob: SubJobData;
   accounts: AccountsResponse;
   bannerOptions: string[];
+  locked?: boolean;
   onUpdated: (updated: SubJobData) => void;
   onDeleted: () => void;
 }
@@ -20,7 +21,7 @@ const STATUS_COLORS: Record<string, string> = {
   instagram: "bg-purple-900/40 text-purple-300",
 };
 
-export default function SubJobCard({ subJob, accounts, bannerOptions, onUpdated, onDeleted }: SubJobCardProps) {
+export default function SubJobCard({ subJob, accounts, bannerOptions, locked = false, onUpdated, onDeleted }: SubJobCardProps) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -83,7 +84,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, onUpdated,
             </span>
           )}
         </button>
-        <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-lg leading-none px-1">×</button>
+        {!locked && <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-lg leading-none px-1">×</button>}
       </div>
 
       {/* Body */}
@@ -97,9 +98,11 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, onUpdated,
                 <Row label="Banner" value={subJob.banner_name ?? "—"} />
                 <Row label="Publish" value={subJob.publish_datetime ? new Date(subJob.publish_datetime).toLocaleString() : "—"} />
               </div>
-              <button onClick={() => setEditing(true)} className="self-start text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
-                Edit
-              </button>
+              {!locked && (
+                <button onClick={() => setEditing(true)} className="self-start text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                  Edit
+                </button>
+              )}
             </>
           ) : (
             <div className="flex flex-col gap-3">

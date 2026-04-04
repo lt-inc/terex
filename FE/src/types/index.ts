@@ -89,6 +89,8 @@ export interface JobData {
   is_subtitles: boolean;
   is_slice: boolean;
   is_background: boolean;
+  background_id: number | null;
+  background_name: string | null;
   is_circle: boolean;
   status: string;
   trace: string | null;
