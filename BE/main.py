@@ -238,7 +238,7 @@ def _make_preview_mp4(content: bytes, original_name: str) -> tuple[bytes | None,
 
 # ── ID generation ────────────────────────────────────────────────────────────
 
-_CHARS = string.ascii_letters + string.digits
+_CHARS = string.digits + 'abcdef'
 
 def _short_id() -> str:
     return "".join(random.choices(_CHARS, k=10))
