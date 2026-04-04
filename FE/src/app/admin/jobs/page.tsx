@@ -2,22 +2,24 @@
 
 import { useEffect, useState, useCallback } from "react";
 import JobCard from "@/components/jobs/JobCard";
-import { fetchJobs, fetchAccounts, fetchBanners } from "@/lib/api";
+import { fetchJobs, fetchAccounts, fetchBanners, fetchBackgrounds } from "@/lib/api";
 import type { JobData, AccountsResponse } from "@/types";
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobData[]>([]);
   const [accounts, setAccounts] = useState<AccountsResponse>({ youtube: [], tiktok: [], instagram: [] });
   const [bannerOptions, setBannerOptions] = useState<string[]>([]);
+  const [backgroundOptions, setBackgroundOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [j, a, b] = await Promise.all([fetchJobs(), fetchAccounts(), fetchBanners()]);
+      const [j, a, b, bg] = await Promise.all([fetchJobs(), fetchAccounts(), fetchBanners(), fetchBackgrounds()]);
       setJobs(j);
       setAccounts(a);
       setBannerOptions(b);
+      setBackgroundOptions(bg);
     } finally {
       setLoading(false);
     }
@@ -59,6 +61,7 @@ export default function JobsPage() {
             job={job}
             accounts={accounts}
             bannerOptions={bannerOptions}
+            backgroundOptions={backgroundOptions}
             onUpdated={handleUpdated}
             onDeleted={() => handleDeleted(job.job_id)}
           />

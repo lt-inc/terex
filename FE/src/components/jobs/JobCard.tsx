@@ -10,6 +10,7 @@ interface JobCardProps {
   job: JobData;
   accounts: AccountsResponse;
   bannerOptions: string[];
+  backgroundOptions: string[];
   onUpdated: (updated: JobData) => void;
   onDeleted: () => void;
 }
@@ -25,32 +26,32 @@ const STATUS_COLORS: Record<string, string> = {
 
 const LOCKED_STATUSES = new Set(["ready", "running", "done", "failed"]);
 
-export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDeleted }: JobCardProps) {
+export default function JobCard({ job, accounts, bannerOptions, backgroundOptions, onUpdated, onDeleted }: JobCardProps) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
 
   const [youtubeUrl, setYoutubeUrl] = useState(job.youtube_url);
-  const [status, setStatus] = useState(job.status);
   const [trace, setTrace] = useState(job.trace ?? "");
   const [isVertical, setIsVertical] = useState(job.is_vertical);
   const [isSubtitles, setIsSubtitles] = useState(job.is_subtitles);
   const [isSlice, setIsSlice] = useState(job.is_slice);
   const [isBackground, setIsBackground] = useState(job.is_background);
   const [isCircle, setIsCircle] = useState(job.is_circle);
+  const [backgroundName, setBackgroundName] = useState(job.background_name ?? "");
 
   const locked = LOCKED_STATUSES.has(job.status);
 
   function resetEdit() {
     setYoutubeUrl(job.youtube_url);
-    setStatus(job.status);
     setTrace(job.trace ?? "");
     setIsVertical(job.is_vertical);
     setIsSubtitles(job.is_subtitles);
     setIsSlice(job.is_slice);
     setIsBackground(job.is_background);
     setIsCircle(job.is_circle);
+    setBackgroundName(job.background_name ?? "");
     setEditing(false);
   }
 
@@ -59,7 +60,6 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
     try {
       const updated = await updateJob(job.job_id, {
         youtube_url: youtubeUrl,
-        status,
         trace: trace || null,
         is_vertical: isVertical,
         is_subtitles: isSubtitles,
@@ -168,13 +168,6 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
                   className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
               </div>
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-400">Status</label>
-                <select value={status} onChange={(e) => setStatus(e.target.value)}
-                  className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                  {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-400">Trace</label>
                 <input type="text" value={trace} onChange={(e) => setTrace(e.target.value)}
                   className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
@@ -186,6 +179,16 @@ export default function JobCard({ job, accounts, bannerOptions, onUpdated, onDel
                 <Toggle label="Add background?" checked={isBackground} onChange={setIsBackground} />
                 <Toggle label="Circle?" checked={isCircle} onChange={setIsCircle} />
               </div>
+              {isBackground && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-slate-400">Background</label>
+                  <select value={backgroundName} onChange={(e) => setBackgroundName(e.target.value)}
+                    className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">— none —</option>
+                    {backgroundOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="flex gap-2">
                 <button onClick={handleSave} disabled={saving}
                   className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors">
