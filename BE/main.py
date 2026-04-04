@@ -109,6 +109,8 @@ class JobResponse(BaseModel):
     is_subtitles: bool
     is_slice: bool
     is_background: bool
+    background_id: Optional[int] = None
+    background_name: Optional[str] = None
     is_circle: bool
     status: str
     trace: Optional[str] = None
@@ -122,6 +124,7 @@ class JobUpdate(BaseModel):
     is_subtitles: Optional[bool] = None
     is_slice: Optional[bool] = None
     is_background: Optional[bool] = None
+    background_id: Optional[int] = None
     is_circle: Optional[bool] = None
     status: Optional[str] = None
     trace: Optional[str] = None
@@ -267,6 +270,18 @@ def _get_or_create_account(db: Session, platform: str, name: str) -> int:
         return row.id
     result = db.execute(
         insert(accounts_table).values(platform=platform, name=name).returning(accounts_table.c.id)
+    )
+    return result.fetchone().id
+
+
+def _get_or_create_background(db: Session, name: str) -> int:
+    row = db.execute(
+        select(backgrounds_table.c.id).where(backgrounds_table.c.name == name)
+    ).fetchone()
+    if row:
+        return row.id
+    result = db.execute(
+        insert(backgrounds_table).values(name=name).returning(backgrounds_table.c.id)
     )
     return result.fetchone().id
 
@@ -509,6 +524,10 @@ def create_job(card: VideoCardPayload, db: Session = Depends(get_db)):
         return {"status": "queued", "job_id": job_id}
 
     # ── Insert into jobs ────────────────────────────────────────────────────
+    background_id = None
+    if card.addBackground and card.backgroundName:
+        background_id = _get_or_create_background(db, card.backgroundName)
+
     db.execute(
         insert(jobs_table).values(
             job_id=job_id,
@@ -517,6 +536,7 @@ def create_job(card: VideoCardPayload, db: Session = Depends(get_db)):
             is_subtitles=card.addSubtitles,
             is_slice=card.sliceVideo,
             is_background=card.addBackground,
+            background_id=background_id,
             is_circle=(card.shape == "circle"),
             trace=None,
             status="pending",
@@ -573,6 +593,10 @@ def list_jobs(db: Session = Depends(get_db)):
         sj_rows = db.execute(
             select(sub_job_table).where(sub_job_table.c.job_id == job.job_id)
         ).fetchall()
+        bg_name = None
+        if job.background_id:
+            bg_row = db.execute(select(backgrounds_table.c.name).where(backgrounds_table.c.id == job.background_id)).fetchone()
+            bg_name = bg_row.name if bg_row else None
         result.append(JobResponse(
             job_id=job.job_id,
             youtube_url=job.youtube_url,
@@ -580,6 +604,8 @@ def list_jobs(db: Session = Depends(get_db)):
             is_subtitles=job.is_subtitles,
             is_slice=job.is_slice,
             is_background=job.is_background,
+            background_id=job.background_id,
+            background_name=bg_name,
             is_circle=job.is_circle,
             status=job.status,
             trace=job.trace,
@@ -611,10 +637,15 @@ def patch_job(job_id: str, body: JobUpdate, db: Session = Depends(get_db)):
         select(jobs_metadata_table).where(jobs_metadata_table.c.job_id == job_id)
     ).fetchone()
     sj_rows = db.execute(select(sub_job_table).where(sub_job_table.c.job_id == job_id)).fetchall()
+    bg_name = None
+    if job.background_id:
+        bg_row = db.execute(select(backgrounds_table.c.name).where(backgrounds_table.c.id == job.background_id)).fetchone()
+        bg_name = bg_row.name if bg_row else None
     return JobResponse(
         job_id=job.job_id, youtube_url=job.youtube_url,
         is_vertical=job.is_vertical, is_subtitles=job.is_subtitles,
         is_slice=job.is_slice, is_background=job.is_background,
+        background_id=job.background_id, background_name=bg_name,
         is_circle=job.is_circle, status=job.status, trace=job.trace,
         create_datetime=meta.create_datetime if meta else None,
         last_change_datetime=meta.last_change_datetime if meta else None,

@@ -21,6 +21,7 @@ jobs_table = Table(
     Column("is_subtitles", Boolean, nullable=False),
     Column("is_slice", Boolean, nullable=False),
     Column("is_background", Boolean, nullable=False),
+    Column("background_id", Integer, nullable=True),
     Column("is_circle", Boolean, nullable=False),
     Column("trace", String, nullable=True),
     Column("status", String, nullable=False),
