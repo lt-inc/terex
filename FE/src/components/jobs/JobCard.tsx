@@ -39,6 +39,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
   const [isSlice, setIsSlice] = useState(job.is_slice);
   const [isBackground, setIsBackground] = useState(job.is_background);
   const [isCircle, setIsCircle] = useState(job.is_circle);
+  const [minVideoDuration, setMinVideoDuration] = useState(job.min_video_duration ?? 60);
   const [backgroundName, setBackgroundName] = useState(job.background_name ?? "");
 
   const locked = LOCKED_STATUSES.has(job.status);
@@ -52,6 +53,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
     setIsBackground(job.is_background);
     setIsCircle(job.is_circle);
     setBackgroundName(job.background_name ?? "");
+    setMinVideoDuration(job.min_video_duration ?? 60);
     setEditing(false);
   }
 
@@ -66,6 +68,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
         is_slice: isSlice,
         is_background: isBackground,
         is_circle: isCircle,
+        min_video_duration: minVideoDuration,
       });
       onUpdated({ ...updated, sub_jobs: job.sub_jobs });
       setEditing(false);
@@ -138,6 +141,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                 <Row label="Status" value={job.status} />
                 <Row label="Trace" value={job.trace ?? "—"} />
                 <Row label="Background" value={job.background_name ?? "—"} />
+                <Row label="Min clip duration" value={`${job.min_video_duration ?? 60}s`} />
                 <Row label="Created" value={job.create_datetime ? new Date(job.create_datetime).toLocaleString() : "—"} />
                 <Row label="Updated" value={job.last_change_datetime ? new Date(job.last_change_datetime).toLocaleString() : "—"} />
               </div>
@@ -171,6 +175,11 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                 <label className="text-xs text-slate-400">Trace</label>
                 <input type="text" value={trace} onChange={(e) => setTrace(e.target.value)}
                   className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-400">Min clip duration (sec)</label>
+                <input type="number" min={1} value={minVideoDuration} onChange={(e) => setMinVideoDuration(Number(e.target.value))}
+                  className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-32" />
               </div>
               <div className="flex flex-col gap-2">
                 <Toggle label="Make vertical?" checked={isVertical} onChange={setIsVertical} />

@@ -21,6 +21,7 @@ export interface VideoCardData {
   makeVertical: boolean;
   addSubtitles: boolean;
   sliceVideo: boolean;
+  minVideoDuration: number;
   addBackground: boolean;
   shape: "circle" | "rectangle";
   backgroundName: string;
@@ -89,6 +90,7 @@ export interface JobData {
   is_subtitles: boolean;
   is_slice: boolean;
   is_background: boolean;
+  min_video_duration: number;
   background_id: number | null;
   background_name: string | null;
   is_circle: boolean;

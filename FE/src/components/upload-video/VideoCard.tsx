@@ -104,6 +104,18 @@ export default function VideoCard({ card, accounts, bannerOptions, backgroundOpt
           checked={card.sliceVideo}
           onChange={(v) => update("sliceVideo", v)}
         />
+        {card.sliceVideo && (
+          <div className="flex items-center gap-3 pl-1">
+            <span className="text-sm text-slate-300 flex-1">Min clip duration (sec)</span>
+            <input
+              type="number"
+              min={1}
+              value={card.minVideoDuration}
+              onChange={(e) => update("minVideoDuration", Number(e.target.value))}
+              className="w-24 bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        )}
         <Toggle
           label="Add background?"
           checked={card.addBackground}

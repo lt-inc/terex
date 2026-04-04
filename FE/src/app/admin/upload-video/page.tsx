@@ -12,6 +12,7 @@ function createEmptyCard(): VideoCardData {
     makeVertical: false,
     addSubtitles: false,
     sliceVideo: false,
+    minVideoDuration: 60,
     addBackground: false,
     shape: "rectangle",
     backgroundName: "",

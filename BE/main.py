@@ -109,6 +109,7 @@ class JobResponse(BaseModel):
     is_subtitles: bool
     is_slice: bool
     is_background: bool
+    min_video_duration: int = 60
     background_id: Optional[int] = None
     background_name: Optional[str] = None
     is_circle: bool
@@ -124,6 +125,7 @@ class JobUpdate(BaseModel):
     is_subtitles: Optional[bool] = None
     is_slice: Optional[bool] = None
     is_background: Optional[bool] = None
+    min_video_duration: Optional[int] = None
     background_id: Optional[int] = None
     is_circle: Optional[bool] = None
     status: Optional[str] = None
@@ -156,6 +158,7 @@ class VideoCardPayload(BaseModel):
     makeVertical: bool = False
     addSubtitles: bool = False
     sliceVideo: bool = False
+    minVideoDuration: int = 60
     addBackground: bool = False
     shape: str = "rectangle"
     backgroundName: str = ""
@@ -535,6 +538,7 @@ def create_job(card: VideoCardPayload, db: Session = Depends(get_db)):
             is_vertical=card.makeVertical,
             is_subtitles=card.addSubtitles,
             is_slice=card.sliceVideo,
+            min_video_duration=card.minVideoDuration,
             is_background=card.addBackground,
             background_id=background_id,
             is_circle=(card.shape == "circle"),
@@ -604,6 +608,7 @@ def list_jobs(db: Session = Depends(get_db)):
             is_subtitles=job.is_subtitles,
             is_slice=job.is_slice,
             is_background=job.is_background,
+            min_video_duration=job.min_video_duration,
             background_id=job.background_id,
             background_name=bg_name,
             is_circle=job.is_circle,

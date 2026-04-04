@@ -21,6 +21,7 @@ jobs_table = Table(
     Column("is_subtitles", Boolean, nullable=False),
     Column("is_slice", Boolean, nullable=False),
     Column("is_background", Boolean, nullable=False),
+    Column("min_video_duration", Integer, nullable=False, server_default="60"),
     Column("background_id", Integer, nullable=True),
     Column("is_circle", Boolean, nullable=False),
     Column("trace", String, nullable=True),
