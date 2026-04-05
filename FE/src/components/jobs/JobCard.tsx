@@ -140,7 +140,12 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
               <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
                 <Row label="YouTube URL" value={job.youtube_url || "—"} />
                 <Row label="Status" value={job.status} />
-                <Row label="Trace" value={job.trace ?? "—"} />
+                <span className="text-slate-500">Trace</span>
+                {job.trace ? (() => {
+                  const traceId = job.trace.split("-")[1] ?? job.trace;
+                  const url = `https://grafana.legendary-trio.me/explore?orgId=1&left={"datasource":"tempo","queries":[{"refId":"A","queryType":"traceql","query":"${traceId}"}],"range":{"from":"now-6h","to":"now"}}`;
+                  return <a href={url} target="_blank" rel="noopener noreferrer" className="text-slate-200 break-all hover:text-indigo-400 transition-colors">{job.trace}</a>;
+                })() : <span className="text-slate-200">—</span>}
                 <Row label="Background" value={job.background_name ?? "—"} />
                 <Row label="Min clip duration" value={`${job.min_video_duration ?? 60}s`} />
                 <Row label="Created" value={job.create_datetime ? new Date(job.create_datetime).toLocaleString() : "—"} />
