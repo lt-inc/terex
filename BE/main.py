@@ -99,6 +99,7 @@ class SubJobResponse(BaseModel):
     publish_datetime: Optional[datetime] = None
     account_ids: list[int] = []
     account_names: list[str] = []
+    is_add_banner: bool = False
     banner_id: Optional[int] = None
     banner_name: Optional[str] = None
 
@@ -319,6 +320,7 @@ def _create_sub_jobs(
             insert(sub_job_table).values(
                 sub_job_id=_sub_job_id(job_id),
                 job_id=job_id,
+                is_add_banner=banner_id is not None,
                 banner_id=banner_id,
                 account_ids=account_ids,
                 platform=platform,
@@ -347,6 +349,7 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         publish_datetime=sj.publish_datetime,
         account_ids=sj.account_ids or [],
         account_names=account_names,
+        is_add_banner=sj.is_add_banner,
         banner_id=sj.banner_id,
         banner_name=banner_name,
     )
@@ -685,6 +688,7 @@ def patch_sub_job(sub_job_id: str, body: SubJobUpdate, db: Session = Depends(get
         fields["account_ids"] = [_get_or_create_account(db, platform, n) for n in body.account_names]
     if body.banner_name is not None:
         fields["banner_id"] = _get_or_create_banner(db, body.banner_name) if body.banner_name else None
+        fields["is_add_banner"] = bool(body.banner_name)
 
     if fields:
         db.execute(sub_job_table.update().where(sub_job_table.c.sub_job_id == sub_job_id).values(**fields))

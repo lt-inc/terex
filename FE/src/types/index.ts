@@ -79,6 +79,7 @@ export interface SubJobData {
   publish_datetime: string | null;
   account_ids: number[];
   account_names: string[];
+  is_add_banner: boolean;
   banner_id: number | null;
   banner_name: string | null;
 }

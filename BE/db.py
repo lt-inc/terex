@@ -32,6 +32,7 @@ sub_job_table = Table(
     "sub_job", metadata,
     Column("sub_job_id", String, primary_key=True),
     Column("job_id", String, nullable=False),
+    Column("is_add_banner", Boolean, nullable=False, server_default="false"),
     Column("banner_id", Integer, nullable=True),
     Column("account_ids", ARRAY(Integer), nullable=True),
     Column("platform", String, nullable=False),
