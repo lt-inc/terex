@@ -221,7 +221,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                   subJob={sj}
                   accounts={accounts}
                   bannerOptions={bannerOptions}
-                  locked={locked}
+                  locked={!canStart}
                   onUpdated={handleSubJobUpdated}
                   onDeleted={() => handleSubJobDeleted(sj.sub_job_id)}
                 />
