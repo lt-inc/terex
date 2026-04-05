@@ -33,8 +33,8 @@ jobs:
           file: BE/docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=registry,ref=${{ env.IMAGE_BE }}:latest
-          cache-to: type=inline
+          cache-from: type=registry,ref=${{ env.IMAGE_BE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_BE }}:buildcache,mode=max
 
   build-fe:
     runs-on: ubuntu-latest
@@ -59,8 +59,8 @@ jobs:
           file: FE/docker/Dockerfile.prod
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=registry,ref=${{ env.IMAGE_FE }}:latest
-          cache-to: type=inline
+          cache-from: type=registry,ref=${{ env.IMAGE_FE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_FE }}:buildcache,mode=max
 
   deploy:
     runs-on: ubuntu-latest
