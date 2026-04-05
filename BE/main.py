@@ -285,7 +285,7 @@ def _get_or_create_background(db: Session, name: str) -> int:
     if row:
         return row.id
     result = db.execute(
-        insert(backgrounds_table).values(name=name).returning(backgrounds_table.c.id)
+        insert(backgrounds_table).values(name=name, file_name=name).returning(backgrounds_table.c.id)
     )
     return result.fetchone().id
 
@@ -298,7 +298,7 @@ def _get_or_create_banner(db: Session, name: str) -> int:
     if row:
         return row.id
     result = db.execute(
-        insert(banners_table).values(name=name).returning(banners_table.c.id)
+        insert(banners_table).values(name=name, file_name=name).returning(banners_table.c.id)
     )
     return result.fetchone().id
 
