@@ -32,6 +32,7 @@ jobs:
           context: BE
           file: BE/docker/Dockerfile
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.IMAGE_BE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_BE }}:buildcache,mode=max
@@ -58,6 +59,7 @@ jobs:
           context: FE
           file: FE/docker/Dockerfile.prod
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=registry,ref=${{ env.IMAGE_FE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_FE }}:buildcache,mode=max
