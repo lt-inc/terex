@@ -43,6 +43,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
   const [backgroundName, setBackgroundName] = useState(job.background_name ?? "");
 
   const locked = LOCKED_STATUSES.has(job.status);
+  const canStart = job.status === "pending";
 
   function resetEdit() {
     setYoutubeUrl(job.youtube_url);
@@ -117,7 +118,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
           <span className="text-sm text-slate-400 truncate">{job.youtube_url}</span>
           <span className="text-xs text-slate-500 ml-auto shrink-0">{job.sub_jobs.length} sub</span>
         </button>
-        {!locked && (
+        {canStart && (
           <button
             onClick={handleStartJob}
             disabled={starting}
@@ -126,7 +127,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
             {starting ? "…" : "Start"}
           </button>
         )}
-        {!locked && (
+        {canStart && (
           <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-xl leading-none px-1">×</button>
         )}
       </div>
@@ -158,7 +159,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                   </span>
                 ))}
               </div>
-              {!locked && (
+              {canStart && (
                 <button onClick={() => setEditing(true)} className="self-start text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
                   Edit
                 </button>
