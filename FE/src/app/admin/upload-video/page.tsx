@@ -9,9 +9,9 @@ function createEmptyCard(): VideoCardData {
   return {
     id: crypto.randomUUID(),
     youtubeUrl: "",
-    makeVertical: false,
-    addSubtitles: false,
-    sliceVideo: false,
+    makeVertical: true,
+    addSubtitles: true,
+    sliceVideo: true,
     minVideoDuration: 60,
     addBackground: false,
     shape: "rectangle",
@@ -70,8 +70,28 @@ export default function UploadVideoPage() {
     setCards((prev) => prev.filter((c) => c.id !== id));
   }
 
+  function hasAnyPublicationAccount(card: VideoCardData): boolean {
+    const hasBaseAccounts =
+      card.youtubeAccounts.length > 0 ||
+      card.tiktokAccounts.length > 0 ||
+      card.instagramAccounts.length > 0;
+
+    if (hasBaseAccounts) return true;
+
+    return card.banners.some(
+      (banner) =>
+        banner.youtubeAccounts.length > 0 ||
+        banner.tiktokAccounts.length > 0 ||
+        banner.instagramAccounts.length > 0
+    );
+  }
+
+  const canUploadAll =
+    cards.length > 0 &&
+    cards.every((card) => card.youtubeUrl.trim().length > 0 && hasAnyPublicationAccount(card));
+
   async function handleUploadAll() {
-    if (cards.length === 0) return;
+    if (!canUploadAll) return;
     setUploading(true);
     try {
       const results = await submitJobs(cards);
@@ -99,7 +119,7 @@ export default function UploadVideoPage() {
         </button>
         <button
           onClick={handleUploadAll}
-          disabled={cards.length === 0 || uploading}
+          disabled={!canUploadAll || uploading}
           className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg border border-slate-600 transition-colors"
         >
           {uploading ? "Uploading…" : "Upload All"}
