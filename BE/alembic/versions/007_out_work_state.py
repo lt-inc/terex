@@ -1,4 +1,4 @@
-"""add work_state to out
+"""add status to out
 
 Revision ID: 007
 Revises: 006
@@ -14,8 +14,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('out', sa.Column('work_state', sa.String(), nullable=True))
+    op.add_column('out', sa.Column('status', sa.String(), nullable=True))
 
 
 def downgrade():
-    op.drop_column('out', 'work_state')
+    op.drop_column('out', 'status')
