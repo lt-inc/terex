@@ -9,9 +9,9 @@ function createEmptyCard(): VideoCardData {
   return {
     id: crypto.randomUUID(),
     youtubeUrl: "",
-    makeVertical: false,
-    addSubtitles: false,
-    sliceVideo: false,
+    makeVertical: true,
+    addSubtitles: true,
+    sliceVideo: true,
     minVideoDuration: 60,
     addBackground: false,
     shape: "rectangle",
