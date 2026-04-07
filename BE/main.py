@@ -315,7 +315,9 @@ def _create_sub_jobs(
         if not account_names:
             continue
         account_ids = [_get_or_create_account(db, platform, name) for name in account_names]
-        publish_dt = _parse_datetime(schedules.get(platform))
+        schedule = schedules.get(platform)
+        publish_dt = _parse_datetime(schedule)
+        step = schedule.step if schedule and schedule.step else ""
         db.execute(
             insert(sub_job_table).values(
                 sub_job_id=_sub_job_id(job_id),
@@ -324,6 +326,7 @@ def _create_sub_jobs(
                 banner_id=banner_id,
                 account_ids=account_ids,
                 platform=platform,
+                step=step,
                 publish_datetime=publish_dt,
             )
         )

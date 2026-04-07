@@ -36,6 +36,7 @@ sub_job_table = Table(
     Column("banner_id", Integer, nullable=True),
     Column("account_ids", ARRAY(Integer), nullable=True),
     Column("platform", String, nullable=False),
+    Column("step", String, nullable=False, server_default=""),
     Column("publish_datetime", TIMESTAMP(timezone=True), nullable=True),
 )
 
