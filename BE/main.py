@@ -318,9 +318,10 @@ def _create_sub_jobs(
         schedule = schedules.get(platform)
         publish_dt = _parse_datetime(schedule)
         if isinstance(schedule, dict):
-            step = schedule.get("step", "") or ""
+            step_value = schedule.get("step")
         else:
-            step = getattr(schedule, "step", "") or ""
+            step_value = getattr(schedule, "step", None)
+        step = step_value or ""
         db.execute(
             insert(sub_job_table).values(
                 sub_job_id=_sub_job_id(job_id),
