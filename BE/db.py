@@ -1,7 +1,7 @@
 import os
 from sqlalchemy import (
     create_engine, Table, Column,
-    String, Boolean, Integer, Text, TIMESTAMP, MetaData,
+    String, Boolean, Integer, Text, TIMESTAMP, MetaData, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import sessionmaker
@@ -88,6 +88,7 @@ out_table = Table(
     Column("status", String, nullable=True),
     Column("account_id", Integer, nullable=True),
     Column("platform", String, nullable=True),
+    UniqueConstraint("job_id", "sub_job_id", "video_name", "account_id", name="uq_out_job_subjob_video_account"),
 )
 
 
