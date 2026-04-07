@@ -75,6 +75,21 @@ backgrounds_table = Table(
     Column("file_name", String, nullable=True),
 )
 
+out_table = Table(
+    "out", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("job_id", String, nullable=False),
+    Column("sub_job_id", String, nullable=True),
+    Column("video_name", String, nullable=True),
+    Column("name", String, nullable=True),
+    Column("description", Text, nullable=True),
+    Column("upload_id", String, nullable=True),
+    Column("publish_date", TIMESTAMP(timezone=True), nullable=True),
+    Column("status", String, nullable=True),
+    Column("account_id", Integer, nullable=True),
+    Column("platform", String, nullable=True),
+)
+
 
 def get_db():
     if SessionLocal is None:
