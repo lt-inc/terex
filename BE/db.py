@@ -26,6 +26,7 @@ jobs_table = Table(
     Column("is_circle", Boolean, nullable=False),
     Column("trace", String, nullable=True),
     Column("status", String, nullable=False),
+    Column("fail_place", String, nullable=False, server_default=""),
 )
 
 sub_job_table = Table(
@@ -38,6 +39,8 @@ sub_job_table = Table(
     Column("platform", String, nullable=False),
     Column("publish_step", Integer, nullable=False, server_default="0"),
     Column("publish_datetime", TIMESTAMP(timezone=True), nullable=True),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("fail_place", String, nullable=False, server_default=""),
 )
 
 jobs_metadata_table = Table(
