@@ -1,7 +1,7 @@
 import os
 from sqlalchemy import (
     create_engine, Table, Column,
-    String, Boolean, Integer, Text, TIMESTAMP, MetaData,
+    String, Boolean, Integer, Text, TIMESTAMP, MetaData, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import sessionmaker
@@ -26,6 +26,7 @@ jobs_table = Table(
     Column("is_circle", Boolean, nullable=False),
     Column("trace", String, nullable=True),
     Column("status", String, nullable=False),
+    Column("fail_place", String, nullable=False, server_default=""),
 )
 
 sub_job_table = Table(
@@ -36,7 +37,10 @@ sub_job_table = Table(
     Column("banner_id", Integer, nullable=True),
     Column("account_ids", ARRAY(Integer), nullable=True),
     Column("platform", String, nullable=False),
+    Column("publish_step", Integer, nullable=False, server_default="0"),
     Column("publish_datetime", TIMESTAMP(timezone=True), nullable=True),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("fail_place", String, nullable=False, server_default=""),
 )
 
 jobs_metadata_table = Table(
@@ -73,6 +77,22 @@ backgrounds_table = Table(
     Column("note", Text, nullable=True),
     Column("bucket", String, nullable=True),
     Column("file_name", String, nullable=True),
+)
+
+out_table = Table(
+    "out", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("job_id", String, nullable=False),
+    Column("sub_job_id", String, nullable=True),
+    Column("video_name", String, nullable=True),
+    Column("name", String, nullable=True),
+    Column("description", Text, nullable=True),
+    Column("upload_id", String, nullable=True),
+    Column("publish_date", TIMESTAMP(timezone=True), nullable=True),
+    Column("status", String, nullable=True),
+    Column("account_id", Integer, nullable=True),
+    Column("platform", String, nullable=True),
+    UniqueConstraint("job_id", "sub_job_id", "video_name", "account_id", name="uq_out_job_subjob_video_account"),
 )
 
 

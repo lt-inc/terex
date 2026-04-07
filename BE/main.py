@@ -97,6 +97,8 @@ class SubJobResponse(BaseModel):
     sub_job_id: str
     platform: str
     publish_datetime: Optional[datetime] = None
+    status: str = "pending"
+    fail_place: str = ""
     account_ids: list[int] = []
     account_names: list[str] = []
     is_add_banner: bool = False
@@ -115,6 +117,7 @@ class JobResponse(BaseModel):
     background_name: Optional[str] = None
     is_circle: bool
     status: str
+    fail_place: str = ""
     trace: Optional[str] = None
     create_datetime: Optional[datetime] = None
     last_change_datetime: Optional[datetime] = None
@@ -130,18 +133,21 @@ class JobUpdate(BaseModel):
     background_id: Optional[int] = None
     is_circle: Optional[bool] = None
     status: Optional[str] = None
+    fail_place: Optional[str] = None
     trace: Optional[str] = None
 
 class SubJobUpdate(BaseModel):
     platform: Optional[str] = None
     publish_datetime: Optional[datetime] = None
+    status: Optional[str] = None
+    fail_place: Optional[str] = None
     account_names: Optional[list[str]] = None
     banner_name: Optional[str] = None
 
 class PublishSchedule(BaseModel):
     date: str = ""
     time: str = ""
-    step: str = ""
+    step: int = 0
 
 
 class BannerConfig(BaseModel):
@@ -315,7 +321,16 @@ def _create_sub_jobs(
         if not account_names:
             continue
         account_ids = [_get_or_create_account(db, platform, name) for name in account_names]
-        publish_dt = _parse_datetime(schedules.get(platform))
+        schedule = schedules.get(platform)
+        publish_dt = _parse_datetime(schedule)
+        if isinstance(schedule, dict):
+            step_value = schedule.get("step")
+        else:
+            step_value = getattr(schedule, "step", None)
+        try:
+            publish_step = int(step_value) if step_value not in (None, "") else 0
+        except (TypeError, ValueError):
+            publish_step = 0
         db.execute(
             insert(sub_job_table).values(
                 sub_job_id=_sub_job_id(job_id),
@@ -324,7 +339,10 @@ def _create_sub_jobs(
                 banner_id=banner_id,
                 account_ids=account_ids,
                 platform=platform,
+                publish_step=publish_step,
                 publish_datetime=publish_dt,
+                status="pending",
+                fail_place="",
             )
         )
 
@@ -347,6 +365,8 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         sub_job_id=sj.sub_job_id,
         platform=sj.platform,
         publish_datetime=sj.publish_datetime,
+        status=getattr(sj, "status", "pending") or "pending",
+        fail_place=getattr(sj, "fail_place", "") or "",
         account_ids=sj.account_ids or [],
         account_names=account_names,
         is_add_banner=sj.is_add_banner,
@@ -547,6 +567,7 @@ def create_job(card: VideoCardPayload, db: Session = Depends(get_db)):
             is_circle=(card.shape == "circle"),
             trace=None,
             status="pending",
+            fail_place="",
         )
     )
 
@@ -616,6 +637,7 @@ def list_jobs(db: Session = Depends(get_db)):
             background_name=bg_name,
             is_circle=job.is_circle,
             status=job.status,
+            fail_place=getattr(job, "fail_place", "") or "",
             trace=job.trace,
             create_datetime=meta.create_datetime if meta else None,
             last_change_datetime=meta.last_change_datetime if meta else None,
@@ -654,7 +676,7 @@ def patch_job(job_id: str, body: JobUpdate, db: Session = Depends(get_db)):
         is_vertical=job.is_vertical, is_subtitles=job.is_subtitles,
         is_slice=job.is_slice, is_background=job.is_background,
         background_id=job.background_id, background_name=bg_name,
-        is_circle=job.is_circle, status=job.status, trace=job.trace,
+        is_circle=job.is_circle, status=job.status, fail_place=getattr(job, "fail_place", "") or "", trace=job.trace,
         create_datetime=meta.create_datetime if meta else None,
         last_change_datetime=meta.last_change_datetime if meta else None,
         sub_jobs=[_resolve_sub_job(db, sj) for sj in sj_rows],
@@ -683,6 +705,10 @@ def patch_sub_job(sub_job_id: str, body: SubJobUpdate, db: Session = Depends(get
         fields["platform"] = body.platform
     if body.publish_datetime is not None:
         fields["publish_datetime"] = body.publish_datetime
+    if body.status is not None:
+        fields["status"] = body.status
+    if body.fail_place is not None:
+        fields["fail_place"] = body.fail_place
     if body.account_names is not None:
         platform = body.platform or sj.platform
         fields["account_ids"] = [_get_or_create_account(db, platform, n) for n in body.account_names]
