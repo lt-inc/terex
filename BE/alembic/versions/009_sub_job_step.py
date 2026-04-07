@@ -1,4 +1,4 @@
-"""add step to sub_job
+"""add publish_step to sub_job
 
 Revision ID: 009
 Revises: 008
@@ -14,8 +14,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('sub_job', sa.Column('step', sa.String(), nullable=False, server_default=''))
+    op.add_column('sub_job', sa.Column('publish_step', sa.Integer(), nullable=False, server_default='0'))
 
 
 def downgrade():
-    op.drop_column('sub_job', 'step')
+    op.drop_column('sub_job', 'publish_step')

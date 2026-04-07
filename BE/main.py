@@ -141,7 +141,7 @@ class SubJobUpdate(BaseModel):
 class PublishSchedule(BaseModel):
     date: str = ""
     time: str = ""
-    step: str = ""
+    step: int = 0
 
 
 class BannerConfig(BaseModel):
@@ -321,7 +321,10 @@ def _create_sub_jobs(
             step_value = schedule.get("step")
         else:
             step_value = getattr(schedule, "step", None)
-        step = step_value if step_value is not None else ""
+        try:
+            publish_step = int(step_value) if step_value not in (None, "") else 0
+        except (TypeError, ValueError):
+            publish_step = 0
         db.execute(
             insert(sub_job_table).values(
                 sub_job_id=_sub_job_id(job_id),
@@ -330,7 +333,7 @@ def _create_sub_jobs(
                 banner_id=banner_id,
                 account_ids=account_ids,
                 platform=platform,
-                step=step,
+                publish_step=publish_step,
                 publish_datetime=publish_dt,
             )
         )
