@@ -14,12 +14,12 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("jobs", sa.Column("fail_place", sa.String(), nullable=False, server_default=""))
-    op.add_column("sub_job", sa.Column("fail_place", sa.String(), nullable=False, server_default=""))
-    op.add_column("sub_job", sa.Column("status", sa.String(), nullable=False, server_default="pending"))
+    op.add_column('jobs', sa.Column('fail_place', sa.String(), nullable=False, server_default=''))
+    op.add_column('sub_job', sa.Column('fail_place', sa.String(), nullable=False, server_default=''))
+    op.add_column('sub_job', sa.Column('status', sa.String(), nullable=False, server_default='pending'))
 
 
 def downgrade():
-    op.drop_column("sub_job", "status")
-    op.drop_column("sub_job", "fail_place")
-    op.drop_column("jobs", "fail_place")
+    op.drop_column('sub_job', 'status')
+    op.drop_column('sub_job', 'fail_place')
+    op.drop_column('jobs', 'fail_place')
