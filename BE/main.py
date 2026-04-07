@@ -321,7 +321,7 @@ def _create_sub_jobs(
             step_value = schedule.get("step")
         else:
             step_value = getattr(schedule, "step", None)
-        step = step_value or ""
+        step = step_value if step_value is not None else ""
         db.execute(
             insert(sub_job_table).values(
                 sub_job_id=_sub_job_id(job_id),
