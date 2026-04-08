@@ -91,7 +91,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
             {subJob.status}
           </span>
           <span className="text-xs text-slate-400 font-mono truncate">{subJob.sub_job_id}</span>
-          {subJob.outs.length > 0 && (
+          {(subJob.outs?.length ?? 0) > 0 && (
             <span className="text-xs text-slate-500 shrink-0">{subJob.outs.length} clips</span>
           )}
           {subJob.publish_datetime && (
@@ -121,7 +121,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
                   Edit
                 </button>
               )}
-              {subJob.outs.length > 0 && (
+              {(subJob.outs?.length ?? 0) > 0 && (
                 <div className="flex flex-col gap-1.5 mt-1">
                   <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Clips</p>
                   {subJob.outs.map((out) => (
