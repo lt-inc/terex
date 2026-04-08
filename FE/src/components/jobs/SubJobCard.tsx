@@ -99,9 +99,6 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
           <svg className={`w-3.5 h-3.5 shrink-0 text-slate-500 transition-transform ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${STATUS_COLORS[platform] ?? "bg-slate-700 text-slate-300"}`}>
-            {platform}
-          </span>
           <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${SUB_JOB_STATUS_COLORS[subJob.status] ?? "bg-slate-700 text-slate-400"}`}>
             {subJob.status || "—"}
           </span>
