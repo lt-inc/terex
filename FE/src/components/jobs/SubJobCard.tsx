@@ -3,7 +3,7 @@
 import { useState } from "react";
 import MultiSelect from "@/components/ui/MultiSelect";
 import { updateSubJob, deleteSubJob } from "@/lib/api";
-import type { SubJobData, AccountsResponse } from "@/types";
+import type { SubJobData, AccountsResponse, OutData } from "@/types";
 
 interface SubJobCardProps {
   subJob: SubJobData;
@@ -19,6 +19,16 @@ const STATUS_COLORS: Record<string, string> = {
   youtube: "bg-red-900/40 text-red-300",
   tiktok: "bg-slate-700 text-slate-300",
   instagram: "bg-purple-900/40 text-purple-300",
+};
+
+const OUT_STATUS_COLORS: Record<string, string> = {
+  pending:    "bg-yellow-900/40 text-yellow-300",
+  ready:      "bg-emerald-900/40 text-emerald-300",
+  running:    "bg-blue-900/40 text-blue-300",
+  done:       "bg-green-900/40 text-green-300",
+  failed:     "bg-red-900/40 text-red-300",
+  published:  "bg-green-900/40 text-green-300",
+  scheduled:  "bg-indigo-900/40 text-indigo-300",
 };
 
 export default function SubJobCard({ subJob, accounts, bannerOptions, locked = false, onUpdated, onDeleted }: SubJobCardProps) {
@@ -74,10 +84,16 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
           <svg className={`w-3.5 h-3.5 shrink-0 text-slate-500 transition-transform ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_COLORS[platform] ?? "bg-slate-700 text-slate-300"}`}>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${STATUS_COLORS[platform] ?? "bg-slate-700 text-slate-300"}`}>
             {platform}
           </span>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${OUT_STATUS_COLORS[subJob.status] ?? "bg-slate-700 text-slate-400"}`}>
+            {subJob.status}
+          </span>
           <span className="text-xs text-slate-400 font-mono truncate">{subJob.sub_job_id}</span>
+          {subJob.outs.length > 0 && (
+            <span className="text-xs text-slate-500 shrink-0">{subJob.outs.length} clips</span>
+          )}
           {subJob.publish_datetime && (
             <span className="text-xs text-slate-500 ml-auto shrink-0">
               {new Date(subJob.publish_datetime).toLocaleString()}
@@ -94,14 +110,24 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
             <>
               <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
                 <Row label="Platform" value={subJob.platform} />
+                <Row label="Status" value={subJob.status} />
                 <Row label="Accounts" value={subJob.account_names.join(", ") || "—"} />
                 <Row label="Banner" value={subJob.banner_name ?? "—"} />
                 <Row label="Publish" value={subJob.publish_datetime ? new Date(subJob.publish_datetime).toLocaleString() : "—"} />
+                {subJob.fail_place && <Row label="Fail place" value={subJob.fail_place} />}
               </div>
               {!locked && (
                 <button onClick={() => setEditing(true)} className="self-start text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
                   Edit
                 </button>
+              )}
+              {subJob.outs.length > 0 && (
+                <div className="flex flex-col gap-1.5 mt-1">
+                  <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Clips</p>
+                  {subJob.outs.map((out) => (
+                    <OutRow key={out.id} out={out} />
+                  ))}
+                </div>
               )}
             </>
           ) : (
@@ -160,5 +186,29 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="text-slate-500">{label}</span>
       <span className="text-slate-200">{value}</span>
     </>
+  );
+}
+
+function OutRow({ out }: { out: OutData }) {
+  const statusColor = OUT_STATUS_COLORS[out.status ?? ""] ?? "bg-slate-700 text-slate-400";
+  return (
+    <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-800/60 rounded-md text-xs">
+      <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${statusColor}`}>
+        {out.status ?? "—"}
+      </span>
+      <span className="font-mono text-slate-300 truncate flex-1">
+        {out.video_name ?? "—"}
+      </span>
+      {out.published_at && (
+        <span className="text-slate-500 shrink-0">
+          {new Date(out.published_at).toLocaleString()}
+        </span>
+      )}
+      {!out.published_at && out.publish_date && (
+        <span className="text-slate-500 shrink-0">
+          sched: {new Date(out.publish_date).toLocaleString()}
+        </span>
+      )}
+    </div>
   );
 }

@@ -29,6 +29,7 @@ from db import (
     accounts_table,
     banners_table,
     backgrounds_table,
+    out_table,
 )
 import storage
 from tracing import setup_tracing
@@ -93,6 +94,19 @@ class AssetRecordUpdate(BaseModel):
     note: Optional[str] = None
 
 
+class OutRecord(BaseModel):
+    id: int
+    video_name: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    hashtag: Optional[str] = None
+    upload_id: Optional[str] = None
+    publish_date: Optional[datetime] = None
+    published_at: Optional[datetime] = None
+    status: Optional[str] = None
+    account_id: Optional[int] = None
+    platform: Optional[str] = None
+
 class SubJobResponse(BaseModel):
     sub_job_id: str
     platform: str
@@ -104,6 +118,7 @@ class SubJobResponse(BaseModel):
     is_add_banner: bool = False
     banner_id: Optional[int] = None
     banner_name: Optional[str] = None
+    outs: list[OutRecord] = []
 
 class JobResponse(BaseModel):
     job_id: str
@@ -361,6 +376,11 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         row = db.execute(select(banners_table.c.name).where(banners_table.c.id == sj.banner_id)).fetchone()
         if row:
             banner_name = row.name
+    out_rows = db.execute(
+        select(out_table).where(out_table.c.sub_job_id == sj.sub_job_id)
+        .order_by(out_table.c.id)
+    ).fetchall()
+    outs = [OutRecord(**dict(r._mapping)) for r in out_rows]
     return SubJobResponse(
         sub_job_id=sj.sub_job_id,
         platform=sj.platform,
@@ -372,6 +392,7 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         is_add_banner=sj.is_add_banner,
         banner_id=sj.banner_id,
         banner_name=banner_name,
+        outs=outs,
     )
 
 

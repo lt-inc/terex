@@ -73,15 +73,32 @@ export interface AssetRecord {
   file_name: string | null;
 }
 
+export interface OutData {
+  id: number;
+  video_name: string | null;
+  name: string | null;
+  description: string | null;
+  hashtag: string | null;
+  upload_id: string | null;
+  publish_date: string | null;
+  published_at: string | null;
+  status: string | null;
+  account_id: number | null;
+  platform: string | null;
+}
+
 export interface SubJobData {
   sub_job_id: string;
   platform: string;
   publish_datetime: string | null;
+  status: string;
+  fail_place: string;
   account_ids: number[];
   account_names: string[];
   is_add_banner: boolean;
   banner_id: number | null;
   banner_name: string | null;
+  outs: OutData[];
 }
 
 export interface JobData {
