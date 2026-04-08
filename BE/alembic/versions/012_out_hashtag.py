@@ -1,4 +1,4 @@
-"""add hashtag to out
+"""Add hashtag to out
 
 Revision ID: 012
 Revises: 011

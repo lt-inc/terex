@@ -1,4 +1,4 @@
-"""add published_at to out
+"""Add published_at to out
 
 Revision ID: 011
 Revises: 010
