@@ -68,16 +68,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-be, build-fe]
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: apply -f k8s/ -n admin
-
       - uses: actions-hub/kubectl@master
         env:
           KUBE_HOST: ${{ secrets.KUBE_HOST }}
