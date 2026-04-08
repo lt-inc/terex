@@ -333,35 +333,45 @@ def _create_sub_jobs(
     schedules: dict[str, PublishSchedule],
     banner_id: int | None,
 ) -> None:
-    """Insert one sub_job per platform that has at least one account selected."""
+    """Insert one sub_job per banner with all accounts from all platforms combined."""
+    all_account_ids: list[int] = []
     for platform, account_names in platform_accounts.items():
-        if not account_names:
-            continue
-        account_ids = [_get_or_create_account(db, platform, name) for name in account_names]
+        for name in account_names:
+            all_account_ids.append(_get_or_create_account(db, platform, name))
+    if not all_account_ids:
+        return
+    # Pick first available schedule
+    publish_dt = None
+    publish_step = 0
+    for platform in ("youtube", "tiktok", "instagram"):
         schedule = schedules.get(platform)
-        publish_dt = _parse_datetime(schedule)
-        if isinstance(schedule, dict):
-            step_value = schedule.get("step")
-        else:
-            step_value = getattr(schedule, "step", None)
-        try:
-            publish_step = int(step_value) if step_value not in (None, "") else 0
-        except (TypeError, ValueError):
-            publish_step = 0
-        db.execute(
-            insert(sub_job_table).values(
-                sub_job_id=_sub_job_id(job_id),
-                job_id=job_id,
-                is_add_banner=banner_id is not None,
-                banner_id=banner_id,
-                account_ids=account_ids,
-                platform=platform,
-                publish_step=publish_step,
-                publish_datetime=publish_dt,
-                status="pending",
-                fail_place="",
-            )
+        if schedule:
+            dt = _parse_datetime(schedule)
+            if dt:
+                publish_dt = dt
+                if isinstance(schedule, dict):
+                    step_value = schedule.get("step")
+                else:
+                    step_value = getattr(schedule, "step", None)
+                try:
+                    publish_step = int(step_value) if step_value not in (None, "") else 0
+                except (TypeError, ValueError):
+                    publish_step = 0
+                break
+    db.execute(
+        insert(sub_job_table).values(
+            sub_job_id=_sub_job_id(job_id),
+            job_id=job_id,
+            is_add_banner=banner_id is not None,
+            banner_id=banner_id,
+            account_ids=all_account_ids,
+            platform="",
+            publish_step=publish_step,
+            publish_datetime=publish_dt,
+            status="pending",
+            fail_place="",
         )
+    )
 
 
 # ── Sub-job resolver ─────────────────────────────────────────────────────────
@@ -739,8 +749,19 @@ def patch_sub_job(sub_job_id: str, body: SubJobUpdate, db: Session = Depends(get
     if body.fail_place is not None:
         fields["fail_place"] = body.fail_place
     if body.account_names is not None:
-        platform = body.platform or sj.platform
-        fields["account_ids"] = [_get_or_create_account(db, platform, n) for n in body.account_names]
+        def _lookup_account_id(db: Session, name: str) -> int:
+            row = db.execute(
+                select(accounts_table.c.id, accounts_table.c.platform)
+                .where(accounts_table.c.name == name)
+            ).fetchone()
+            if row:
+                return row.id
+            # fallback: create with empty platform
+            result = db.execute(
+                insert(accounts_table).values(platform="", name=name).returning(accounts_table.c.id)
+            )
+            return result.fetchone().id
+        fields["account_ids"] = [_lookup_account_id(db, n) for n in body.account_names]
     if body.banner_name is not None:
         fields["banner_id"] = _get_or_create_banner(db, body.banner_name) if body.banner_name else None
         fields["is_add_banner"] = bool(body.banner_name)

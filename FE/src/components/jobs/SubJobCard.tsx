@@ -14,7 +14,6 @@ interface SubJobCardProps {
   onDeleted: () => void;
 }
 
-const PLATFORMS = ["youtube", "tiktok", "instagram"];
 const STATUS_COLORS: Record<string, string> = {
   youtube: "bg-red-900/40 text-red-300",
   tiktok: "bg-slate-700 text-slate-300",
@@ -51,14 +50,12 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const [platform, setPlatform] = useState(subJob.platform);
   const [accountNames, setAccountNames] = useState<string[]>(subJob.account_names);
   const [bannerName, setBannerName] = useState(subJob.banner_name ?? "");
   const [pubDate, setPubDate] = useState(subJob.publish_datetime?.slice(0, 10) ?? "");
   const [pubTime, setPubTime] = useState(subJob.publish_datetime?.slice(11, 16) ?? "");
 
   function resetEdit() {
-    setPlatform(subJob.platform);
     setAccountNames(subJob.account_names);
     setBannerName(subJob.banner_name ?? "");
     setPubDate(subJob.publish_datetime?.slice(0, 10) ?? "");
@@ -71,7 +68,6 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
     try {
       const publish_datetime = pubDate && pubTime ? `${pubDate}T${pubTime}:00Z` : null;
       const updated = await updateSubJob(subJob.sub_job_id, {
-        platform,
         account_names: accountNames,
         banner_name: bannerName || null,
         publish_datetime,
@@ -89,7 +85,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
     onDeleted();
   }
 
-  const platformAccounts = accounts[platform as keyof AccountsResponse] ?? [];
+  const allAccounts = [...accounts.youtube, ...accounts.tiktok, ...accounts.instagram];
 
   return (
     <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
@@ -152,15 +148,8 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
           ) : (
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-400">Platform</label>
-                <select value={platform} onChange={(e) => { setPlatform(e.target.value); setAccountNames([]); }}
-                  className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                  {PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-400">Accounts</label>
-                <MultiSelect label="" options={platformAccounts} selected={accountNames} onChange={setAccountNames} />
+                <MultiSelect label="" options={allAccounts} selected={accountNames} onChange={setAccountNames} />
               </div>
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-400">Banner</label>

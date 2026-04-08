@@ -42,7 +42,6 @@ export async function deleteJob(jobId: string): Promise<void> {
 }
 
 export async function updateSubJob(subJobId: string, data: {
-  platform?: string;
   publish_datetime?: string | null;
   account_names?: string[];
   banner_name?: string | null;
