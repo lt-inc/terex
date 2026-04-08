@@ -14,7 +14,13 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('out', sa.Column('status', sa.String(), nullable=True))
+    conn = op.get_bind()
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name='out' AND column_name='status'"
+    ))
+    if not result.fetchone():
+        op.add_column('out', sa.Column('status', sa.String(), nullable=True))
 
 
 def downgrade():
