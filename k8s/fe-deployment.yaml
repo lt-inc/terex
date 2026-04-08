@@ -16,21 +16,17 @@ spec:
       containers:
         - name: terex-fe
           image: registry.legendary-trio.me/lt-inc/terex-fe:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 3000
-          env:
-            - name: NODE_ENV
-              value: production
-            - name: BACKEND_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: terex-config
-                  key: BACKEND_URL
+          envFrom:
+            - configMapRef:
+                name: terex-fe-config
           readinessProbe:
             httpGet:
               path: /
               port: 3000
-            initialDelaySeconds: 15
+            initialDelaySeconds: 20
             periodSeconds: 10
           resources:
             requests:

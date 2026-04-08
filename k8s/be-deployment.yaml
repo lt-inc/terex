@@ -16,21 +16,33 @@ spec:
       containers:
         - name: terex-be
           image: registry.legendary-trio.me/lt-inc/terex-be:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
           envFrom:
             - configMapRef:
-                name: terex-config
-            - secretRef:
-                name: terex-secret
+                name: terex-be-config
           env:
-            - name: DEV
-              value: "false"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: terex-secret
+                  key: DATABASE_URL
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: s3-secret
+                  key: S3_ACCESS_KEY
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: s3-secret
+                  key: S3_SECRET_KEY
           readinessProbe:
             httpGet:
               path: /docs
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15
             periodSeconds: 10
           resources:
             requests:
