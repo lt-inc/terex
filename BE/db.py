@@ -87,6 +87,7 @@ out_table = Table(
     Column("video_name", String, nullable=True),
     Column("name", String, nullable=True),
     Column("description", Text, nullable=True),
+    Column("hashtag", String, nullable=True),
     Column("upload_id", String, nullable=True),
     Column("publish_date", TIMESTAMP(timezone=True), nullable=True),
     Column("published_at", TIMESTAMP(timezone=True), nullable=True),
