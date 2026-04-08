@@ -91,7 +91,6 @@ export interface OutData {
 
 export interface SubJobData {
   sub_job_id: string;
-  platform: string | null;
   publish_datetime: string | null;
   status: string;
   fail_place: string;

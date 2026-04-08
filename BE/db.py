@@ -36,7 +36,6 @@ sub_job_table = Table(
     Column("is_add_banner", Boolean, nullable=False, server_default="false"),
     Column("banner_id", Integer, nullable=True),
     Column("account_ids", ARRAY(Integer), nullable=True),
-    Column("platform", String, nullable=False),
     Column("publish_step", Integer, nullable=False, server_default="0"),
     Column("publish_datetime", TIMESTAMP(timezone=True), nullable=True),
     Column("status", String, nullable=False, server_default="pending"),

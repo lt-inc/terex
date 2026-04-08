@@ -111,7 +111,6 @@ class OutRecord(BaseModel):
 
 class SubJobResponse(BaseModel):
     sub_job_id: str
-    platform: str
     publish_datetime: Optional[datetime] = None
     status: str = "pending"
     fail_place: str = ""
@@ -154,7 +153,6 @@ class JobUpdate(BaseModel):
     trace: Optional[str] = None
 
 class SubJobUpdate(BaseModel):
-    platform: Optional[str] = None
     publish_datetime: Optional[datetime] = None
     status: Optional[str] = None
     fail_place: Optional[str] = None
@@ -365,7 +363,6 @@ def _create_sub_jobs(
             is_add_banner=banner_id is not None,
             banner_id=banner_id,
             account_ids=all_account_ids,
-            platform="",
             publish_step=publish_step,
             publish_datetime=publish_dt,
             status="pending",
@@ -401,7 +398,6 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         outs.append(OutRecord(**d))
     return SubJobResponse(
         sub_job_id=sj.sub_job_id,
-        platform=sj.platform,
         publish_datetime=sj.publish_datetime,
         status=getattr(sj, "status", "pending") or "pending",
         fail_place=getattr(sj, "fail_place", "") or "",
@@ -740,8 +736,6 @@ def patch_sub_job(sub_job_id: str, body: SubJobUpdate, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="SubJob not found")
 
     fields: dict = {}
-    if body.platform is not None:
-        fields["platform"] = body.platform
     if body.publish_datetime is not None:
         fields["publish_datetime"] = body.publish_datetime
     if body.status is not None:

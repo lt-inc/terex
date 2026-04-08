@@ -70,7 +70,6 @@ def upgrade():
             is_add_banner    BOOLEAN NOT NULL DEFAULT false,
             banner_id        INTEGER REFERENCES banners(id) ON DELETE SET NULL,
             account_ids      INTEGER[],
-            platform         VARCHAR NOT NULL,
             publish_step     INTEGER NOT NULL DEFAULT 0,
             publish_datetime TIMESTAMPTZ,
             status           VARCHAR NOT NULL DEFAULT 'pending',
@@ -136,6 +135,7 @@ def upgrade():
         "ALTER TABLE backgrounds ADD COLUMN IF NOT EXISTS file_name TEXT",
         "ALTER TABLE accounts  ADD COLUMN IF NOT EXISTS bucket VARCHAR",
         "ALTER TABLE accounts  ADD COLUMN IF NOT EXISTS file_name TEXT",
+        "ALTER TABLE sub_job   DROP COLUMN IF EXISTS platform",
     ]:
         op.execute(col_sql)
 
