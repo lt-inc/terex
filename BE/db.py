@@ -89,6 +89,7 @@ out_table = Table(
     Column("description", Text, nullable=True),
     Column("upload_id", String, nullable=True),
     Column("publish_date", TIMESTAMP(timezone=True), nullable=True),
+    Column("published_at", TIMESTAMP(timezone=True), nullable=True),
     Column("status", String, nullable=True),
     Column("account_id", Integer, nullable=True),
     Column("platform", String, nullable=True),
