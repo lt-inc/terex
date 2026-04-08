@@ -21,14 +21,27 @@ const STATUS_COLORS: Record<string, string> = {
   instagram: "bg-purple-900/40 text-purple-300",
 };
 
+const SUB_JOB_STATUS_COLORS: Record<string, string> = {
+  pending:              "bg-yellow-900/40 text-yellow-300",
+  ready:                "bg-emerald-900/40 text-emerald-300",
+  running:              "bg-blue-900/40 text-blue-300",
+  done:                 "bg-green-900/40 text-green-300",
+  failed:               "bg-red-900/40 text-red-300",
+  description:          "bg-blue-900/40 text-blue-300",
+  waiting_for_publish:  "bg-indigo-900/40 text-indigo-300",
+  published:            "bg-green-900/40 text-green-300",
+  scheduled:            "bg-indigo-900/40 text-indigo-300",
+};
+
 const OUT_STATUS_COLORS: Record<string, string> = {
-  pending:    "bg-yellow-900/40 text-yellow-300",
-  ready:      "bg-emerald-900/40 text-emerald-300",
-  running:    "bg-blue-900/40 text-blue-300",
-  done:       "bg-green-900/40 text-green-300",
-  failed:     "bg-red-900/40 text-red-300",
-  published:  "bg-green-900/40 text-green-300",
-  scheduled:  "bg-indigo-900/40 text-indigo-300",
+  pending:             "bg-yellow-900/40 text-yellow-300",
+  ready:               "bg-emerald-900/40 text-emerald-300",
+  running:             "bg-blue-900/40 text-blue-300",
+  done:                "bg-green-900/40 text-green-300",
+  failed:              "bg-red-900/40 text-red-300",
+  published:           "bg-green-900/40 text-green-300",
+  scheduled:           "bg-indigo-900/40 text-indigo-300",
+  waiting_for_publish: "bg-indigo-900/40 text-indigo-300",
 };
 
 export default function SubJobCard({ subJob, accounts, bannerOptions, locked = false, onUpdated, onDeleted }: SubJobCardProps) {
@@ -87,8 +100,8 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
           <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${STATUS_COLORS[platform] ?? "bg-slate-700 text-slate-300"}`}>
             {platform}
           </span>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${OUT_STATUS_COLORS[subJob.status] ?? "bg-slate-700 text-slate-400"}`}>
-            {subJob.status}
+          <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${SUB_JOB_STATUS_COLORS[subJob.status] ?? "bg-slate-700 text-slate-400"}`}>
+            {subJob.status || "—"}
           </span>
           <span className="text-xs text-slate-400 font-mono truncate">{subJob.sub_job_id}</span>
           {(subJob.outs?.length ?? 0) > 0 && (
@@ -110,7 +123,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
             <>
               <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
                 <Row label="Platform" value={subJob.platform} />
-                <Row label="Status" value={subJob.status} />
+                <Row label="Status" value={subJob.status || "—"} />
                 <Row label="Accounts" value={subJob.account_names.join(", ") || "—"} />
                 <Row label="Banner" value={subJob.banner_name ?? "—"} />
                 <Row label="Publish" value={subJob.publish_datetime ? new Date(subJob.publish_datetime).toLocaleString() : "—"} />
