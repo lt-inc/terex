@@ -47,6 +47,7 @@ const OUT_STATUS_COLORS: Record<string, string> = {
 
 export default function SubJobCard({ subJob, accounts, bannerOptions, locked = false, onUpdated, onDeleted }: SubJobCardProps) {
   const [open, setOpen] = useState(false);
+  const [clipsOpen, setClipsOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -123,7 +124,6 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
           {!editing ? (
             <>
               <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-                <Row label="Platform" value={subJob.platform} />
                 <Row label="Status" value={subJob.status || "—"} />
                 <Row label="Accounts" value={subJob.account_names.join(", ") || "—"} />
                 <Row label="Banner" value={subJob.banner_name ?? "—"} />
@@ -137,8 +137,16 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
               )}
               {(subJob.outs?.length ?? 0) > 0 && (
                 <div className="flex flex-col gap-1.5 mt-1">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Clips</p>
-                  {subJob.outs.map((out) => (
+                  <button
+                    onClick={() => setClipsOpen((o) => !o)}
+                    className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors self-start"
+                  >
+                    <svg className={`w-3 h-3 transition-transform ${clipsOpen ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                    Clips ({subJob.outs.length})
+                  </button>
+                  {clipsOpen && subJob.outs.map((out) => (
                     <OutRow key={out.id} out={out} />
                   ))}
                 </div>
@@ -206,13 +214,22 @@ function Row({ label, value }: { label: string; value: string }) {
 function OutRow({ out }: { out: OutData }) {
   const displayStatus = out.work_state || out.status || "—";
   const statusColor = OUT_STATUS_COLORS[displayStatus] ?? "bg-slate-700 text-slate-400";
+  const platformColor = STATUS_COLORS[out.platform ?? ""] ?? "bg-slate-700 text-slate-400";
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-800/60 rounded-md text-xs">
       <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${statusColor}`}>
         {displayStatus}
       </span>
+      {out.platform && (
+        <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${platformColor}`}>
+          {out.platform}
+        </span>
+      )}
+      {out.account_name && (
+        <span className="shrink-0 text-slate-400">{out.account_name}</span>
+      )}
       <span className="font-mono text-slate-300 truncate flex-1">
-        {out.video_name ?? "—"}
+        {out.name ?? out.video_name ?? "—"}
       </span>
       {out.published_at && (
         <span className="text-slate-500 shrink-0">

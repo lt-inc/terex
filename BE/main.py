@@ -106,6 +106,7 @@ class OutRecord(BaseModel):
     status: Optional[str] = None
     work_state: Optional[str] = None
     account_id: Optional[int] = None
+    account_name: Optional[str] = None
     platform: Optional[str] = None
 
 class SubJobResponse(BaseModel):
@@ -381,7 +382,13 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         select(out_table).where(out_table.c.job_id == sj.job_id)
         .order_by(out_table.c.id)
     ).fetchall()
-    outs = [OutRecord(**dict(r._mapping)) for r in out_rows]
+    outs = []
+    for r in out_rows:
+        d = dict(r._mapping)
+        if d.get("account_id"):
+            acc = db.execute(select(accounts_table.c.name).where(accounts_table.c.id == d["account_id"])).fetchone()
+            d["account_name"] = acc.name if acc else None
+        outs.append(OutRecord(**d))
     return SubJobResponse(
         sub_job_id=sj.sub_job_id,
         platform=sj.platform,
