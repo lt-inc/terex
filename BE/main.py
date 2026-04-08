@@ -104,6 +104,7 @@ class OutRecord(BaseModel):
     publish_date: Optional[datetime] = None
     published_at: Optional[datetime] = None
     status: Optional[str] = None
+    work_state: Optional[str] = None
     account_id: Optional[int] = None
     platform: Optional[str] = None
 
@@ -377,7 +378,7 @@ def _resolve_sub_job(db: Session, sj) -> SubJobResponse:
         if row:
             banner_name = row.name
     out_rows = db.execute(
-        select(out_table).where(out_table.c.sub_job_id == sj.sub_job_id)
+        select(out_table).where(out_table.c.job_id == sj.job_id)
         .order_by(out_table.c.id)
     ).fetchall()
     outs = [OutRecord(**dict(r._mapping)) for r in out_rows]

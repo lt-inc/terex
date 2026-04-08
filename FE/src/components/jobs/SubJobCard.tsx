@@ -36,6 +36,7 @@ const SUB_JOB_STATUS_COLORS: Record<string, string> = {
 const OUT_STATUS_COLORS: Record<string, string> = {
   pending:             "bg-yellow-900/40 text-yellow-300",
   ready:               "bg-emerald-900/40 text-emerald-300",
+  ready_to_publish:    "bg-emerald-900/40 text-emerald-300",
   running:             "bg-blue-900/40 text-blue-300",
   done:                "bg-green-900/40 text-green-300",
   failed:              "bg-red-900/40 text-red-300",
@@ -203,11 +204,12 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function OutRow({ out }: { out: OutData }) {
-  const statusColor = OUT_STATUS_COLORS[out.status ?? ""] ?? "bg-slate-700 text-slate-400";
+  const displayStatus = out.work_state || out.status || "—";
+  const statusColor = OUT_STATUS_COLORS[displayStatus] ?? "bg-slate-700 text-slate-400";
   return (
     <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-800/60 rounded-md text-xs">
       <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${statusColor}`}>
-        {out.status ?? "—"}
+        {displayStatus}
       </span>
       <span className="font-mono text-slate-300 truncate flex-1">
         {out.video_name ?? "—"}
