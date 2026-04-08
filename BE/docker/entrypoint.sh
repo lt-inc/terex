@@ -15,6 +15,17 @@ if not cur.fetchone():
     print("Created database 'main'")
 cur.close()
 conn.close()
+
+# Reset alembic version so consolidated migration runs cleanly
+conn = psycopg2.connect(url)
+conn.autocommit = True
+cur = conn.cursor()
+try:
+    cur.execute("TRUNCATE TABLE alembic_version")
+except Exception:
+    pass
+cur.close()
+conn.close()
 EOF
 
 # Run migrations
