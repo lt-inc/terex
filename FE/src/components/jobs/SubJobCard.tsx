@@ -198,7 +198,7 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function OutRow({ out }: { out: OutData }) {
-  const displayStatus = out.work_state || out.status || "—";
+  const displayStatus = out.status || "—";
   const statusColor = OUT_STATUS_COLORS[displayStatus] ?? "bg-slate-700 text-slate-400";
   const platformColor = STATUS_COLORS[out.platform ?? ""] ?? "bg-slate-700 text-slate-400";
   return (

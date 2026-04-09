@@ -105,7 +105,6 @@ class OutRecord(BaseModel):
     publish_date: Optional[datetime] = None
     published_at: Optional[datetime] = None
     status: Optional[str] = None
-    work_state: Optional[str] = None
     account_id: Optional[int] = None
     account_name: Optional[str] = None
     platform: Optional[str] = None

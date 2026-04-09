@@ -84,7 +84,6 @@ export interface OutData {
   publish_date: string | null;
   published_at: string | null;
   status: string | null;
-  work_state: string | null;
   account_id: number | null;
   account_name: string | null;
   platform: string | null;

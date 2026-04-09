@@ -92,7 +92,6 @@ out_table = Table(
     Column("publish_date", TIMESTAMP(timezone=True), nullable=True),
     Column("published_at", TIMESTAMP(timezone=True), nullable=True),
     Column("status", String, nullable=True),
-    Column("work_state", String, nullable=True),
     Column("account_id", Integer, nullable=True),
     Column("platform", String, nullable=True),
     UniqueConstraint("job_id", "sub_job_id", "video_name", "account_id", name="uq_out_job_subjob_video_account"),

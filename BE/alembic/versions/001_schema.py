@@ -91,7 +91,6 @@ def upgrade():
             publish_date TIMESTAMPTZ,
             published_at TIMESTAMPTZ,
             status       VARCHAR,
-            work_state   VARCHAR,
             account_id   INTEGER,
             platform     VARCHAR
         )
@@ -124,7 +123,6 @@ def upgrade():
         "ALTER TABLE sub_job   ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'pending'",
         "ALTER TABLE sub_job   ADD COLUMN IF NOT EXISTS fail_place VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE out       ADD COLUMN IF NOT EXISTS status VARCHAR",
-        "ALTER TABLE out       ADD COLUMN IF NOT EXISTS work_state VARCHAR",
         "ALTER TABLE out       ADD COLUMN IF NOT EXISTS account_id INTEGER",
         "ALTER TABLE out       ADD COLUMN IF NOT EXISTS platform VARCHAR",
         "ALTER TABLE out       ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ",
@@ -150,6 +148,7 @@ def upgrade():
         )
     """)
     op.execute("ALTER TABLE warmup_jobs ADD COLUMN IF NOT EXISTS max_videos VARCHAR NOT NULL DEFAULT '50,100'")
+    op.execute("ALTER TABLE out DROP COLUMN IF EXISTS work_state")
     op.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false")
     op.execute("ALTER TABLE warmup_jobs ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false")
 
