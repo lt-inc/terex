@@ -163,6 +163,7 @@ export async function updateWarmupJob(jobId: string, data: Partial<{
   warm_up_datetime: string | null;
   repeat_step: number | null;
   max_videos: string;
+  is_archived: boolean;
 }>): Promise<WarmupJob> {
   const res = await fetch(`${BASE_URL}/warmup_jobs/${jobId}`, {
     method: "PATCH",
