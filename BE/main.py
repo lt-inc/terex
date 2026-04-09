@@ -1118,9 +1118,9 @@ def update_warmup_job(job_id: str, payload: WarmupJobUpdate, db: Session = Depen
     ).fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail="Warmup job not found")
-    if existing.status != "pending":
-        raise HTTPException(status_code=400, detail="Only pending jobs can be edited")
     values = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    if existing.status != "pending" and not (set(values.keys()) <= {"is_archived"}):
+        raise HTTPException(status_code=400, detail="Only pending jobs can be edited")
     # clear repeat_step if switching to one-time
     if values.get("type") == "one-time":
         values["repeat_step"] = None
