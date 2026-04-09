@@ -3,7 +3,29 @@
 import { useEffect, useState } from "react";
 import VideoCard from "@/components/upload-video/VideoCard";
 import { fetchAccounts, fetchBanners, fetchBackgrounds, submitJobs } from "@/lib/api";
-import type { VideoCardData, AccountsResponse } from "@/types";
+import { localPartsToISO } from "@/lib/datetime";
+import type { VideoCardData, AccountsResponse, Platform, PublishSchedule } from "@/types";
+
+function utcifySchedules(schedules: Partial<Record<Platform, PublishSchedule>>): Partial<Record<Platform, PublishSchedule>> {
+  const out: Partial<Record<Platform, PublishSchedule>> = {};
+  for (const [p, s] of Object.entries(schedules)) {
+    if (s?.date && s?.time) {
+      const iso = localPartsToISO(s.date, s.time);
+      out[p as Platform] = { ...s, date: iso.slice(0, 10), time: iso.slice(11, 16) };
+    } else {
+      out[p as Platform] = s;
+    }
+  }
+  return out;
+}
+
+function utcifyCards(cards: VideoCardData[]): VideoCardData[] {
+  return cards.map((card) => ({
+    ...card,
+    schedules: utcifySchedules(card.schedules),
+    banners: card.banners.map((b) => ({ ...b, schedules: utcifySchedules(b.schedules) })),
+  }));
+}
 
 function createEmptyCard(): VideoCardData {
   return {
@@ -94,7 +116,7 @@ export default function UploadVideoPage() {
     if (!canUploadAll) return;
     setUploading(true);
     try {
-      const results = await submitJobs(cards);
+      const results = await submitJobs(utcifyCards(cards));
       const count = results.length;
       setToast(`${count} job${count !== 1 ? "s" : ""} queued successfully`);
       setTimeout(() => setToast(null), 3000);
