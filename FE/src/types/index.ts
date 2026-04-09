@@ -113,6 +113,7 @@ export interface WarmupJob {
   warm_up_datetime: string | null;
   repeat_step: number | null;
   max_videos: string;
+  is_archived: boolean;
 }
 
 export interface JobData {
@@ -128,6 +129,7 @@ export interface JobData {
   is_circle: boolean;
   status: string;
   trace: string | null;
+  is_archived: boolean;
   create_datetime: string | null;
   last_change_datetime: string | null;
   sub_jobs: SubJobData[];

@@ -20,8 +20,8 @@ export async function fetchAccounts(): Promise<AccountsResponse> {
   return res.json();
 }
 
-export async function fetchJobs(): Promise<JobData[]> {
-  const res = await fetch(`${BASE_URL}/jobs`);
+export async function fetchJobs(showArchived = false): Promise<JobData[]> {
+  const res = await fetch(`${BASE_URL}/jobs?show_archived=${showArchived}`);
   if (!res.ok) throw new Error("Failed to fetch jobs");
   return res.json();
 }
@@ -134,8 +134,8 @@ export async function captureAuthStatus(): Promise<{ active: boolean; platform: 
 }
 
 // ── Warmup Jobs ───────────────────────────────────────────────────────────────
-export async function fetchWarmupJobs(): Promise<WarmupJob[]> {
-  const res = await fetch(`${BASE_URL}/warmup_jobs`);
+export async function fetchWarmupJobs(showArchived = false): Promise<WarmupJob[]> {
+  const res = await fetch(`${BASE_URL}/warmup_jobs?show_archived=${showArchived}`);
   if (!res.ok) throw new Error("Failed to fetch warmup jobs");
   return res.json();
 }

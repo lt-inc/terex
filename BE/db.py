@@ -27,6 +27,7 @@ jobs_table = Table(
     Column("trace", String, nullable=True),
     Column("status", String, nullable=False),
     Column("fail_place", String, nullable=False, server_default=""),
+    Column("is_archived", Boolean, nullable=False, server_default="false"),
 )
 
 sub_job_table = Table(
@@ -107,6 +108,7 @@ warmup_jobs_table = Table(
     Column("warm_up_datetime", TIMESTAMP(timezone=True), nullable=True),
     Column("repeat_step", Integer, nullable=True),
     Column("max_videos", String, nullable=False, server_default="50,100"),
+    Column("is_archived", Boolean, nullable=False, server_default="false"),
 )
 
 

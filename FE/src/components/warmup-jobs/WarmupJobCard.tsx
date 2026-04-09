@@ -67,6 +67,7 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
   const [maxVideosY, setMaxVideosY] = useState(initMv.y);
 
   const canEdit = job.status === "pending";
+  const canArchive = job.status === "done" && !job.is_archived;
 
   function resetEdit() {
     setAccountId(job.account_id);
@@ -106,6 +107,11 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
     onDeleted();
   }
 
+  async function handleArchive() {
+    const updated = await updateWarmupJob(job.job_id, { is_archived: true });
+    onUpdated(updated);
+  }
+
   const repeatDisplay = job.repeat_step
     ? (() => { const u = bestUnit(job.repeat_step); return `${u.value} ${REPEAT_UNITS[u.unitIdx].label}`; })()
     : "—";
@@ -129,6 +135,11 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
           <span className="text-xs text-slate-500 ml-auto shrink-0">{job.type}</span>
         </button>
 
+        {canArchive && (
+          <button onClick={handleArchive} className="text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1 rounded-md transition-colors shrink-0">
+            Archive
+          </button>
+        )}
         {canEdit && (
           <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-xl leading-none px-1">×</button>
         )}

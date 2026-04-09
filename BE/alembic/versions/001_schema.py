@@ -150,6 +150,8 @@ def upgrade():
         )
     """)
     op.execute("ALTER TABLE warmup_jobs ADD COLUMN IF NOT EXISTS max_videos VARCHAR NOT NULL DEFAULT '50,100'")
+    op.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false")
+    op.execute("ALTER TABLE warmup_jobs ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false")
 
 
 def downgrade():

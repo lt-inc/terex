@@ -44,6 +44,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
 
   const locked = LOCKED_STATUSES.has(job.status);
   const canStart = job.status === "pending";
+  const canArchive = job.status === "done" && !job.is_archived;
 
   function resetEdit() {
     setYoutubeUrl(job.youtube_url);
@@ -95,6 +96,11 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
     onDeleted();
   }
 
+  async function handleArchive() {
+    const updated = await updateJob(job.job_id, { is_archived: true });
+    onUpdated({ ...updated, sub_jobs: job.sub_jobs });
+  }
+
   function handleSubJobUpdated(updated: SubJobData) {
     onUpdated({ ...job, sub_jobs: job.sub_jobs.map((s) => s.sub_job_id === updated.sub_job_id ? updated : s) });
   }
@@ -125,6 +131,11 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
             className="text-xs font-medium bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white px-3 py-1 rounded-md transition-colors shrink-0"
           >
             {starting ? "…" : "Start"}
+          </button>
+        )}
+        {canArchive && (
+          <button onClick={handleArchive} className="text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1 rounded-md transition-colors shrink-0">
+            Archive
           </button>
         )}
         {canStart && (

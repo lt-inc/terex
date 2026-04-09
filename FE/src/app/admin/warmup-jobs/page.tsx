@@ -9,11 +9,12 @@ export default function WarmupJobsPage() {
   const [jobs, setJobs] = useState<WarmupJob[]>([]);
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (archived = false) => {
     setLoading(true);
     try {
-      const [j, a] = await Promise.all([fetchWarmupJobs(), fetchAccountsList()]);
+      const [j, a] = await Promise.all([fetchWarmupJobs(archived), fetchAccountsList()]);
       setJobs(j);
       setAccounts(a);
     } finally {
@@ -21,7 +22,7 @@ export default function WarmupJobsPage() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(showArchived); }, [load, showArchived]);
 
   function handleUpdated(updated: WarmupJob) {
     setJobs((prev) => prev.map((j) => j.job_id === updated.job_id ? updated : j));
@@ -35,13 +36,24 @@ export default function WarmupJobsPage() {
     <div className="p-6 flex flex-col gap-6 min-h-full">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-slate-100">Warmup Jobs</h1>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg border border-slate-600 transition-colors"
-        >
-          {loading ? "Loading…" : "Refresh"}
-        </button>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="w-4 h-4 rounded accent-indigo-500"
+            />
+            Show archived
+          </label>
+          <button
+            onClick={() => load(showArchived)}
+            disabled={loading}
+            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg border border-slate-600 transition-colors"
+          >
+            {loading ? "Loading…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {!loading && jobs.length === 0 && (

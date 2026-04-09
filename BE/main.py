@@ -136,6 +136,7 @@ class JobResponse(BaseModel):
     status: str
     fail_place: str = ""
     trace: Optional[str] = None
+    is_archived: bool = False
     create_datetime: Optional[datetime] = None
     last_change_datetime: Optional[datetime] = None
     sub_jobs: list[SubJobResponse] = []
@@ -152,6 +153,7 @@ class JobUpdate(BaseModel):
     status: Optional[str] = None
     fail_place: Optional[str] = None
     trace: Optional[str] = None
+    is_archived: Optional[bool] = None
 
 class SubJobUpdate(BaseModel):
     publish_datetime: Optional[datetime] = None
@@ -645,10 +647,13 @@ def create_job(card: VideoCardPayload, db: Session = Depends(get_db)):
 
 
 @app.get("/api/jobs", response_model=list[JobResponse])
-def list_jobs(db: Session = Depends(get_db)):
+def list_jobs(show_archived: bool = False, db: Session = Depends(get_db)):
     if db is None:
         return []
-    jobs = db.execute(select(jobs_table).order_by(jobs_table.c.job_id)).fetchall()
+    q = select(jobs_table).order_by(jobs_table.c.job_id)
+    if not show_archived:
+        q = q.where(jobs_table.c.is_archived == False)
+    jobs = db.execute(q).fetchall()
     result = []
     for job in jobs:
         meta = db.execute(
@@ -675,6 +680,7 @@ def list_jobs(db: Session = Depends(get_db)):
             status=job.status,
             fail_place=getattr(job, "fail_place", "") or "",
             trace=job.trace,
+            is_archived=getattr(job, "is_archived", False) or False,
             create_datetime=meta.create_datetime if meta else None,
             last_change_datetime=meta.last_change_datetime if meta else None,
             sub_jobs=[_resolve_sub_job(db, sj) for sj in sj_rows],
@@ -1043,6 +1049,7 @@ class WarmupJobUpdate(BaseModel):
     warm_up_datetime: Optional[datetime] = None
     repeat_step: Optional[int] = None
     max_videos: Optional[str] = None
+    is_archived: Optional[bool] = None
 
 
 class WarmupJobResponse(BaseModel):
@@ -1055,20 +1062,24 @@ class WarmupJobResponse(BaseModel):
     warm_up_datetime: Optional[datetime] = None
     repeat_step: Optional[int] = None
     max_videos: str = "50,100"
+    is_archived: bool = False
 
 
 @app.get("/api/warmup_jobs", response_model=list[WarmupJobResponse])
-def list_warmup_jobs(db: Session = Depends(get_db)):
+def list_warmup_jobs(show_archived: bool = False, db: Session = Depends(get_db)):
     if db is None:
         return []
-    rows = db.execute(
+    q = (
         select(
             warmup_jobs_table,
             accounts_table.c.name.label("account_name"),
             accounts_table.c.platform.label("account_platform"),
         ).join(accounts_table, warmup_jobs_table.c.account_id == accounts_table.c.id, isouter=True)
         .order_by(warmup_jobs_table.c.job_id)
-    ).fetchall()
+    )
+    if not show_archived:
+        q = q.where(warmup_jobs_table.c.is_archived == False)
+    rows = db.execute(q).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
