@@ -11,6 +11,8 @@ interface JobCardProps {
   accounts: AccountsResponse;
   bannerOptions: string[];
   backgroundOptions: string[];
+  selected: boolean;
+  onToggleSelect: () => void;
   onUpdated: (updated: JobData) => void;
   onDeleted: () => void;
 }
@@ -26,7 +28,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const LOCKED_STATUSES = new Set(["ready", "running", "done", "failed"]);
 
-export default function JobCard({ job, accounts, bannerOptions, backgroundOptions, onUpdated, onDeleted }: JobCardProps) {
+export default function JobCard({ job, accounts, bannerOptions, backgroundOptions, selected, onToggleSelect, onUpdated, onDeleted }: JobCardProps) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -44,7 +46,6 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
 
   const locked = LOCKED_STATUSES.has(job.status);
   const canStart = job.status === "pending";
-  const canArchive = job.status === "done" && !job.is_archived;
 
   function resetEdit() {
     setYoutubeUrl(job.youtube_url);
@@ -96,11 +97,6 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
     onDeleted();
   }
 
-  async function handleArchive() {
-    const updated = await updateJob(job.job_id, { is_archived: true });
-    onUpdated({ ...updated, sub_jobs: job.sub_jobs });
-  }
-
   function handleSubJobUpdated(updated: SubJobData) {
     onUpdated({ ...job, sub_jobs: job.sub_jobs.map((s) => s.sub_job_id === updated.sub_job_id ? updated : s) });
   }
@@ -113,6 +109,13 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
     <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-3">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 shrink-0 rounded accent-indigo-500 cursor-pointer"
+        />
         <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
           <svg className={`w-4 h-4 shrink-0 text-slate-500 transition-transform ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -121,6 +124,9 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
           <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${STATUS_COLORS[job.status] ?? "bg-slate-700 text-slate-300"}`}>
             {job.status}
           </span>
+          {job.is_archived && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded shrink-0 bg-slate-700 text-slate-400">archived</span>
+          )}
           <span className="text-sm text-slate-400 truncate">{job.youtube_url}</span>
           <span className="text-xs text-slate-500 ml-auto shrink-0">{job.sub_jobs.length} sub</span>
         </button>
@@ -131,11 +137,6 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
             className="text-xs font-medium bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white px-3 py-1 rounded-md transition-colors shrink-0"
           >
             {starting ? "…" : "Start"}
-          </button>
-        )}
-        {canArchive && (
-          <button onClick={handleArchive} className="text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1 rounded-md transition-colors shrink-0">
-            Archive
           </button>
         )}
         {canStart && (

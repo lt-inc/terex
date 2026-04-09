@@ -9,6 +9,8 @@ import type { WarmupJob, AccountRecord } from "@/types";
 interface Props {
   job: WarmupJob;
   accounts: AccountRecord[];
+  selected: boolean;
+  onToggleSelect: () => void;
   onUpdated: (updated: WarmupJob) => void;
   onDeleted: () => void;
 }
@@ -46,7 +48,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: Props) {
+export default function WarmupJobCard({ job, accounts, selected, onToggleSelect, onUpdated, onDeleted }: Props) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -67,7 +69,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
   const [maxVideosY, setMaxVideosY] = useState(initMv.y);
 
   const canEdit = job.status === "pending";
-  const canArchive = job.status === "done" && !job.is_archived;
 
   function resetEdit() {
     setAccountId(job.account_id);
@@ -107,11 +108,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
     onDeleted();
   }
 
-  async function handleArchive() {
-    const updated = await updateWarmupJob(job.job_id, { is_archived: true });
-    onUpdated(updated);
-  }
-
   const repeatDisplay = job.repeat_step
     ? (() => { const u = bestUnit(job.repeat_step); return `${u.value} ${REPEAT_UNITS[u.unitIdx].label}`; })()
     : "—";
@@ -120,6 +116,13 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
     <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-3">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 shrink-0 rounded accent-indigo-500 cursor-pointer"
+        />
         <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
           <svg className={`w-4 h-4 shrink-0 text-slate-500 transition-transform ${open ? "rotate-90" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -128,6 +131,9 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
           <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${STATUS_COLORS[job.status] ?? "bg-slate-700 text-slate-300"}`}>
             {job.status}
           </span>
+          {job.is_archived && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded shrink-0 bg-slate-700 text-slate-400">archived</span>
+          )}
           <span className="text-sm text-slate-400 truncate">
             {job.account_platform && <span className="text-slate-500 mr-1">[{job.account_platform}]</span>}
             {job.account_name ?? `account #${job.account_id}`}
@@ -135,11 +141,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
           <span className="text-xs text-slate-500 ml-auto shrink-0">{job.type}</span>
         </button>
 
-        {canArchive && (
-          <button onClick={handleArchive} className="text-xs font-medium bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1 rounded-md transition-colors shrink-0">
-            Archive
-          </button>
-        )}
         {canEdit && (
           <button onClick={handleDelete} className="text-slate-500 hover:text-red-400 transition-colors text-xl leading-none px-1">×</button>
         )}
