@@ -1,9 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import FileDropzone from "@/components/ui/FileDropzone";
+import { captureAuthStart, captureAuthFinish } from "@/lib/api";
 import type { AccountCardData } from "@/types";
 
 const PLATFORMS = ["YouTube", "TikTok", "Instagram"];
+const NOVNC_URL = "/novnc/vnc.html?path=novnc";
+
+type CaptureState = "idle" | "starting" | "active" | "finishing" | "done" | "error";
 
 interface AccountCardProps {
   card: AccountCardData;
@@ -12,8 +17,40 @@ interface AccountCardProps {
 }
 
 export default function AccountCard({ card, onChange, onDelete }: AccountCardProps) {
+  const [captureState, setCaptureState] = useState<CaptureState>("idle");
+  const [captureError, setCaptureError] = useState<string | null>(null);
+
   function update<K extends keyof AccountCardData>(key: K, value: AccountCardData[K]) {
     onChange({ ...card, [key]: value });
+  }
+
+  const isYouTube = card.platform === "YouTube";
+  const canCapture = isYouTube && card.name.trim().length > 0;
+
+  async function handleStartCapture() {
+    setCaptureState("starting");
+    setCaptureError(null);
+    try {
+      await captureAuthStart(card.platform, card.name.trim());
+      setCaptureState("active");
+      window.open(NOVNC_URL, "_blank");
+    } catch (e) {
+      setCaptureError(String(e));
+      setCaptureState("error");
+    }
+  }
+
+  async function handleFinishCapture() {
+    setCaptureState("finishing");
+    setCaptureError(null);
+    try {
+      const result = await captureAuthFinish();
+      onChange({ ...card, capturedFileName: result.file_name });
+      setCaptureState("done");
+    } catch (e) {
+      setCaptureError(String(e));
+      setCaptureState("active");
+    }
   }
 
   return (
@@ -65,12 +102,58 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
       </div>
 
       {/* Auth file */}
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-2">
         <label className="text-xs text-slate-400">Auth file</label>
         <FileDropzone
           file={card.authFile}
           onChange={(f) => update("authFile", f)}
         />
+
+        {/* Capture Auth via noVNC — YouTube only */}
+        {isYouTube && (
+          <div className="flex flex-col gap-2 pt-1">
+            {captureState === "idle" || captureState === "error" ? (
+              <button
+                type="button"
+                onClick={handleStartCapture}
+                disabled={!canCapture}
+                className="flex items-center gap-2 text-xs font-medium bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-md transition-colors w-fit"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                Capture Auth via noVNC
+              </button>
+            ) : captureState === "starting" ? (
+              <span className="text-xs text-slate-400">Starting browser…</span>
+            ) : captureState === "active" ? (
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-xs text-green-400">Browser active —</span>
+                <a href={NOVNC_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline">Open noVNC</a>
+                <button
+                  type="button"
+                  onClick={handleFinishCapture}
+                  className="ml-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded-md transition-colors"
+                >
+                  Done — capture
+                </button>
+              </div>
+            ) : captureState === "finishing" ? (
+              <span className="text-xs text-slate-400">Capturing…</span>
+            ) : captureState === "done" ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-emerald-400">✓ Auth captured:</span>
+                <span className="text-xs font-mono text-slate-300">{card.capturedFileName}</span>
+              </div>
+            ) : null}
+
+            {captureError && <span className="text-xs text-red-400">{captureError}</span>}
+            {!canCapture && captureState === "idle" && (
+              <span className="text-xs text-slate-500">Fill in the name first to capture auth</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Note */}

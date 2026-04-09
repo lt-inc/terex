@@ -11,6 +11,7 @@ function createEmptyCard(): AccountCardData {
     name: "",
     url: "",
     authFile: null,
+    capturedFileName: null,
     note: "",
   };
 }
@@ -64,6 +65,7 @@ export default function CreateAccountPage() {
           form.append("url", card.url);
           form.append("note", card.note);
           if (card.authFile) form.append("auth_file", card.authFile);
+          if (card.capturedFileName) form.append("captured_file_name", card.capturedFileName);
           return fetch("/api/accounts/create", { method: "POST", body: form });
         })
       );

@@ -111,6 +111,28 @@ export async function deleteBackground(id: number): Promise<void> {
   await fetch(`${BASE_URL}/backgrounds/${id}`, { method: "DELETE" });
 }
 
+// ── Auth Capture ──────────────────────────────────────────────────────────────
+export async function captureAuthStart(platform: string, name: string): Promise<{ status: string }> {
+  const res = await fetch(`${BASE_URL}/accounts/capture-auth/start?platform=${encodeURIComponent(platform)}&name=${encodeURIComponent(name)}`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function captureAuthFinish(accountId?: number): Promise<{ file_name: string; platform: string; name: string }> {
+  const url = accountId
+    ? `${BASE_URL}/accounts/capture-auth/finish?account_id=${accountId}`
+    : `${BASE_URL}/accounts/capture-auth/finish`;
+  const res = await fetch(url, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function captureAuthStatus(): Promise<{ active: boolean; platform: string | null; name: string | null }> {
+  const res = await fetch(`${BASE_URL}/accounts/capture-auth/status`);
+  if (!res.ok) return { active: false, platform: null, name: null };
+  return res.json();
+}
+
 // ── Warmup Jobs ───────────────────────────────────────────────────────────────
 export async function fetchWarmupJobs(): Promise<WarmupJob[]> {
   const res = await fetch(`${BASE_URL}/warmup_jobs`);

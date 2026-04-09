@@ -917,6 +917,59 @@ async def upload_background(
     return {"status": "uploaded", "name": name}
 
 
+AUTH_SERVER_URL = os.getenv("AUTH_SERVER_URL", "http://borisic-auth-api.admin.svc:8080")
+
+
+@app.post("/api/accounts/capture-auth/start")
+async def capture_auth_start(platform: str, name: str):
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            r = await client.post(
+                f"{AUTH_SERVER_URL}/session/start",
+                params={"platform": platform, "name": name},
+            )
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Auth server error: {e}")
+
+
+@app.post("/api/accounts/capture-auth/finish")
+async def capture_auth_finish(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    import httpx
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            r = await client.post(f"{AUTH_SERVER_URL}/session/finish")
+            r.raise_for_status()
+            result = r.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Auth server error: {e}")
+
+    if account_id and db is not None:
+        db.execute(
+            accounts_table.update()
+            .where(accounts_table.c.id == account_id)
+            .values(bucket=storage.BUCKET_COOKIES, file_name=result["file_name"])
+        )
+        db.commit()
+        logging.info("Updated account %d with captured auth: %s", account_id, result["file_name"])
+
+    return result
+
+
+@app.get("/api/accounts/capture-auth/status")
+async def capture_auth_status():
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(f"{AUTH_SERVER_URL}/session/status")
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPError:
+            return {"active": False, "platform": None, "name": None}
+
+
 @app.post("/api/accounts/create")
 async def create_account(
     platform: str = Form(...),
@@ -924,9 +977,11 @@ async def create_account(
     url: str = Form(""),
     note: str = Form(""),
     auth_file: Optional[UploadFile] = File(None),
+    captured_file_name: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-    file_name = None
+    # Priority: uploaded file > pre-captured via noVNC
+    file_name = captured_file_name or None
     if auth_file and auth_file.filename and storage.is_available():
         content = await auth_file.read()
         file_name = f"{platform}/{name}/{auth_file.filename}"

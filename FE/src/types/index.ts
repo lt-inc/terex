@@ -45,6 +45,7 @@ export interface AccountCardData {
   name: string;
   url: string;
   authFile: File | null;
+  capturedFileName: string | null;
   note: string;
 }
 
