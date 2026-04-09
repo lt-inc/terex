@@ -153,6 +153,31 @@ def upgrade():
     op.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false")
     op.execute("ALTER TABLE warmup_jobs ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false")
 
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS youtube_statistic (
+            youtube_id     VARCHAR PRIMARY KEY,
+            view_count     INTEGER,
+            like_count     INTEGER,
+            dislike_count  INTEGER,
+            favorite_count INTEGER,
+            comment_count  INTEGER,
+            youtube_acc_id VARCHAR,
+            banner_name    VARCHAR
+        )
+    """)
+
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS warmup (
+            account_id INTEGER PRIMARY KEY,
+            viewed     INTEGER,
+            liked      INTEGER,
+            disliked   INTEGER,
+            saved      INTEGER,
+            commented  INTEGER,
+            skipped    INTEGER
+        )
+    """)
+
 
 def downgrade():
     pass
