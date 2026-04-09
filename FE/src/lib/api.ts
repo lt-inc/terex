@@ -120,7 +120,6 @@ export async function fetchWarmupJobs(): Promise<WarmupJob[]> {
 
 export async function createWarmupJob(data: {
   account_id: number;
-  status: string;
   type: string;
   warm_up_datetime?: string | null;
   repeat_step?: number | null;

@@ -975,7 +975,6 @@ async def create_account(
 
 class WarmupJobCreate(BaseModel):
     account_id: int
-    status: str = "pending"
     type: str = "one-time"
     warm_up_datetime: Optional[datetime] = None
     repeat_step: Optional[int] = None  # always seconds
@@ -1023,7 +1022,7 @@ def create_warmup_job(payload: WarmupJobCreate, db: Session = Depends(get_db)):
     db.execute(insert(warmup_jobs_table).values(
         job_id=job_id,
         account_id=payload.account_id,
-        status=payload.status,
+        status="pending",
         type=payload.type,
         warm_up_datetime=payload.warm_up_datetime,
         repeat_step=payload.repeat_step if payload.type == "cron" else None,

@@ -11,7 +11,6 @@ interface Props {
   onDeleted: () => void;
 }
 
-const STATUS_OPTIONS = ["pending", "warming_up", "done"];
 const TYPE_OPTIONS = ["one-time", "cron"];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -52,7 +51,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
 
   // edit state
   const [accountId, setAccountId] = useState(job.account_id);
-  const [status, setStatus] = useState(job.status);
   const [type, setType] = useState(job.type);
   const [warmUpDatetime, setWarmUpDatetime] = useState(
     job.warm_up_datetime ? job.warm_up_datetime.slice(0, 16) : ""
@@ -65,7 +63,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
 
   function resetEdit() {
     setAccountId(job.account_id);
-    setStatus(job.status);
     setType(job.type);
     setWarmUpDatetime(job.warm_up_datetime ? job.warm_up_datetime.slice(0, 16) : "");
     const u = job.repeat_step ? bestUnit(job.repeat_step) : { value: 1, unitIdx: 0 };
@@ -80,7 +77,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
       const repeatStep = type === "cron" ? repeatValue * REPEAT_UNITS[repeatUnitIdx].factor : null;
       const updated = await updateWarmupJob(job.job_id, {
         account_id: accountId,
-        status,
         type,
         warm_up_datetime: warmUpDatetime ? new Date(warmUpDatetime).toISOString() : null,
         repeat_step: repeatStep,
@@ -163,18 +159,6 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
                   {accounts.map((a) => (
                     <option key={a.id} value={a.id}>[{a.platform}] {a.name}</option>
                   ))}
-                </select>
-              </div>
-
-              {/* Status */}
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-400">Status</label>
-                <select
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value)}
-                  className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                >
-                  {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
 

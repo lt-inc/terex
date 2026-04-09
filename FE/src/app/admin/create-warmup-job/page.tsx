@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import WarmupJobFormCard, { createEmptyWarmupCard } from "@/components/warmup-jobs/WarmupJobFormCard";
+import type { WarmupJobFormData } from "@/components/warmup-jobs/WarmupJobFormCard";
 import { fetchAccountsList, createWarmupJob } from "@/lib/api";
 import type { AccountRecord } from "@/types";
 
-const STATUS_OPTIONS = ["pending", "warming_up", "done"];
-const TYPE_OPTIONS = ["one-time", "cron"];
 const REPEAT_UNITS = [
   { label: "sec",  factor: 1 },
   { label: "min",  factor: 60 },
@@ -14,146 +14,99 @@ const REPEAT_UNITS = [
 ];
 
 export default function CreateWarmupJobPage() {
+  const [cards, setCards] = useState<WarmupJobFormData[]>([]);
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
-  const [accountId, setAccountId] = useState<number | "">("");
-  const [status, setStatus] = useState("pending");
-  const [type, setType] = useState("one-time");
-  const [warmUpDatetime, setWarmUpDatetime] = useState("");
-  const [repeatValue, setRepeatValue] = useState(1);
-  const [repeatUnitIdx, setRepeatUnitIdx] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAccountsList().then(setAccounts).catch(() => {});
   }, []);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (accountId === "") return;
+  function addCard() {
+    setCards((prev) => [...prev, createEmptyWarmupCard()]);
+  }
+
+  function updateCard(id: string, updated: WarmupJobFormData) {
+    setCards((prev) => prev.map((c) => (c.id === id ? updated : c)));
+  }
+
+  function deleteCard(id: string) {
+    setCards((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  const canSubmit = cards.length > 0 && cards.every((c) => c.accountId !== "");
+
+  async function handleSubmitAll() {
+    if (!canSubmit) return;
     setSubmitting(true);
-    setResult(null);
     try {
-      const repeatStep = type === "cron" ? repeatValue * REPEAT_UNITS[repeatUnitIdx].factor : null;
-      const job = await createWarmupJob({
-        account_id: accountId,
-        status,
-        type,
-        warm_up_datetime: warmUpDatetime ? new Date(warmUpDatetime).toISOString() : null,
-        repeat_step: repeatStep,
-      });
-      setResult({ ok: true, message: `Created warmup job ${job.job_id}` });
-      // reset
-      setAccountId("");
-      setStatus("pending");
-      setType("one-time");
-      setWarmUpDatetime("");
-      setRepeatValue(1);
-      setRepeatUnitIdx(0);
-    } catch (err) {
-      setResult({ ok: false, message: String(err) });
+      await Promise.all(
+        cards.map((c) =>
+          createWarmupJob({
+            account_id: c.accountId as number,
+            type: c.type,
+            warm_up_datetime: c.warmUpDatetime ? new Date(c.warmUpDatetime).toISOString() : null,
+            repeat_step: c.type === "cron" ? c.repeatValue * REPEAT_UNITS[c.repeatUnitIdx].factor : null,
+          })
+        )
+      );
+      const count = cards.length;
+      setCards([]);
+      setToast(`${count} warmup job${count !== 1 ? "s" : ""} created`);
+      setTimeout(() => setToast(null), 3000);
+    } catch {
+      setToast("Failed to create warmup jobs");
+      setTimeout(() => setToast(null), 3000);
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="p-6 max-w-lg flex flex-col gap-6">
+    <div className="p-6 flex flex-col gap-6 min-h-full">
       <h1 className="text-xl font-semibold text-slate-100">Create Warmup Job</h1>
 
-      <form onSubmit={handleSubmit} className="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col gap-4">
-
-        {/* Account */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-slate-400">Account</label>
-          <select
-            required
-            value={accountId}
-            onChange={(e) => setAccountId(Number(e.target.value))}
-            className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            <option value="" disabled>Select account…</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>[{a.platform}] {a.name}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Status */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-slate-400">Status</label>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-
-        {/* Type */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-slate-400">Type</label>
-          <select
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-            className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            {TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
-
-        {/* Warm-up datetime */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs text-slate-400">Warm-up datetime</label>
-          <input
-            type="datetime-local"
-            value={warmUpDatetime}
-            onChange={(e) => setWarmUpDatetime(e.target.value)}
-            className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
-        </div>
-
-        {/* Repeat step (cron only) */}
-        {type === "cron" && (
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-400">Repeat every</label>
-            <div className="flex gap-2">
-              <input
-                type="number"
-                min={1}
-                value={repeatValue}
-                onChange={(e) => setRepeatValue(Math.max(1, Number(e.target.value)))}
-                className="w-28 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <select
-                value={repeatUnitIdx}
-                onChange={(e) => setRepeatUnitIdx(Number(e.target.value))}
-                className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              >
-                {REPEAT_UNITS.map((u, i) => <option key={u.label} value={i}>{u.label}</option>)}
-              </select>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              = {repeatValue * REPEAT_UNITS[repeatUnitIdx].factor} seconds stored in DB
-            </p>
-          </div>
-        )}
-
+      <div className="flex items-center justify-between">
         <button
-          type="submit"
-          disabled={submitting || accountId === ""}
-          className="mt-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          onClick={addCard}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
         >
-          {submitting ? "Creating…" : "Create"}
+          <span className="text-lg leading-none">+</span>
+          Add Job
         </button>
+        <button
+          onClick={handleSubmitAll}
+          disabled={!canSubmit || submitting}
+          className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2 rounded-lg border border-slate-600 transition-colors"
+        >
+          {submitting ? "Creating…" : "Submit All"}
+        </button>
+      </div>
 
-        {result && (
-          <p className={`text-sm ${result.ok ? "text-emerald-400" : "text-red-400"}`}>
-            {result.message}
-          </p>
-        )}
-      </form>
+      {cards.length === 0 && (
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-slate-500 text-sm">No jobs yet. Click &quot;Add Job&quot; to get started.</p>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-4">
+        {cards.map((card) => (
+          <WarmupJobFormCard
+            key={card.id}
+            card={card}
+            accounts={accounts}
+            onChange={(updated) => updateCard(card.id, updated)}
+            onDelete={() => deleteCard(card.id)}
+          />
+        ))}
+      </div>
+
+      {toast && (
+        <div className="fixed bottom-6 right-6 bg-indigo-600 text-white text-sm px-4 py-3 rounded-lg shadow-lg z-50">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
