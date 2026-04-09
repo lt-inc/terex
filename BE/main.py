@@ -6,7 +6,7 @@ import string
 import subprocess
 import tempfile
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -164,7 +164,7 @@ class SubJobUpdate(BaseModel):
 class PublishSchedule(BaseModel):
     date: str = ""
     time: str = ""
-    step: int = 0
+    step: Union[int, str] = 0
 
 
 class BannerConfig(BaseModel):
