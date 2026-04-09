@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { updateWarmupJob, deleteWarmupJob } from "@/lib/api";
+import { localInputToISO } from "@/lib/datetime";
 import { encodeMaxVideos, decodeMaxVideos } from "@/components/warmup-jobs/WarmupJobFormCard";
 import type { MaxVideosMode } from "@/components/warmup-jobs/WarmupJobFormCard";
 import type { WarmupJob, AccountRecord } from "@/types";
@@ -91,7 +92,7 @@ export default function WarmupJobCard({ job, accounts, selected, onToggleSelect,
       const updated = await updateWarmupJob(job.job_id, {
         account_id: accountId,
         type,
-        warm_up_datetime: warmUpDatetime ? new Date(warmUpDatetime).toISOString() : null,
+        warm_up_datetime: warmUpDatetime ? localInputToISO(warmUpDatetime) : null,
         repeat_step: repeatStep,
         max_videos: encodeMaxVideos(maxVideosMode, maxVideosX, maxVideosY),
       });

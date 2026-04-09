@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import WarmupJobFormCard, { createEmptyWarmupCard, encodeMaxVideos } from "@/components/warmup-jobs/WarmupJobFormCard";
 import type { WarmupJobFormData } from "@/components/warmup-jobs/WarmupJobFormCard";
 import { fetchAccountsList, createWarmupJob } from "@/lib/api";
+import { localInputToISO } from "@/lib/datetime";
 import type { AccountRecord } from "@/types";
 
 const REPEAT_UNITS = [
@@ -46,7 +47,7 @@ export default function CreateWarmupJobPage() {
           createWarmupJob({
             account_id: c.accountId as number,
             type: c.type,
-            warm_up_datetime: c.warmUpDatetime ? new Date(c.warmUpDatetime).toISOString() : null,
+            warm_up_datetime: c.warmUpDatetime ? localInputToISO(c.warmUpDatetime) : null,
             repeat_step: c.type === "cron" ? c.repeatValue * REPEAT_UNITS[c.repeatUnitIdx].factor : null,
             max_videos: encodeMaxVideos(c.maxVideosMode, c.maxVideosX, c.maxVideosY),
           })

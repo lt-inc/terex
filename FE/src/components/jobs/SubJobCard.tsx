@@ -3,6 +3,7 @@
 import { useState } from "react";
 import MultiSelect from "@/components/ui/MultiSelect";
 import { updateSubJob, deleteSubJob } from "@/lib/api";
+import { localPartsToISO } from "@/lib/datetime";
 import type { SubJobData, AccountsResponse, OutData } from "@/types";
 
 interface SubJobCardProps {
@@ -66,7 +67,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
   async function handleSave() {
     setSaving(true);
     try {
-      const publish_datetime = pubDate && pubTime ? `${pubDate}T${pubTime}:00Z` : null;
+      const publish_datetime = pubDate && pubTime ? localPartsToISO(pubDate, pubTime) : null;
       const updated = await updateSubJob(subJob.sub_job_id, {
         account_names: accountNames,
         banner_name: bannerName || null,
