@@ -98,6 +98,17 @@ out_table = Table(
 )
 
 
+warmup_jobs_table = Table(
+    "warmup_jobs", metadata,
+    Column("job_id", String, primary_key=True),
+    Column("account_id", Integer, nullable=False),
+    Column("status", String, nullable=False, server_default="pending"),
+    Column("type", String, nullable=False, server_default="one-time"),
+    Column("warm_up_datetime", TIMESTAMP(timezone=True), nullable=True),
+    Column("repeat_step", Integer, nullable=True),
+)
+
+
 def get_db():
     if SessionLocal is None:
         yield None

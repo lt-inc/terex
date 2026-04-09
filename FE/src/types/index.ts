@@ -102,6 +102,17 @@ export interface SubJobData {
   outs: OutData[];
 }
 
+export interface WarmupJob {
+  job_id: string;
+  account_id: number;
+  account_name: string | null;
+  account_platform: string | null;
+  status: string;
+  type: string;
+  warm_up_datetime: string | null;
+  repeat_step: number | null;
+}
+
 export interface JobData {
   job_id: string;
   youtube_url: string;

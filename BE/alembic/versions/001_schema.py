@@ -135,9 +135,19 @@ def upgrade():
         "ALTER TABLE backgrounds ADD COLUMN IF NOT EXISTS file_name TEXT",
         "ALTER TABLE accounts  ADD COLUMN IF NOT EXISTS bucket VARCHAR",
         "ALTER TABLE accounts  ADD COLUMN IF NOT EXISTS file_name TEXT",
-        "ALTER TABLE sub_job   DROP COLUMN IF EXISTS platform",
     ]:
         op.execute(col_sql)
+
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS warmup_jobs (
+            job_id           VARCHAR PRIMARY KEY,
+            account_id       INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            status           VARCHAR NOT NULL DEFAULT 'pending',
+            type             VARCHAR NOT NULL DEFAULT 'one-time',
+            warm_up_datetime TIMESTAMPTZ,
+            repeat_step      INTEGER
+        )
+    """)
 
 
 def downgrade():

@@ -60,6 +60,8 @@ export default function Sidebar() {
                 { href: "/admin/banners", label: "Create Banners" },
                 { href: "/admin/backgrounds-list", label: "View Backgrounds" },
                 { href: "/admin/backgrounds", label: "Create Backgrounds" },
+                { href: "/admin/warmup-jobs", label: "View Warmup Jobs" },
+                { href: "/admin/create-warmup-job", label: "Create Warmup Job" },
               ].map(({ href, label }) => (
                 <li key={href}>
                   <Link

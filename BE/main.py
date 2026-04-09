@@ -30,6 +30,7 @@ from db import (
     banners_table,
     backgrounds_table,
     out_table,
+    warmup_jobs_table,
 )
 import storage
 from tracing import setup_tracing
@@ -968,6 +969,113 @@ async def create_account(
         db.commit()
 
     return {"status": "created", "name": name, "platform": platform}
+
+
+# ── Warmup Jobs ───────────────────────────────────────────────────────────────
+
+class WarmupJobCreate(BaseModel):
+    account_id: int
+    status: str = "pending"
+    type: str = "one-time"
+    warm_up_datetime: Optional[datetime] = None
+    repeat_step: Optional[int] = None  # always seconds
+
+
+class WarmupJobUpdate(BaseModel):
+    account_id: Optional[int] = None
+    status: Optional[str] = None
+    type: Optional[str] = None
+    warm_up_datetime: Optional[datetime] = None
+    repeat_step: Optional[int] = None
+
+
+class WarmupJobResponse(BaseModel):
+    job_id: str
+    account_id: int
+    account_name: Optional[str] = None
+    account_platform: Optional[str] = None
+    status: str
+    type: str
+    warm_up_datetime: Optional[datetime] = None
+    repeat_step: Optional[int] = None
+
+
+@app.get("/api/warmup_jobs", response_model=list[WarmupJobResponse])
+def list_warmup_jobs(db: Session = Depends(get_db)):
+    if db is None:
+        return []
+    rows = db.execute(
+        select(
+            warmup_jobs_table,
+            accounts_table.c.name.label("account_name"),
+            accounts_table.c.platform.label("account_platform"),
+        ).join(accounts_table, warmup_jobs_table.c.account_id == accounts_table.c.id, isouter=True)
+        .order_by(warmup_jobs_table.c.job_id)
+    ).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+@app.post("/api/warmup_jobs", response_model=WarmupJobResponse)
+def create_warmup_job(payload: WarmupJobCreate, db: Session = Depends(get_db)):
+    if db is None:
+        raise HTTPException(status_code=503, detail="DB not available")
+    job_id = "".join(random.choices(string.hexdigits[:16], k=10))
+    db.execute(insert(warmup_jobs_table).values(
+        job_id=job_id,
+        account_id=payload.account_id,
+        status=payload.status,
+        type=payload.type,
+        warm_up_datetime=payload.warm_up_datetime,
+        repeat_step=payload.repeat_step if payload.type == "cron" else None,
+    ))
+    db.commit()
+    row = db.execute(
+        select(
+            warmup_jobs_table,
+            accounts_table.c.name.label("account_name"),
+            accounts_table.c.platform.label("account_platform"),
+        ).join(accounts_table, warmup_jobs_table.c.account_id == accounts_table.c.id, isouter=True)
+        .where(warmup_jobs_table.c.job_id == job_id)
+    ).fetchone()
+    return dict(row._mapping)
+
+
+@app.patch("/api/warmup_jobs/{job_id}", response_model=WarmupJobResponse)
+def update_warmup_job(job_id: str, payload: WarmupJobUpdate, db: Session = Depends(get_db)):
+    if db is None:
+        raise HTTPException(status_code=503, detail="DB not available")
+    existing = db.execute(
+        select(warmup_jobs_table).where(warmup_jobs_table.c.job_id == job_id)
+    ).fetchone()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Warmup job not found")
+    if existing.status != "pending":
+        raise HTTPException(status_code=400, detail="Only pending jobs can be edited")
+    values = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    # clear repeat_step if switching to one-time
+    if values.get("type") == "one-time":
+        values["repeat_step"] = None
+    if values:
+        db.execute(warmup_jobs_table.update().where(warmup_jobs_table.c.job_id == job_id).values(**values))
+        db.commit()
+    row = db.execute(
+        select(
+            warmup_jobs_table,
+            accounts_table.c.name.label("account_name"),
+            accounts_table.c.platform.label("account_platform"),
+        ).join(accounts_table, warmup_jobs_table.c.account_id == accounts_table.c.id, isouter=True)
+        .where(warmup_jobs_table.c.job_id == job_id)
+    ).fetchone()
+    return dict(row._mapping)
+
+
+@app.delete("/api/warmup_jobs/{job_id}")
+def delete_warmup_job(job_id: str, db: Session = Depends(get_db)):
+    if db is None:
+        raise HTTPException(status_code=503, detail="DB not available")
+    db.execute(warmup_jobs_table.delete().where(warmup_jobs_table.c.job_id == job_id))
+    db.commit()
+    return {"status": "deleted"}
 
 
 if __name__ == "__main__":

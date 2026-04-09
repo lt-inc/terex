@@ -1,4 +1,4 @@
-import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord } from "@/types";
+import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord, WarmupJob } from "@/types";
 
 const BASE_URL = "/api";
 
@@ -109,6 +109,50 @@ export async function updateBackground(id: number, data: { name?: string; note?:
 }
 export async function deleteBackground(id: number): Promise<void> {
   await fetch(`${BASE_URL}/backgrounds/${id}`, { method: "DELETE" });
+}
+
+// ── Warmup Jobs ───────────────────────────────────────────────────────────────
+export async function fetchWarmupJobs(): Promise<WarmupJob[]> {
+  const res = await fetch(`${BASE_URL}/warmup_jobs`);
+  if (!res.ok) throw new Error("Failed to fetch warmup jobs");
+  return res.json();
+}
+
+export async function createWarmupJob(data: {
+  account_id: number;
+  status: string;
+  type: string;
+  warm_up_datetime?: string | null;
+  repeat_step?: number | null;
+}): Promise<WarmupJob> {
+  const res = await fetch(`${BASE_URL}/warmup_jobs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create warmup job");
+  return res.json();
+}
+
+export async function updateWarmupJob(jobId: string, data: Partial<{
+  account_id: number;
+  status: string;
+  type: string;
+  warm_up_datetime: string | null;
+  repeat_step: number | null;
+}>): Promise<WarmupJob> {
+  const res = await fetch(`${BASE_URL}/warmup_jobs/${jobId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update warmup job");
+  return res.json();
+}
+
+export async function deleteWarmupJob(jobId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/warmup_jobs/${jobId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete warmup job");
 }
 
 export async function submitJobs(cards: VideoCardData[]): Promise<{ status: string; job_id: string }[]> {
