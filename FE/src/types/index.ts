@@ -112,6 +112,7 @@ export interface WarmupJob {
   type: string;
   warm_up_datetime: string | null;
   repeat_step: number | null;
+  max_videos: string;
 }
 
 export interface JobData {

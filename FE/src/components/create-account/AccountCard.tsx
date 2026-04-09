@@ -5,7 +5,11 @@ import FileDropzone from "@/components/ui/FileDropzone";
 import { captureAuthStart, captureAuthFinish } from "@/lib/api";
 import type { AccountCardData } from "@/types";
 
-const PLATFORMS = ["YouTube", "TikTok", "Instagram"];
+const PLATFORMS = [
+  { value: "youtube",   label: "YouTube" },
+  { value: "tiktok",    label: "TikTok" },
+  { value: "instagram", label: "Instagram" },
+];
 const NOVNC_URL = "/novnc/vnc.html?path=novnc";
 
 type CaptureState = "idle" | "starting" | "active" | "finishing" | "done" | "error";
@@ -24,7 +28,7 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
     onChange({ ...card, [key]: value });
   }
 
-  const isYouTube = card.platform === "YouTube";
+  const isYouTube = card.platform === "youtube";
   const canCapture = isYouTube && card.name.trim().length > 0;
 
   async function handleStartCapture() {
@@ -72,7 +76,7 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
         >
           <option value="">— select platform —</option>
           {PLATFORMS.map((p) => (
-            <option key={p} value={p}>{p}</option>
+            <option key={p.value} value={p.value}>{p.label}</option>
           ))}
         </select>
       </div>

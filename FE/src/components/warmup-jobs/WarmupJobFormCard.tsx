@@ -10,6 +10,8 @@ const REPEAT_UNITS = [
   { label: "day",  factor: 86400 },
 ];
 
+export type MaxVideosMode = "fixed" | "rand";
+
 export interface WarmupJobFormData {
   id: string;
   accountId: number | "";
@@ -17,6 +19,9 @@ export interface WarmupJobFormData {
   warmUpDatetime: string;
   repeatValue: number;
   repeatUnitIdx: number;
+  maxVideosMode: MaxVideosMode;
+  maxVideosX: number;
+  maxVideosY: number;
 }
 
 interface Props {
@@ -34,7 +39,22 @@ export function createEmptyWarmupCard(): WarmupJobFormData {
     warmUpDatetime: "",
     repeatValue: 1,
     repeatUnitIdx: 0,
+    maxVideosMode: "rand",
+    maxVideosX: 50,
+    maxVideosY: 100,
   };
+}
+
+/** Encode to DB format: "x,0" for fixed, "x,y" for rand */
+export function encodeMaxVideos(mode: MaxVideosMode, x: number, y: number): string {
+  return mode === "fixed" ? `${x},0` : `${x},${y}`;
+}
+
+/** Decode from DB format */
+export function decodeMaxVideos(raw: string): { mode: MaxVideosMode; x: number; y: number } {
+  const [a, b] = raw.split(",").map(Number);
+  if (b === 0) return { mode: "fixed", x: a, y: 0 };
+  return { mode: "rand", x: a, y: b };
 }
 
 export default function WarmupJobFormCard({ card, accounts, onChange, onDelete }: Props) {
@@ -43,6 +63,9 @@ export default function WarmupJobFormCard({ card, accounts, onChange, onDelete }
   }
 
   const repeatSeconds = card.repeatValue * REPEAT_UNITS[card.repeatUnitIdx].factor;
+  const maxVideosPreview = card.maxVideosMode === "fixed"
+    ? `${card.maxVideosX} shorts`
+    : `rand(${card.maxVideosX}, ${card.maxVideosY}) shorts`;
 
   return (
     <div className="relative bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col gap-4">
@@ -132,6 +155,58 @@ export default function WarmupJobFormCard({ card, accounts, onChange, onDelete }
           </div>
         </div>
       )}
+
+      {/* Max videos */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <label className="text-xs text-slate-400">Max shorts per job</label>
+          <span className="text-xs text-slate-500">{maxVideosPreview}</span>
+        </div>
+        <div className="flex gap-2">
+          {(["fixed", "rand"] as MaxVideosMode[]).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => update("maxVideosMode", m)}
+              className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${
+                card.maxVideosMode === m
+                  ? "bg-indigo-600 border-indigo-500 text-white"
+                  : "bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+              }`}
+            >
+              {m === "fixed" ? "Fixed" : "Random"}
+            </button>
+          ))}
+        </div>
+
+        {card.maxVideosMode === "fixed" ? (
+          <input
+            type="number"
+            min={1}
+            value={card.maxVideosX}
+            onChange={(e) => update("maxVideosX", Math.max(1, Number(e.target.value)))}
+            className="w-28 bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              value={card.maxVideosX}
+              onChange={(e) => update("maxVideosX", Math.max(1, Number(e.target.value)))}
+              className="w-24 bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <span className="text-xs text-slate-500">–</span>
+            <input
+              type="number"
+              min={card.maxVideosX + 1}
+              value={card.maxVideosY}
+              onChange={(e) => update("maxVideosY", Math.max(card.maxVideosX + 1, Number(e.target.value)))}
+              className="w-24 bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

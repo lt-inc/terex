@@ -12,11 +12,15 @@ interface AccountRecordCardProps {
   onDelete: (id: number) => Promise<void>;
 }
 
-const PLATFORMS = ["YouTube", "TikTok", "Instagram"];
+const PLATFORMS = [
+  { value: "youtube",   label: "YouTube" },
+  { value: "tiktok",    label: "TikTok" },
+  { value: "instagram", label: "Instagram" },
+];
 const PLATFORM_COLORS: Record<string, string> = {
-  YouTube: "bg-red-900/40 text-red-300",
-  TikTok: "bg-slate-700 text-slate-300",
-  Instagram: "bg-purple-900/40 text-purple-300",
+  youtube:   "bg-red-900/40 text-red-300",
+  tiktok:    "bg-slate-700 text-slate-300",
+  instagram: "bg-purple-900/40 text-purple-300",
 };
 
 const NOVNC_URL = "/novnc/vnc.html?path=novnc";
@@ -57,7 +61,7 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
     onDeleted();
   }
 
-  const isYouTube = record.platform === "YouTube";
+  const isYouTube = record.platform === "youtube";
 
   async function handleStartCapture() {
     setCaptureState("starting");
@@ -152,7 +156,7 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
               <label className="text-xs text-slate-400">Platform</label>
               <select value={platform} onChange={(e) => setPlatform(e.target.value)}
                 className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                {PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
+                {PLATFORMS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
             </div>
             <div className="flex flex-col gap-1">

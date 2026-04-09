@@ -145,9 +145,11 @@ def upgrade():
             status           VARCHAR NOT NULL DEFAULT 'pending',
             type             VARCHAR NOT NULL DEFAULT 'one-time',
             warm_up_datetime TIMESTAMPTZ,
-            repeat_step      INTEGER
+            repeat_step      INTEGER,
+            max_videos       VARCHAR NOT NULL DEFAULT '50,100'
         )
     """)
+    op.execute("ALTER TABLE warmup_jobs ADD COLUMN IF NOT EXISTS max_videos VARCHAR NOT NULL DEFAULT '50,100'")
 
 
 def downgrade():

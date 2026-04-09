@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import WarmupJobFormCard, { createEmptyWarmupCard } from "@/components/warmup-jobs/WarmupJobFormCard";
+import WarmupJobFormCard, { createEmptyWarmupCard, encodeMaxVideos } from "@/components/warmup-jobs/WarmupJobFormCard";
 import type { WarmupJobFormData } from "@/components/warmup-jobs/WarmupJobFormCard";
 import { fetchAccountsList, createWarmupJob } from "@/lib/api";
 import type { AccountRecord } from "@/types";
@@ -48,6 +48,7 @@ export default function CreateWarmupJobPage() {
             type: c.type,
             warm_up_datetime: c.warmUpDatetime ? new Date(c.warmUpDatetime).toISOString() : null,
             repeat_step: c.type === "cron" ? c.repeatValue * REPEAT_UNITS[c.repeatUnitIdx].factor : null,
+            max_videos: encodeMaxVideos(c.maxVideosMode, c.maxVideosX, c.maxVideosY),
           })
         )
       );

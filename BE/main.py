@@ -1033,6 +1033,7 @@ class WarmupJobCreate(BaseModel):
     type: str = "one-time"
     warm_up_datetime: Optional[datetime] = None
     repeat_step: Optional[int] = None  # always seconds
+    max_videos: str = "50,100"         # "x,0" fixed | "x,y" rand
 
 
 class WarmupJobUpdate(BaseModel):
@@ -1041,6 +1042,7 @@ class WarmupJobUpdate(BaseModel):
     type: Optional[str] = None
     warm_up_datetime: Optional[datetime] = None
     repeat_step: Optional[int] = None
+    max_videos: Optional[str] = None
 
 
 class WarmupJobResponse(BaseModel):
@@ -1048,10 +1050,11 @@ class WarmupJobResponse(BaseModel):
     account_id: int
     account_name: Optional[str] = None
     account_platform: Optional[str] = None
-    status: str
-    type: str
+    status: str = "pending"
+    type: str = "one-time"
     warm_up_datetime: Optional[datetime] = None
     repeat_step: Optional[int] = None
+    max_videos: str = "50,100"
 
 
 @app.get("/api/warmup_jobs", response_model=list[WarmupJobResponse])
@@ -1081,6 +1084,7 @@ def create_warmup_job(payload: WarmupJobCreate, db: Session = Depends(get_db)):
         type=payload.type,
         warm_up_datetime=payload.warm_up_datetime,
         repeat_step=payload.repeat_step if payload.type == "cron" else None,
+        max_videos=payload.max_videos,
     ))
     db.commit()
     row = db.execute(

@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { updateWarmupJob, deleteWarmupJob } from "@/lib/api";
+import { encodeMaxVideos, decodeMaxVideos } from "@/components/warmup-jobs/WarmupJobFormCard";
+import type { MaxVideosMode } from "@/components/warmup-jobs/WarmupJobFormCard";
 import type { WarmupJob, AccountRecord } from "@/types";
 
 interface Props {
@@ -59,6 +61,11 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
   const [repeatValue, setRepeatValue] = useState(initUnit.value);
   const [repeatUnitIdx, setRepeatUnitIdx] = useState(initUnit.unitIdx);
 
+  const initMv = decodeMaxVideos(job.max_videos ?? "50,100");
+  const [maxVideosMode, setMaxVideosMode] = useState<MaxVideosMode>(initMv.mode);
+  const [maxVideosX, setMaxVideosX] = useState(initMv.x);
+  const [maxVideosY, setMaxVideosY] = useState(initMv.y);
+
   const canEdit = job.status === "pending";
 
   function resetEdit() {
@@ -68,6 +75,10 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
     const u = job.repeat_step ? bestUnit(job.repeat_step) : { value: 1, unitIdx: 0 };
     setRepeatValue(u.value);
     setRepeatUnitIdx(u.unitIdx);
+    const mv = decodeMaxVideos(job.max_videos ?? "50,100");
+    setMaxVideosMode(mv.mode);
+    setMaxVideosX(mv.x);
+    setMaxVideosY(mv.y);
     setEditing(false);
   }
 
@@ -80,6 +91,7 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
         type,
         warm_up_datetime: warmUpDatetime ? new Date(warmUpDatetime).toISOString() : null,
         repeat_step: repeatStep,
+        max_videos: encodeMaxVideos(maxVideosMode, maxVideosX, maxVideosY),
       });
       onUpdated(updated);
       setEditing(false);
@@ -133,6 +145,10 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
                 <Row label="Type" value={job.type} />
                 <Row label="Datetime" value={job.warm_up_datetime ? new Date(job.warm_up_datetime).toLocaleString() : "—"} />
                 {job.type === "cron" && <Row label="Repeat every" value={repeatDisplay} />}
+                <Row label="Max shorts" value={(() => {
+                  const mv = decodeMaxVideos(job.max_videos ?? "50,100");
+                  return mv.mode === "fixed" ? String(mv.x) : `rand(${mv.x}, ${mv.y})`;
+                })()} />
               </div>
 
               {canEdit && (
@@ -207,6 +223,54 @@ export default function WarmupJobCard({ job, accounts, onUpdated, onDeleted }: P
                   </div>
                 </div>
               )}
+
+              {/* Max videos */}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-400">Max shorts per job</label>
+                <div className="flex gap-2 mb-1">
+                  {(["fixed", "rand"] as MaxVideosMode[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMaxVideosMode(m)}
+                      className={`px-3 py-1 text-xs rounded-md border transition-colors ${
+                        maxVideosMode === m
+                          ? "bg-indigo-600 border-indigo-500 text-white"
+                          : "bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+                      }`}
+                    >
+                      {m === "fixed" ? "Fixed" : "Random"}
+                    </button>
+                  ))}
+                </div>
+                {maxVideosMode === "fixed" ? (
+                  <input
+                    type="number"
+                    min={1}
+                    value={maxVideosX}
+                    onChange={(e) => setMaxVideosX(Math.max(1, Number(e.target.value)))}
+                    className="w-24 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={maxVideosX}
+                      onChange={(e) => setMaxVideosX(Math.max(1, Number(e.target.value)))}
+                      className="w-20 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <span className="text-xs text-slate-500">–</span>
+                    <input
+                      type="number"
+                      min={maxVideosX + 1}
+                      value={maxVideosY}
+                      onChange={(e) => setMaxVideosY(Math.max(maxVideosX + 1, Number(e.target.value)))}
+                      className="w-20 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
+              </div>
 
               <div className="flex gap-2 pt-1">
                 <button

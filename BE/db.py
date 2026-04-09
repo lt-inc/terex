@@ -106,6 +106,7 @@ warmup_jobs_table = Table(
     Column("type", String, nullable=False, server_default="one-time"),
     Column("warm_up_datetime", TIMESTAMP(timezone=True), nullable=True),
     Column("repeat_step", Integer, nullable=True),
+    Column("max_videos", String, nullable=False, server_default="50,100"),
 )
 
 
