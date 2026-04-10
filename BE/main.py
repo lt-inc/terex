@@ -986,6 +986,7 @@ async def create_account(
     db: Session = Depends(get_db),
 ):
     # Priority: uploaded file > pre-captured via noVNC
+    platform = platform.lower()
     file_name = captured_file_name or None
     if auth_file and auth_file.filename and storage.is_available():
         content = await auth_file.read()
