@@ -1,4 +1,12 @@
-import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord, WarmupJob } from "@/types";
+import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord, WarmupJob, OutData } from "@/types";
+
+/** Convert UTC ISO string to UTC+7 formatted string (DD.MM.YYYY HH:MM) */
+export function toUTC7(iso: string): string {
+  const date = new Date(iso);
+  const shifted = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(shifted.getUTCDate())}.${pad(shifted.getUTCMonth() + 1)}.${shifted.getUTCFullYear()} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`;
+}
 
 const BASE_URL = "/api";
 
@@ -75,6 +83,16 @@ export async function updateAccount(id: number, data: Partial<AccountRecord>): P
 }
 export async function deleteAccount(id: number): Promise<void> {
   await fetch(`${BASE_URL}/accounts/${id}`, { method: "DELETE" });
+}
+export async function fetchAccountScheduled(id: number): Promise<OutData[]> {
+  const res = await fetch(`${BASE_URL}/accounts/${id}/scheduled`);
+  if (!res.ok) throw new Error("Failed to fetch account schedule");
+  return res.json();
+}
+export async function fetchAccountPublished(id: number): Promise<OutData[]> {
+  const res = await fetch(`${BASE_URL}/accounts/${id}/published`);
+  if (!res.ok) throw new Error("Failed to fetch published clips");
+  return res.json();
 }
 
 // ── Banners ───────────────────────────────────────────────────────────────────

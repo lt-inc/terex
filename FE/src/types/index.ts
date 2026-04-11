@@ -76,6 +76,8 @@ export interface AssetRecord {
 
 export interface OutData {
   id: number;
+  job_id: string | null;
+  sub_job_id: string | null;
   video_name: string | null;
   name: string | null;
   description: string | null;

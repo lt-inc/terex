@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { captureAuthStart, captureAuthFinish } from "@/lib/api";
-import type { AccountRecord } from "@/types";
+import { useState, useCallback } from "react";
+import { captureAuthStart, captureAuthFinish, fetchAccountScheduled, fetchAccountPublished, toUTC7 } from "@/lib/api";
+import type { AccountRecord, OutData } from "@/types";
 
 interface AccountRecordCardProps {
   record: AccountRecord;
@@ -23,9 +23,46 @@ const PLATFORM_COLORS: Record<string, string> = {
   instagram: "bg-purple-900/40 text-purple-300",
 };
 
+const STATUS_COLORS: Record<string, string> = {
+  done:       "text-emerald-400",
+  published:  "text-emerald-400",
+  pending:    "text-yellow-400",
+  processing: "text-blue-400",
+  failed:     "text-red-400",
+};
+
 const NOVNC_URL = "/novnc/vnc.html?path=novnc";
 
 type CaptureState = "idle" | "starting" | "active" | "finishing" | "done" | "error";
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={`w-4 h-4 transition-transform duration-200 shrink-0 ${open ? "rotate-90" : ""}`}
+      fill="none" stroke="currentColor" viewBox="0 0 24 24"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date" | "published_at" }) {
+  const raw = clip[dateField];
+  const dateStr = raw ? toUTC7(raw) : "—";
+  const statusColor = STATUS_COLORS[clip.status ?? ""] ?? "text-slate-400";
+  return (
+    <div className="flex items-start gap-2 py-1.5 border-b border-slate-700/50 last:border-0 text-xs">
+      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+        <span className="text-slate-300 font-mono truncate">{clip.video_name ?? clip.name ?? `#${clip.id}`}</span>
+        {clip.job_id && <span className="text-slate-500">job: {clip.job_id}</span>}
+      </div>
+      <div className="flex flex-col items-end gap-0.5 shrink-0">
+        <span className="text-slate-400">{dateStr} <span className="text-slate-600">UTC+7</span></span>
+        <span className={statusColor}>{clip.status ?? "—"}</span>
+      </div>
+    </div>
+  );
+}
 
 export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave, onDelete }: AccountRecordCardProps) {
   const [editing, setEditing] = useState(false);
@@ -37,6 +74,58 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
 
   const [captureState, setCaptureState] = useState<CaptureState>("idle");
   const [captureError, setCaptureError] = useState<string | null>(null);
+
+  // Expand panel
+  const [expanded, setExpanded] = useState(false);
+  const [scheduled, setScheduled] = useState<OutData[] | null>(null);
+  const [scheduledLoading, setScheduledLoading] = useState(false);
+  const [scheduledError, setScheduledError] = useState<string | null>(null);
+
+  const [published, setPublished] = useState<OutData[] | null>(null);
+  const [publishedLoading, setPublishedLoading] = useState(false);
+  const [publishedError, setPublishedError] = useState<string | null>(null);
+  const [showPublished, setShowPublished] = useState(false);
+
+  const loadScheduled = useCallback(async () => {
+    setScheduledLoading(true);
+    setScheduledError(null);
+    try {
+      setScheduled(await fetchAccountScheduled(record.id));
+    } catch (e) {
+      setScheduledError(String(e));
+    } finally {
+      setScheduledLoading(false);
+    }
+  }, [record.id]);
+
+  const loadPublished = useCallback(async () => {
+    setPublishedLoading(true);
+    setPublishedError(null);
+    try {
+      setPublished(await fetchAccountPublished(record.id));
+    } catch (e) {
+      setPublishedError(String(e));
+    } finally {
+      setPublishedLoading(false);
+    }
+  }, [record.id]);
+
+  function handleToggleExpand() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && scheduled === null) {
+      loadScheduled();
+    }
+  }
+
+  function handleShowPublished() {
+    if (!showPublished) {
+      setShowPublished(true);
+      if (published === null) loadPublished();
+    } else {
+      setShowPublished(false);
+    }
+  }
 
   function reset() {
     setPlatform(record.platform); setName(record.name);
@@ -90,97 +179,149 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
   }
 
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col gap-3">
-      {!editing ? (
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <span className={`text-xs font-medium px-2 py-0.5 rounded ${PLATFORM_COLORS[record.platform] ?? "bg-slate-700 text-slate-300"}`}>
-                {record.platform}
-              </span>
-              <span className="text-sm font-medium text-slate-100">{record.name}</span>
-            </div>
-            {record.url && <a href={record.url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline truncate max-w-sm">{record.url}</a>}
-            {record.note && <span className="text-xs text-slate-400">{record.note}</span>}
-            {record.file_name && <span className="text-xs text-slate-500 font-mono">Auth: {record.file_name}</span>}
-
-            {/* Capture Auth section (view mode, YouTube only) */}
-            {isYouTube && (
-              <div className="mt-1 flex flex-col gap-1">
-                {captureState === "idle" || captureState === "error" ? (
-                  <button
-                    type="button"
-                    onClick={handleStartCapture}
-                    className="flex items-center gap-1.5 text-xs font-medium text-red-400 hover:text-red-300 transition-colors w-fit"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                    </svg>
-                    {record.file_name ? "Re-capture Auth" : "Capture Auth"}
-                  </button>
-                ) : captureState === "starting" ? (
-                  <span className="text-xs text-slate-400">Starting browser…</span>
-                ) : captureState === "active" ? (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    <span className="text-xs text-green-400">Browser active —</span>
-                    <a href={NOVNC_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline">Open noVNC</a>
-                    <button
-                      type="button"
-                      onClick={handleFinishCapture}
-                      className="text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded-md transition-colors"
-                    >
-                      Done — capture
-                    </button>
-                  </div>
-                ) : captureState === "finishing" ? (
-                  <span className="text-xs text-slate-400">Capturing…</span>
-                ) : captureState === "done" ? (
-                  <span className="text-xs text-emerald-400">✓ Auth updated in MinIO</span>
-                ) : null}
-
-                {captureError && <span className="text-xs text-red-400">{captureError}</span>}
+    <div className="bg-slate-800 border border-slate-700 rounded-xl flex flex-col">
+      {/* Card header */}
+      <div className="p-4 flex flex-col gap-3">
+        {!editing ? (
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${PLATFORM_COLORS[record.platform] ?? "bg-slate-700 text-slate-300"}`}>
+                  {record.platform}
+                </span>
+                <span className="text-sm font-medium text-slate-100 truncate">{record.name}</span>
               </div>
+              {record.url && <a href={record.url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline truncate max-w-sm">{record.url}</a>}
+              {record.note && <span className="text-xs text-slate-400">{record.note}</span>}
+              {record.file_name && <span className="text-xs text-slate-500 font-mono">Auth: {record.file_name}</span>}
+
+              {/* Capture Auth (YouTube only) */}
+              {isYouTube && (
+                <div className="mt-1 flex flex-col gap-1">
+                  {captureState === "idle" || captureState === "error" ? (
+                    <button type="button" onClick={handleStartCapture}
+                      className="flex items-center gap-1.5 text-xs font-medium text-red-400 hover:text-red-300 transition-colors w-fit">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      {record.file_name ? "Re-capture Auth" : "Capture Auth"}
+                    </button>
+                  ) : captureState === "starting" ? (
+                    <span className="text-xs text-slate-400">Starting browser…</span>
+                  ) : captureState === "active" ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                      <span className="text-xs text-green-400">Browser active —</span>
+                      <a href={NOVNC_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline">Open noVNC</a>
+                      <button type="button" onClick={handleFinishCapture}
+                        className="text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded-md transition-colors">
+                        Done — capture
+                      </button>
+                    </div>
+                  ) : captureState === "finishing" ? (
+                    <span className="text-xs text-slate-400">Capturing…</span>
+                  ) : captureState === "done" ? (
+                    <span className="text-xs text-emerald-400">✓ Auth updated in MinIO</span>
+                  ) : null}
+                  {captureError && <span className="text-xs text-red-400">{captureError}</span>}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => setEditing(true)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Edit</button>
+              <button onClick={handleDelete} className="text-xs text-red-500 hover:text-red-400 transition-colors">Delete</button>
+              <button onClick={handleToggleExpand} className="text-slate-400 hover:text-slate-200 transition-colors" title="Show schedule">
+                <ChevronIcon open={expanded} />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-400">Platform</label>
+                <select value={platform} onChange={(e) => setPlatform(e.target.value)}
+                  className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  {PLATFORMS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-slate-400">Name</label>
+                <input value={name} onChange={(e) => setName(e.target.value)}
+                  className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-400">URL</label>
+              <input value={url} onChange={(e) => setUrl(e.target.value)}
+                className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-400">Note</label>
+              <input value={note} onChange={(e) => setNote(e.target.value)}
+                className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={handleSave} disabled={saving}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors">
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button onClick={reset} className="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2">Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Expanded panel */}
+      {expanded && (
+        <div className="border-t border-slate-700 px-4 py-3 flex flex-col gap-3">
+          {/* Scheduled clips */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Расписание заливки</span>
+              <button onClick={loadScheduled} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">↻ обновить</button>
+            </div>
+            {scheduledLoading ? (
+              <span className="text-xs text-slate-500">Загрузка…</span>
+            ) : scheduledError ? (
+              <span className="text-xs text-red-400">{scheduledError}</span>
+            ) : scheduled && scheduled.length > 0 ? (
+              <div className="flex flex-col">
+                {scheduled.map((clip) => (
+                  <ClipRow key={clip.id} clip={clip} dateField="publish_date" />
+                ))}
+              </div>
+            ) : (
+              <span className="text-xs text-slate-500">Нет запланированных клипов</span>
             )}
           </div>
 
-          <div className="flex gap-2 shrink-0">
-            <button onClick={() => setEditing(true)} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">Edit</button>
-            <button onClick={handleDelete} className="text-xs text-red-500 hover:text-red-400 transition-colors">Delete</button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <div className="grid grid-cols-2 gap-2">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-400">Platform</label>
-              <select value={platform} onChange={(e) => setPlatform(e.target.value)}
-                className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                {PLATFORMS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-400">Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)}
-                className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-            </div>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-400">URL</label>
-            <input value={url} onChange={(e) => setUrl(e.target.value)}
-              className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-400">Note</label>
-            <input value={note} onChange={(e) => setNote(e.target.value)}
-              className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={handleSave} disabled={saving}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors">
-              {saving ? "Saving…" : "Save"}
+          {/* Published clips toggle */}
+          <div>
+            <button onClick={handleShowPublished}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors">
+              <ChevronIcon open={showPublished} />
+              Уже залитые клипы{published !== null ? ` (${published.length})` : ""}
             </button>
-            <button onClick={reset} className="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2">Cancel</button>
+
+            {showPublished && (
+              <div className="mt-2">
+                {publishedLoading ? (
+                  <span className="text-xs text-slate-500">Загрузка…</span>
+                ) : publishedError ? (
+                  <span className="text-xs text-red-400">{publishedError}</span>
+                ) : published && published.length > 0 ? (
+                  <div className="flex flex-col max-h-60 overflow-y-auto">
+                    {published.map((clip) => (
+                      <ClipRow key={clip.id} clip={clip} dateField="published_at" />
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-xs text-slate-500">Нет загруженных клипов</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

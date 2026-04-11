@@ -97,6 +97,8 @@ class AssetRecordUpdate(BaseModel):
 
 class OutRecord(BaseModel):
     id: int
+    job_id: Optional[str] = None
+    sub_job_id: Optional[str] = None
     video_name: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
@@ -443,6 +445,30 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     db.execute(delete(accounts_table).where(accounts_table.c.id == account_id))
     db.commit()
     return {"status": "deleted"}
+
+@app.get("/api/accounts/{account_id}/scheduled", response_model=list[OutRecord])
+def get_account_scheduled(account_id: int, db: Session = Depends(get_db)):
+    """Clips queued for this account (published_at IS NULL), sorted by publish_date ASC."""
+    if db is None:
+        return []
+    rows = db.execute(
+        select(out_table)
+        .where(out_table.c.account_id == account_id, out_table.c.published_at.is_(None))
+        .order_by(out_table.c.publish_date.asc().nullslast())
+    ).fetchall()
+    return [OutRecord(**dict(r._mapping)) for r in rows]
+
+@app.get("/api/accounts/{account_id}/published", response_model=list[OutRecord])
+def get_account_published(account_id: int, db: Session = Depends(get_db)):
+    """Clips already published for this account (published_at IS NOT NULL), sorted by published_at DESC."""
+    if db is None:
+        return []
+    rows = db.execute(
+        select(out_table)
+        .where(out_table.c.account_id == account_id, out_table.c.published_at.is_not(None))
+        .order_by(out_table.c.published_at.desc())
+    ).fetchall()
+    return [OutRecord(**dict(r._mapping)) for r in rows]
 
 
 # ── Banners management ────────────────────────────────────────────────────────
