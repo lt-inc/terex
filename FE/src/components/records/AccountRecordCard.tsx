@@ -47,6 +47,45 @@ function ChevronIcon({ open }: { open: boolean }) {
   );
 }
 
+function groupByJob(clips: OutData[]): [string, OutData[]][] {
+  const map = new Map<string, OutData[]>();
+  for (const clip of clips) {
+    const key = clip.job_id ?? "unknown";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(clip);
+  }
+  return Array.from(map.entries());
+}
+
+function JobGroup({ jobId, clips, dateField }: { jobId: string; clips: OutData[]; dateField: "publish_date" | "published_at" }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="border border-slate-700 rounded-lg overflow-hidden mb-2 last:mb-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 bg-slate-750 hover:bg-slate-700 transition-colors text-left"
+      >
+        <ChevronIcon open={open} />
+        <Link
+          href={`/admin/jobs#${jobId}`}
+          onClick={(e) => e.stopPropagation()}
+          className="text-sm font-mono text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+        >
+          {jobId}
+        </Link>
+        <span className="text-xs text-slate-500 ml-auto">{clips.length} clips</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-1">
+          {clips.map((clip) => (
+            <ClipRow key={clip.id} clip={clip} dateField={dateField} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date" | "published_at" }) {
   const raw = clip[dateField];
   const dateStr = raw ? toUTC7(raw) : "—";
@@ -75,7 +114,14 @@ function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date"
           )}
         </div>
       </div>
-      <span className="text-sm text-slate-400 whitespace-nowrap">{dateStr} <span className="text-xs text-slate-600">UTC+7</span></span>
+      <div className="flex flex-col items-end gap-0.5">
+        <span className="text-sm text-slate-400 whitespace-nowrap">{dateStr} <span className="text-xs text-slate-600">UTC+7</span></span>
+        {clip.published_at && dateField !== "published_at" && (
+          <span className="text-xs text-emerald-400 whitespace-nowrap">
+            published: {toUTC7(clip.published_at)} <span className="text-emerald-700">UTC+7</span>
+          </span>
+        )}
+      </div>
       <span className={`text-sm font-medium whitespace-nowrap ${statusColor}`}>{clip.status ?? "—"}</span>
     </div>
   );
@@ -305,8 +351,8 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
               <span className="text-sm text-red-400">{scheduledError}</span>
             ) : scheduled && scheduled.length > 0 ? (
               <div className="flex flex-col">
-                {scheduled.map((clip) => (
-                  <ClipRow key={clip.id} clip={clip} dateField="publish_date" />
+                {groupByJob(scheduled).map(([jobId, clips]) => (
+                  <JobGroup key={jobId} jobId={jobId} clips={clips} dateField="publish_date" />
                 ))}
               </div>
             ) : (
@@ -329,9 +375,9 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
                 ) : publishedError ? (
                   <span className="text-sm text-red-400">{publishedError}</span>
                 ) : published && published.length > 0 ? (
-                  <div className="flex flex-col max-h-72 overflow-y-auto">
-                    {published.map((clip) => (
-                      <ClipRow key={clip.id} clip={clip} dateField="published_at" />
+                  <div className="flex flex-col max-h-96 overflow-y-auto">
+                    {groupByJob(published).map(([jobId, clips]) => (
+                      <JobGroup key={jobId} jobId={jobId} clips={clips} dateField="published_at" />
                     ))}
                   </div>
                 ) : (

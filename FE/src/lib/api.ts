@@ -84,6 +84,11 @@ export async function updateAccount(id: number, data: Partial<AccountRecord>): P
 export async function deleteAccount(id: number): Promise<void> {
   await fetch(`${BASE_URL}/accounts/${id}`, { method: "DELETE" });
 }
+export async function fetchAccountClips(id: number): Promise<OutData[]> {
+  const res = await fetch(`${BASE_URL}/accounts/${id}/clips`);
+  if (!res.ok) throw new Error("Failed to fetch clips");
+  return res.json();
+}
 export async function fetchAccountScheduled(id: number): Promise<OutData[]> {
   const res = await fetch(`${BASE_URL}/accounts/${id}/scheduled`);
   if (!res.ok) throw new Error("Failed to fetch account schedule");

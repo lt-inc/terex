@@ -446,6 +446,18 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "deleted"}
 
+@app.get("/api/accounts/{account_id}/clips", response_model=list[OutRecord])
+def get_account_clips(account_id: int, db: Session = Depends(get_db)):
+    """All clips for this account, sorted by job_id then id."""
+    if db is None:
+        return []
+    rows = db.execute(
+        select(out_table)
+        .where(out_table.c.account_id == account_id)
+        .order_by(out_table.c.job_id, out_table.c.id)
+    ).fetchall()
+    return [OutRecord(**dict(r._mapping)) for r in rows]
+
 @app.get("/api/accounts/{account_id}/scheduled", response_model=list[OutRecord])
 def get_account_scheduled(account_id: int, db: Session = Depends(get_db)):
     """Clips queued for this account (published_at IS NULL), sorted by publish_date ASC."""
