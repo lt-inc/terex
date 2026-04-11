@@ -11,6 +11,7 @@ interface SubJobCardProps {
   accounts: AccountsResponse;
   bannerOptions: string[];
   locked?: boolean;
+  defaultOpen?: boolean;
   onUpdated: (updated: SubJobData) => void;
   onDeleted: () => void;
 }
@@ -45,8 +46,8 @@ const OUT_STATUS_COLORS: Record<string, string> = {
   waiting_for_publish: "bg-indigo-900/40 text-indigo-300",
 };
 
-export default function SubJobCard({ subJob, accounts, bannerOptions, locked = false, onUpdated, onDeleted }: SubJobCardProps) {
-  const [open, setOpen] = useState(false);
+export default function SubJobCard({ subJob, accounts, bannerOptions, locked = false, defaultOpen = false, onUpdated, onDeleted }: SubJobCardProps) {
+  const [open, setOpen] = useState(defaultOpen);
   const [clipsOpen, setClipsOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -89,7 +90,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
   const allAccounts = [...accounts.youtube, ...accounts.tiktok, ...accounts.instagram];
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
+    <div id={subJob.sub_job_id} className="bg-slate-900 border border-slate-700 rounded-lg overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-2.5">
         <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 flex-1 min-w-0 text-left">

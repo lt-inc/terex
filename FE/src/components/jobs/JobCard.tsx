@@ -12,6 +12,7 @@ interface JobCardProps {
   bannerOptions: string[];
   backgroundOptions: string[];
   selected: boolean;
+  defaultOpenSubJobId?: string;
   onToggleSelect: () => void;
   onUpdated: (updated: JobData) => void;
   onDeleted: () => void;
@@ -28,8 +29,10 @@ const STATUS_COLORS: Record<string, string> = {
 
 const LOCKED_STATUSES = new Set(["ready", "running", "done", "failed"]);
 
-export default function JobCard({ job, accounts, bannerOptions, backgroundOptions, selected, onToggleSelect, onUpdated, onDeleted }: JobCardProps) {
-  const [open, setOpen] = useState(false);
+export default function JobCard({ job, accounts, bannerOptions, backgroundOptions, selected, defaultOpenSubJobId, onToggleSelect, onUpdated, onDeleted }: JobCardProps) {
+  const [open, setOpen] = useState(
+    () => defaultOpenSubJobId != null && job.sub_jobs.some((s) => s.sub_job_id === defaultOpenSubJobId)
+  );
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -239,6 +242,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                   accounts={accounts}
                   bannerOptions={bannerOptions}
                   locked={!canStart}
+                  defaultOpen={sj.sub_job_id === defaultOpenSubJobId}
                   onUpdated={handleSubJobUpdated}
                   onDeleted={() => handleSubJobDeleted(sj.sub_job_id)}
                 />

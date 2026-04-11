@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import JobCard from "@/components/jobs/JobCard";
 import { fetchJobs, fetchAccounts, fetchBanners, fetchBackgrounds, updateJob } from "@/lib/api";
 import type { JobData, AccountsResponse } from "@/types";
@@ -14,6 +14,24 @@ export default function JobsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [archiving, setArchiving] = useState(false);
+  const [hashId, setHashId] = useState("");
+  const scrolledRef = useRef(false);
+
+  // Read hash once on mount (window only available client-side)
+  useEffect(() => {
+    const h = window.location.hash.slice(1);
+    if (h) setHashId(h);
+  }, []);
+
+  // After data loads, scroll to and highlight the target element
+  useEffect(() => {
+    if (loading || !hashId || scrolledRef.current) return;
+    const el = document.getElementById(hashId);
+    if (el) {
+      scrolledRef.current = true;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [loading, hashId]);
 
   const load = useCallback(async (archived = false) => {
     setLoading(true);
@@ -141,6 +159,7 @@ export default function JobsPage() {
             bannerOptions={bannerOptions}
             backgroundOptions={backgroundOptions}
             selected={selectedIds.has(job.job_id)}
+            defaultOpenSubJobId={hashId || undefined}
             onToggleSelect={() => toggleSelect(job.job_id)}
             onUpdated={handleUpdated}
             onDeleted={() => handleDeleted(job.job_id)}

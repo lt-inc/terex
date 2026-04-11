@@ -67,7 +67,7 @@ function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date"
           )}
           {clip.sub_job_id && (
             <Link
-              href={`/admin/jobs#${clip.job_id}`}
+              href={`/admin/jobs#${clip.sub_job_id}`}
               className="text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
             >
               sub job: {clip.sub_job_id}
