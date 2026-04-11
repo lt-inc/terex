@@ -58,7 +58,7 @@ function groupByJob(clips: OutData[]): [string, OutData[]][] {
 }
 
 function JobGroup({ jobId, clips, dateField }: { jobId: string; clips: OutData[]; dateField: "publish_date" | "published_at" }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   return (
     <div className="border border-slate-700 rounded-lg overflow-hidden mb-2 last:mb-0">
       <button
@@ -116,9 +116,14 @@ function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date"
       </div>
       <div className="flex flex-col items-end gap-0.5">
         <span className="text-sm text-slate-400 whitespace-nowrap">{dateStr} <span className="text-xs text-slate-600">UTC+7</span></span>
-        {clip.published_at && dateField !== "published_at" && (
+        {dateField === "publish_date" && clip.published_at && (
           <span className="text-xs text-emerald-400 whitespace-nowrap">
             published: {toUTC7(clip.published_at)} <span className="text-emerald-700">UTC+7</span>
+          </span>
+        )}
+        {dateField === "published_at" && clip.publish_date && (
+          <span className="text-xs text-slate-500 whitespace-nowrap">
+            scheduled: {toUTC7(clip.publish_date)} <span className="text-slate-700">UTC+7</span>
           </span>
         )}
       </div>
