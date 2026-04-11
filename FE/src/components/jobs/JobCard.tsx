@@ -106,7 +106,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
   }
 
   return (
-    <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
+    <div id={job.job_id} className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-3">
         <input

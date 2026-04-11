@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import Link from "next/link";
 import { captureAuthStart, captureAuthFinish, fetchAccountScheduled, fetchAccountPublished, toUTC7 } from "@/lib/api";
 import type { AccountRecord, OutData } from "@/types";
 
@@ -51,10 +52,28 @@ function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date"
   const dateStr = raw ? toUTC7(raw) : "—";
   const statusColor = STATUS_COLORS[clip.status ?? ""] ?? "text-slate-400";
   return (
-    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-6 gap-y-0.5 py-2 border-b border-slate-700/50 last:border-0">
+    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-6 py-2 border-b border-slate-700/50 last:border-0">
       <div className="flex flex-col gap-0.5 min-w-0">
-        <span className="text-sm text-slate-200 font-mono truncate">{clip.video_name ?? clip.name ?? `#${clip.id}`}</span>
-        {clip.job_id && <span className="text-xs text-slate-500">job: {clip.job_id}</span>}
+        <span className="text-sm text-slate-200 truncate">{clip.name ?? clip.video_name ?? "—"}</span>
+        <div className="flex items-center gap-3 text-xs flex-wrap">
+          <span className="text-slate-500">DB ID: {clip.id}</span>
+          {clip.job_id && (
+            <Link
+              href={`/admin/jobs#${clip.job_id}`}
+              className="text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+            >
+              job: {clip.job_id}
+            </Link>
+          )}
+          {clip.sub_job_id && (
+            <Link
+              href={`/admin/jobs#${clip.job_id}`}
+              className="text-indigo-400 hover:text-indigo-300 hover:underline transition-colors"
+            >
+              sub job: {clip.sub_job_id}
+            </Link>
+          )}
+        </div>
       </div>
       <span className="text-sm text-slate-400 whitespace-nowrap">{dateStr} <span className="text-xs text-slate-600">UTC+7</span></span>
       <span className={`text-sm font-medium whitespace-nowrap ${statusColor}`}>{clip.status ?? "—"}</span>
