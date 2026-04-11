@@ -380,7 +380,7 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
                 ) : publishedError ? (
                   <span className="text-sm text-red-400">{publishedError}</span>
                 ) : published && published.length > 0 ? (
-                  <div className="flex flex-col max-h-96 overflow-y-auto">
+                  <div className="max-h-96 overflow-y-auto min-h-0">
                     {groupByJob(published).map(([jobId, clips]) => (
                       <JobGroup key={jobId} jobId={jobId} clips={clips} dateField="published_at" />
                     ))}
