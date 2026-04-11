@@ -51,15 +51,13 @@ function ClipRow({ clip, dateField }: { clip: OutData; dateField: "publish_date"
   const dateStr = raw ? toUTC7(raw) : "—";
   const statusColor = STATUS_COLORS[clip.status ?? ""] ?? "text-slate-400";
   return (
-    <div className="flex items-start gap-2 py-1.5 border-b border-slate-700/50 last:border-0 text-xs">
-      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-        <span className="text-slate-300 font-mono truncate">{clip.video_name ?? clip.name ?? `#${clip.id}`}</span>
-        {clip.job_id && <span className="text-slate-500">job: {clip.job_id}</span>}
+    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-x-6 gap-y-0.5 py-2 border-b border-slate-700/50 last:border-0">
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <span className="text-sm text-slate-200 font-mono truncate">{clip.video_name ?? clip.name ?? `#${clip.id}`}</span>
+        {clip.job_id && <span className="text-xs text-slate-500">job: {clip.job_id}</span>}
       </div>
-      <div className="flex flex-col items-end gap-0.5 shrink-0">
-        <span className="text-slate-400">{dateStr} <span className="text-slate-600">UTC+7</span></span>
-        <span className={statusColor}>{clip.status ?? "—"}</span>
-      </div>
+      <span className="text-sm text-slate-400 whitespace-nowrap">{dateStr} <span className="text-xs text-slate-600">UTC+7</span></span>
+      <span className={`text-sm font-medium whitespace-nowrap ${statusColor}`}>{clip.status ?? "—"}</span>
     </div>
   );
 }
@@ -278,14 +276,14 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
         <div className="border-t border-slate-700 px-4 py-3 flex flex-col gap-3">
           {/* Scheduled clips */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Расписание заливки</span>
-              <button onClick={loadScheduled} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">↻ обновить</button>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold text-slate-300 uppercase tracking-wide">Upload Schedule</span>
+              <button onClick={loadScheduled} className="text-sm text-slate-500 hover:text-slate-300 transition-colors">↻ refresh</button>
             </div>
             {scheduledLoading ? (
-              <span className="text-xs text-slate-500">Загрузка…</span>
+              <span className="text-sm text-slate-500">Loading…</span>
             ) : scheduledError ? (
-              <span className="text-xs text-red-400">{scheduledError}</span>
+              <span className="text-sm text-red-400">{scheduledError}</span>
             ) : scheduled && scheduled.length > 0 ? (
               <div className="flex flex-col">
                 {scheduled.map((clip) => (
@@ -293,32 +291,32 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
                 ))}
               </div>
             ) : (
-              <span className="text-xs text-slate-500">Нет запланированных клипов</span>
+              <span className="text-sm text-slate-500">No scheduled clips</span>
             )}
           </div>
 
           {/* Published clips toggle */}
           <div>
             <button onClick={handleShowPublished}
-              className="flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors">
+              className="flex items-center gap-1.5 text-sm font-medium text-slate-400 hover:text-slate-200 transition-colors">
               <ChevronIcon open={showPublished} />
-              Уже залитые клипы{published !== null ? ` (${published.length})` : ""}
+              Published clips{published !== null ? ` (${published.length})` : ""}
             </button>
 
             {showPublished && (
-              <div className="mt-2">
+              <div className="mt-3">
                 {publishedLoading ? (
-                  <span className="text-xs text-slate-500">Загрузка…</span>
+                  <span className="text-sm text-slate-500">Loading…</span>
                 ) : publishedError ? (
-                  <span className="text-xs text-red-400">{publishedError}</span>
+                  <span className="text-sm text-red-400">{publishedError}</span>
                 ) : published && published.length > 0 ? (
-                  <div className="flex flex-col max-h-60 overflow-y-auto">
+                  <div className="flex flex-col max-h-72 overflow-y-auto">
                     {published.map((clip) => (
                       <ClipRow key={clip.id} clip={clip} dateField="published_at" />
                     ))}
                   </div>
                 ) : (
-                  <span className="text-xs text-slate-500">Нет загруженных клипов</span>
+                  <span className="text-sm text-slate-500">No published clips</span>
                 )}
               </div>
             )}
