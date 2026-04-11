@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import MultiSelect from "@/components/ui/MultiSelect";
-import { updateSubJob, deleteSubJob } from "@/lib/api";
-import { localPartsToISO } from "@/lib/datetime";
+import { updateSubJob, deleteSubJob, toUTC7 } from "@/lib/api";
+import { isoToUTC7Parts, utc7PartsToISO } from "@/lib/datetime";
 import type { SubJobData, AccountsResponse, OutData } from "@/types";
 
 interface SubJobCardProps {
@@ -54,21 +54,23 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
 
   const [accountNames, setAccountNames] = useState<string[]>(subJob.account_names);
   const [bannerName, setBannerName] = useState(subJob.banner_name ?? "");
-  const [pubDate, setPubDate] = useState(subJob.publish_datetime?.slice(0, 10) ?? "");
-  const [pubTime, setPubTime] = useState(subJob.publish_datetime?.slice(11, 16) ?? "");
+  const initParts = subJob.publish_datetime ? isoToUTC7Parts(subJob.publish_datetime) : null;
+  const [pubDate, setPubDate] = useState(initParts?.date ?? "");
+  const [pubTime, setPubTime] = useState(initParts?.time ?? "");
 
   function resetEdit() {
     setAccountNames(subJob.account_names);
     setBannerName(subJob.banner_name ?? "");
-    setPubDate(subJob.publish_datetime?.slice(0, 10) ?? "");
-    setPubTime(subJob.publish_datetime?.slice(11, 16) ?? "");
+    const parts = subJob.publish_datetime ? isoToUTC7Parts(subJob.publish_datetime) : null;
+    setPubDate(parts?.date ?? "");
+    setPubTime(parts?.time ?? "");
     setEditing(false);
   }
 
   async function handleSave() {
     setSaving(true);
     try {
-      const publish_datetime = pubDate && pubTime ? localPartsToISO(pubDate, pubTime) : null;
+      const publish_datetime = pubDate && pubTime ? utc7PartsToISO(pubDate, pubTime) : null;
       const updated = await updateSubJob(subJob.sub_job_id, {
         account_names: accountNames,
         banner_name: bannerName || null,
@@ -106,7 +108,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
           )}
           {subJob.publish_datetime && (
             <span className="text-xs text-slate-500 ml-auto shrink-0">
-              {new Date(subJob.publish_datetime).toLocaleString()}
+              {toUTC7(subJob.publish_datetime)} UTC+7
             </span>
           )}
         </button>
@@ -122,7 +124,7 @@ export default function SubJobCard({ subJob, accounts, bannerOptions, locked = f
                 <Row label="Status" value={subJob.status || "—"} />
                 <Row label="Accounts" value={subJob.account_names.join(", ") || "—"} />
                 <Row label="Banner" value={subJob.banner_name ?? "—"} />
-                <Row label="Publish" value={subJob.publish_datetime ? new Date(subJob.publish_datetime).toLocaleString() : "—"} />
+                <Row label="Publish" value={subJob.publish_datetime ? toUTC7(subJob.publish_datetime) + " UTC+7" : "—"} />
                 {subJob.fail_place && <Row label="Fail place" value={subJob.fail_place} />}
               </div>
               {!locked && (
@@ -221,12 +223,12 @@ function OutRow({ out }: { out: OutData }) {
       </span>
       {out.published_at && (
         <span className="text-slate-500 shrink-0">
-          {new Date(out.published_at).toLocaleString()}
+          {toUTC7(out.published_at)} UTC+7
         </span>
       )}
       {!out.published_at && out.publish_date && (
         <span className="text-slate-500 shrink-0">
-          sched: {new Date(out.publish_date).toLocaleString()}
+          sched: {toUTC7(out.publish_date)} UTC+7
         </span>
       )}
     </div>

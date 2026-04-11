@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { updateWarmupJob, deleteWarmupJob } from "@/lib/api";
+import { updateWarmupJob, deleteWarmupJob, toUTC7 } from "@/lib/api";
 import { localInputToISO } from "@/lib/datetime";
 import { encodeMaxVideos, decodeMaxVideos } from "@/components/warmup-jobs/WarmupJobFormCard";
 import type { MaxVideosMode } from "@/components/warmup-jobs/WarmupJobFormCard";
@@ -156,7 +156,7 @@ export default function WarmupJobCard({ job, accounts, selected, onToggleSelect,
                 <Row label="Account" value={`[${job.account_platform ?? "?"}] ${job.account_name ?? job.account_id}`} />
                 <Row label="Status" value={job.status} />
                 <Row label="Type" value={job.type} />
-                <Row label="Datetime" value={job.warm_up_datetime ? new Date(job.warm_up_datetime).toLocaleString() : "—"} />
+                <Row label="Datetime" value={job.warm_up_datetime ? toUTC7(job.warm_up_datetime) + " UTC+7" : "—"} />
                 {job.type === "cron" && <Row label="Repeat every" value={repeatDisplay} />}
                 <Row label="Max shorts" value={(() => {
                   const mv = decodeMaxVideos(job.max_videos ?? "50,100");

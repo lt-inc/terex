@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toUTC7 } from "@/lib/api";
 import Toggle from "@/components/ui/Toggle";
 import SubJobCard from "@/components/jobs/SubJobCard";
 import { updateJob, deleteJob } from "@/lib/api";
@@ -163,8 +164,8 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                 })() : <span className="text-slate-200">—</span>}
                 <Row label="Background" value={job.background_name ?? "—"} />
                 <Row label="Min clip duration" value={`${job.min_video_duration ?? 60}s`} />
-                <Row label="Created" value={job.create_datetime ? new Date(job.create_datetime).toLocaleString() : "—"} />
-                <Row label="Updated" value={job.last_change_datetime ? new Date(job.last_change_datetime).toLocaleString() : "—"} />
+                <Row label="Created" value={job.create_datetime ? toUTC7(job.create_datetime) + " UTC+7" : "—"} />
+                <Row label="Updated" value={job.last_change_datetime ? toUTC7(job.last_change_datetime) + " UTC+7" : "—"} />
               </div>
               <div className="flex flex-wrap gap-3 text-sm">
                 {([
