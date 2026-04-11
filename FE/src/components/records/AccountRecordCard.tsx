@@ -219,6 +219,7 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
   }
 
   const isYouTube = record.platform === "youtube";
+  const isTikTok = record.platform === "tiktok";
 
   async function handleStartCapture() {
     setCaptureState("starting");
@@ -263,12 +264,12 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
               {record.note && <span className="text-xs text-slate-400">{record.note}</span>}
               {record.file_name && <span className="text-xs text-slate-500 font-mono">Auth: {record.file_name}</span>}
 
-              {/* Capture Auth (YouTube only) */}
-              {isYouTube && (
+              {/* Capture Auth (YouTube + TikTok) */}
+              {(isYouTube || isTikTok) && (
                 <div className="mt-1 flex flex-col gap-1">
                   {captureState === "idle" || captureState === "error" ? (
                     <button type="button" onClick={handleStartCapture}
-                      className="flex items-center gap-1.5 text-xs font-medium text-red-400 hover:text-red-300 transition-colors w-fit">
+                      className={`flex items-center gap-1.5 text-xs font-medium transition-colors w-fit ${isTikTok ? "text-slate-300 hover:text-white" : "text-red-400 hover:text-red-300"}`}>
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                       </svg>
