@@ -29,7 +29,8 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
   }
 
   const isYouTube = card.platform === "youtube";
-  const canCapture = isYouTube && card.name.trim().length > 0;
+  const isTikTok = card.platform === "tiktok";
+  const canCapture = (isYouTube || isTikTok) && card.name.trim().length > 0;
 
   async function handleStartCapture() {
     setCaptureState("starting");
@@ -113,15 +114,15 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
           onChange={(f) => update("authFile", f)}
         />
 
-        {/* Capture Auth via noVNC — YouTube only */}
-        {isYouTube && (
+        {/* Capture Auth via noVNC — YouTube and TikTok */}
+        {(isYouTube || isTikTok) && (
           <div className="flex flex-col gap-2 pt-1">
             {captureState === "idle" || captureState === "error" ? (
               <button
                 type="button"
                 onClick={handleStartCapture}
                 disabled={!canCapture}
-                className="flex items-center gap-2 text-xs font-medium bg-red-700 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-md transition-colors w-fit"
+                className={`flex items-center gap-2 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-md transition-colors w-fit ${isTikTok ? "bg-slate-900 hover:bg-slate-700 border border-slate-600" : "bg-red-700 hover:bg-red-600"}`}
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
