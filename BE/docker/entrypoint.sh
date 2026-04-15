@@ -33,7 +33,7 @@ alembic upgrade head
 
 # Start the app — hot reload in dev, multi-worker in prod
 if [ "${DEV:-false}" = "true" ]; then
-    exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload --log-config log_config.yaml
 else
-    exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    exec uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2 --log-config log_config.yaml
 fi
