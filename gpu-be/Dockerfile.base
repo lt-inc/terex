@@ -1,0 +1,26 @@
+# Тяжёлый слой gpu-be (CUDA + ffmpeg + whisper + torch + YAMNet) — собирается
+# ВРУЧНУЮ и редко (меняется раз в сто изменений кода), не в каждом CI-прогоне.
+# CI (gpu-be/Dockerfile) просто докладывает свежий Go-бинарник поверх этого образа.
+#
+# Собрать и запушить (нужен amd64-хост с docker — делали на самой GPU-ноде, нативно,
+# без эмуляции, т.к. torch/pip ставится по эмуляции мучительно долго):
+#   docker build -f gpu-be/Dockerfile.base -t registry.legendary-trio.me/lt-inc/terex-gpu-be-base:latest .
+#   docker push registry.legendary-trio.me/lt-inc/terex-gpu-be-base:latest
+#
+# Local (без GPU): --build-arg RUNTIME_BASE=ubuntu:22.04
+ARG RUNTIME_BASE=nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM ${RUNTIME_BASE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg python3 python3-pip ca-certificates curl fonts-liberation \
+    && pip3 install --no-cache-dir yt-dlp openai-whisper ai-edge-litert numpy \
+    && rm -rf /var/lib/apt/lists/*
+
+# YAMNet (TFLite, ~4 MB) для audio-event хинтов (laugh/shout/gasp/music). Если
+# скачать не вышло — сборка всё равно успешна, gpu-be просто залогирует warning
+# и LLM получит меньше хинтов.
+RUN mkdir -p /opt/terex \
+    && (curl -fsSL -o /opt/terex/yamnet.tflite https://storage.googleapis.com/download.tensorflow.org/models/tflite/task_library/audio_classification/android/lite-model_yamnet_classification_tflite_1.tflite \
+        && curl -fsSL -o /opt/terex/yamnet_class_map.csv https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv \
+        || echo "WARNING: YAMNet download failed; audio-event hints disabled")
+COPY gpu-be/tools/yamnet.py /opt/terex/yamnet.py
