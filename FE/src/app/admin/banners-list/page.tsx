@@ -38,7 +38,6 @@ export default function BannersListPage() {
           <AssetRecordCard
             key={r.id}
             record={r}
-            previewBase="/api/banners/preview"
             onUpdated={(updated) => setRecords((prev) => prev.map((x) => x.id === updated.id ? updated : x))}
             onDeleted={() => setRecords((prev) => prev.filter((x) => x.id !== r.id))}
             onSave={(id, data) => updateBanner(id, data)}

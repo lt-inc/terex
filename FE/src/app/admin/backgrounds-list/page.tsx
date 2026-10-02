@@ -38,7 +38,6 @@ export default function BackgroundsListPage() {
           <AssetRecordCard
             key={r.id}
             record={r}
-            previewBase="/api/backgrounds/preview"
             onUpdated={(updated) => setRecords((prev) => prev.map((x) => x.id === updated.id ? updated : x))}
             onDeleted={() => setRecords((prev) => prev.filter((x) => x.id !== r.id))}
             onSave={(id, data) => updateBackground(id, data)}

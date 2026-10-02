@@ -6,7 +6,9 @@ on:
   workflow_dispatch:
 
 env:
+  # main-be keeps the old image name: the k8s deployment `terex-be` (admin namespace) already points to it
   IMAGE_BE: registry.legendary-trio.me/lt-inc/terex-be
+  IMAGE_GPU: registry.legendary-trio.me/lt-inc/terex-gpu-be
   IMAGE_FE: registry.legendary-trio.me/lt-inc/terex-fe
 
 jobs:
@@ -29,13 +31,40 @@ jobs:
 
       - uses: docker/build-push-action@v5
         with:
-          context: BE
-          file: BE/docker/Dockerfile
+          # context is the terex/ root: Go workspace needs ../proto
+          context: .
+          file: main-be/Dockerfile
           push: true
           provenance: false
           no-cache: true
           tags: ${{ steps.meta.outputs.tags }}
           cache-to: type=registry,ref=${{ env.IMAGE_BE }}:buildcache,mode=max
+
+  # gpu-be runs on the GPU server (docker compose there); CI only builds and pushes the image.
+  build-gpu-be:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_GPU }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: gpu-be/Dockerfile
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.IMAGE_GPU }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_GPU }}:buildcache,mode=max
 
   build-fe:
     runs-on: ubuntu-latest

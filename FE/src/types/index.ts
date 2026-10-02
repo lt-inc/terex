@@ -1,3 +1,6 @@
+export type SliceMode = "highlights" | "full";
+export type ApproveMode = "by_approve" | "auto_approve";
+
 export type Platform = "youtube" | "tiktok" | "instagram";
 
 export interface PublishSchedule {
@@ -20,8 +23,9 @@ export interface VideoCardData {
   youtubeUrl: string;
   makeVertical: boolean;
   addSubtitles: boolean;
-  sliceVideo: boolean;
+  sliceMode: SliceMode;
   minVideoDuration: number;
+  approveMode: ApproveMode;
   addBackground: boolean;
   shape: "circle" | "rectangle";
   backgroundName: string;
@@ -45,7 +49,6 @@ export interface AccountCardData {
   name: string;
   url: string;
   authFile: File | null;
-  capturedFileName: string | null;
   note: string;
 }
 
@@ -72,6 +75,7 @@ export interface AssetRecord {
   note: string | null;
   bucket: string | null;
   file_name: string | null;
+  preview_url?: string;
 }
 
 export interface OutData {
@@ -104,25 +108,13 @@ export interface SubJobData {
   outs: OutData[];
 }
 
-export interface WarmupJob {
-  job_id: string;
-  account_id: number;
-  account_name: string | null;
-  account_platform: string | null;
-  status: string;
-  type: string;
-  warm_up_datetime: string | null;
-  repeat_step: number | null;
-  max_videos: string;
-  is_archived: boolean;
-}
-
 export interface JobData {
   job_id: string;
   youtube_url: string;
   is_vertical: boolean;
   is_subtitles: boolean;
-  is_slice: boolean;
+  slice_mode: SliceMode;
+  approve_mode: ApproveMode;
   is_background: boolean;
   min_video_duration: number;
   background_id: number | null;
@@ -134,4 +126,31 @@ export interface JobData {
   create_datetime: string | null;
   last_change_datetime: string | null;
   sub_jobs: SubJobData[];
+}
+
+export interface Channel {
+  id: number;
+  name: string;
+  url: string;
+  yt_channel_id: string;
+  approve_mode: ApproveMode;
+  enabled: boolean;
+  spec: Partial<VideoCardData>;
+  last_checked_at: string | null;
+}
+
+export interface Clip {
+  clip_id: string;
+  job_id: string;
+  banner_object: string;
+  bucket: string;
+  object: string;
+  idx: number;
+  start_sec: number;
+  end_sec: number;
+  title: string;
+  hashtags: string[];
+  approval: "pending" | "approved" | "rejected";
+  created_at: string;
+  preview_url?: string;
 }

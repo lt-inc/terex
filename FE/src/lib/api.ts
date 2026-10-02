@@ -1,4 +1,4 @@
-import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord, WarmupJob, OutData } from "@/types";
+import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord, OutData, Channel, Clip } from "@/types";
 
 /** Convert UTC ISO string to UTC+7 formatted string (DD.MM.YYYY HH:MM) */
 export function toUTC7(iso: string): string {
@@ -134,74 +134,6 @@ export async function deleteBackground(id: number): Promise<void> {
   await fetch(`${BASE_URL}/backgrounds/${id}`, { method: "DELETE" });
 }
 
-// ── Auth Capture ──────────────────────────────────────────────────────────────
-export async function captureAuthStart(platform: string, name: string): Promise<{ status: string }> {
-  const res = await fetch(`${BASE_URL}/accounts/capture-auth/start?platform=${encodeURIComponent(platform)}&name=${encodeURIComponent(name)}`, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function captureAuthFinish(accountId?: number): Promise<{ file_name: string; platform: string; name: string }> {
-  const url = accountId
-    ? `${BASE_URL}/accounts/capture-auth/finish?account_id=${accountId}`
-    : `${BASE_URL}/accounts/capture-auth/finish`;
-  const res = await fetch(url, { method: "POST" });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function captureAuthStatus(): Promise<{ active: boolean; platform: string | null; name: string | null }> {
-  const res = await fetch(`${BASE_URL}/accounts/capture-auth/status`);
-  if (!res.ok) return { active: false, platform: null, name: null };
-  return res.json();
-}
-
-// ── Warmup Jobs ───────────────────────────────────────────────────────────────
-export async function fetchWarmupJobs(showArchived = false): Promise<WarmupJob[]> {
-  const res = await fetch(`${BASE_URL}/warmup_jobs?show_archived=${showArchived}`);
-  if (!res.ok) throw new Error("Failed to fetch warmup jobs");
-  return res.json();
-}
-
-export async function createWarmupJob(data: {
-  account_id: number;
-  type: string;
-  warm_up_datetime?: string | null;
-  repeat_step?: number | null;
-  max_videos?: string;
-}): Promise<WarmupJob> {
-  const res = await fetch(`${BASE_URL}/warmup_jobs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to create warmup job");
-  return res.json();
-}
-
-export async function updateWarmupJob(jobId: string, data: Partial<{
-  account_id: number;
-  status: string;
-  type: string;
-  warm_up_datetime: string | null;
-  repeat_step: number | null;
-  max_videos: string;
-  is_archived: boolean;
-}>): Promise<WarmupJob> {
-  const res = await fetch(`${BASE_URL}/warmup_jobs/${jobId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update warmup job");
-  return res.json();
-}
-
-export async function deleteWarmupJob(jobId: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/warmup_jobs/${jobId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete warmup job");
-}
-
 export async function submitJobs(cards: VideoCardData[]): Promise<{ status: string; job_id: string }[]> {
   const results = await Promise.all(
     cards.map((card) =>
@@ -213,4 +145,75 @@ export async function submitJobs(cards: VideoCardData[]): Promise<{ status: stri
     )
   );
   return results;
+}
+
+// ── Asset upload (browser -> MinIO via presigned URL) ────────────────────────
+export async function uploadAsset(kind: "banners" | "backgrounds", name: string, note: string, file: File): Promise<AssetRecord> {
+  const pre = await fetch(`${BASE_URL}/${kind}/presign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_name: file.name }),
+  });
+  if (!pre.ok) throw new Error("Failed to get upload URL");
+  const { url, bucket, object } = await pre.json();
+
+  const put = await fetch(url, { method: "PUT", body: file });
+  if (!put.ok) throw new Error("Failed to upload file");
+
+  const reg = await fetch(`${BASE_URL}/${kind}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, note: note || null, bucket, object }),
+  });
+  if (!reg.ok) throw new Error("Failed to register file");
+  return reg.json();
+}
+
+// ── Channels (monitoring) ────────────────────────────────────────────────────
+export async function fetchChannels(): Promise<Channel[]> {
+  const res = await fetch(`${BASE_URL}/channels`);
+  if (!res.ok) throw new Error("Failed to fetch channels");
+  return res.json();
+}
+
+export async function createChannel(data: { name: string; url: string; approve_mode: string; spec: Partial<VideoCardData> }): Promise<Channel> {
+  const res = await fetch(`${BASE_URL}/channels`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to create channel");
+  return res.json();
+}
+
+export async function updateChannel(id: number, data: Partial<Pick<Channel, "name" | "approve_mode" | "enabled">>): Promise<Channel> {
+  const res = await fetch(`${BASE_URL}/channels/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update channel");
+  return res.json();
+}
+
+export async function deleteChannel(id: number): Promise<void> {
+  const res = await fetch(`${BASE_URL}/channels/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete channel");
+}
+
+// ── Clips / approval ─────────────────────────────────────────────────────────
+export async function fetchClips(approval = ""): Promise<Clip[]> {
+  const res = await fetch(`${BASE_URL}/clips?approval=${approval}`);
+  if (!res.ok) throw new Error("Failed to fetch clips");
+  return res.json();
+}
+
+export async function approveClip(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/clips/${id}/approve`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to approve clip");
+}
+
+export async function rejectClip(id: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/clips/${id}/reject`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to reject clip");
 }

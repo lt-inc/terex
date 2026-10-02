@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import AssetCard from "@/components/assets/AssetCard";
+import { uploadAsset } from "@/lib/api";
 import type { AssetCardData } from "@/types";
 
 type SerializableCard = Omit<AssetCardData, "file">;
@@ -51,11 +52,8 @@ export default function BackgroundsPage() {
     try {
       await Promise.all(
         cards.map((card) => {
-          const form = new FormData();
-          form.append("name", card.name);
-          form.append("note", card.note);
-          if (card.file) form.append("file", card.file);
-          return fetch("/api/backgrounds/upload", { method: "POST", body: form });
+          if (!card.file) throw new Error("Choose a file for every card");
+          return uploadAsset("backgrounds", card.name, card.note, card.file);
         })
       );
       setToast(`${cards.length} background${cards.length !== 1 ? "s" : ""} uploaded`);

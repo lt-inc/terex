@@ -1,0 +1,42 @@
+# Collects logs of the terex compose project via the Docker socket and parses slog logfmt.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=terex"]
+    relabel_configs:
+      - source_labels: [__meta_docker_container_name]
+        regex: '/?(.*)'
+        target_label: container
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: service
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        target_label: app
+    pipeline_stages:
+      # main-be / gpu-be: slog text (logfmt): time=... level=INFO msg="..." trace_id=...
+      - match:
+          selector: '{service=~"main-be|gpu-be"}'
+          stages:
+            - logfmt:
+                mapping:
+                  time:
+                  level:
+            - labels:
+                level:
+            - timestamp:
+                source: time
+                format: RFC3339Nano
+                action_on_failure: skip

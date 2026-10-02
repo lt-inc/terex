@@ -1,0 +1,248 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": []
+  },
+  "description": "main-be logs",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": [
+    "terex",
+    "logs",
+    "loki"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "terex main-be",
+  "uid": "terex-main-be",
+  "version": 1,
+  "panels": [
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "INFO",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"main-be\"} | level=\"INFO\" != \"http request\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 2,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "ERROR",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"main-be\"} | level=\"ERROR\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 3,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "WARNING",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"main-be\"} | level=\"WARN\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 4,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "HTTP requests",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"main-be\"} |= \"http request\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "id": 5,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "Jobs & clips",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"main-be\"} |~ \"job created|job status from gpu|clips ready|clip approved|clip rejected|publish result\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 22,
+        "w": 24,
+        "x": 0,
+        "y": 69
+      },
+      "id": 6,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "Full logs",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"main-be\"} | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

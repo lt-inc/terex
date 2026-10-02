@@ -3,7 +3,7 @@
 import Toggle from "@/components/ui/Toggle";
 import MultiSelect from "@/components/ui/MultiSelect";
 import BannerCard from "@/components/upload-video/BannerCard";
-import type { VideoCardData, BannerConfig, Platform, AccountsResponse } from "@/types";
+import type { VideoCardData, BannerConfig, Platform, AccountsResponse, SliceMode, ApproveMode } from "@/types";
 
 interface VideoCardProps {
   card: VideoCardData;
@@ -99,12 +99,29 @@ export default function VideoCard({ card, accounts, bannerOptions, backgroundOpt
           checked={card.addSubtitles}
           onChange={(v) => update("addSubtitles", v)}
         />
-        <Toggle
-          label="Slice video?"
-          checked={card.sliceVideo}
-          onChange={(v) => update("sliceVideo", v)}
-        />
-        {card.sliceVideo && (
+        <div className="flex items-center gap-3 pl-1">
+          <span className="text-sm text-slate-300 flex-1">Montage mode</span>
+          <select
+            value={card.sliceMode}
+            onChange={(e) => update("sliceMode", e.target.value as SliceMode)}
+            className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="highlights">Highlights only</option>
+            <option value="full">Full video (by intervals)</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-3 pl-1">
+          <span className="text-sm text-slate-300 flex-1">Publish</span>
+          <select
+            value={card.approveMode}
+            onChange={(e) => update("approveMode", e.target.value as ApproveMode)}
+            className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="by_approve">By approve</option>
+            <option value="auto_approve">Auto-approve</option>
+          </select>
+        </div>
+        {card.sliceMode === "full" ? (
           <div className="flex items-center gap-3 pl-1">
             <span className="text-sm text-slate-300 flex-1">Min clip duration (sec)</span>
             <input
@@ -115,6 +132,8 @@ export default function VideoCard({ card, accounts, bannerOptions, backgroundOpt
               className="w-24 bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
+        ) : (
+          <p className="text-xs text-slate-500 pl-1">AI picks the clips and their length; cuts always land on sentence boundaries.</p>
         )}
         <Toggle
           label="Add background?"

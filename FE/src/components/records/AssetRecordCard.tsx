@@ -5,7 +5,6 @@ import type { AssetRecord } from "@/types";
 
 interface AssetRecordCardProps {
   record: AssetRecord;
-  previewBase: string; // e.g. "/api/banners/preview"
   onUpdated: (r: AssetRecord) => void;
   onDeleted: () => void;
   onSave: (id: number, data: { name?: string; note?: string }) => Promise<AssetRecord>;
@@ -15,7 +14,7 @@ interface AssetRecordCardProps {
 function isVideo(name: string) { return /\.(mp4|mov|webm|avi)$/i.test(name); }
 function isImage(name: string) { return /\.(jpe?g|png|gif|webp|avif)$/i.test(name); }
 
-export default function AssetRecordCard({ record, previewBase, onUpdated, onDeleted, onSave, onDelete }: AssetRecordCardProps) {
+export default function AssetRecordCard({ record, onUpdated, onDeleted, onSave, onDelete }: AssetRecordCardProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState(record.name);
@@ -40,7 +39,8 @@ export default function AssetRecordCard({ record, previewBase, onUpdated, onDele
     onDeleted();
   }
 
-  const previewUrl = record.file_name ? `${previewBase}/${encodeURIComponent(record.file_name)}` : null;
+  // presigned MinIO URL issued by the backend (via gpu-be); the browser fetches the file directly
+  const previewUrl = record.preview_url ?? null;
 
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden flex gap-4 p-4">
