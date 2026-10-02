@@ -48,11 +48,17 @@ const ADMIN_GROUPS = [
     ],
   },
   {
-    key: "warmup",
-    label: "Warmup Jobs",
+    key: "channels",
+    label: "Channels",
     links: [
-      { href: "/admin/warmup-jobs",        label: "View" },
-      { href: "/admin/create-warmup-job",  label: "Create" },
+      { href: "/admin/channels", label: "Monitoring" },
+    ],
+  },
+  {
+    key: "clips",
+    label: "Clips",
+    links: [
+      { href: "/admin/clips", label: "Approval" },
     ],
   },
 ];

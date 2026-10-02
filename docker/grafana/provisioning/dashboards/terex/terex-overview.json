@@ -1,0 +1,684 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": []
+  },
+  "description": "Errors, warnings, failed stages and traces of the Terex stack",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": [
+    "terex",
+    "logs",
+    "loki",
+    "tempo"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Terex — Errors & Overview",
+  "uid": "terex-overview",
+  "version": 1,
+  "panels": [
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "title": "Errors (1h)",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "sum(count_over_time({service=~\"main-be|gpu-be\"} | level=\"ERROR\" [1h]))",
+          "instant": true,
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "title": "Warnings (1h)",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "sum(count_over_time({service=~\"main-be|gpu-be\"} | level=\"WARN\" [1h]))",
+          "instant": true,
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "title": "Failed job stages (1h)",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "sum(count_over_time({service=\"gpu-be\"} |= \"job stage\" |= \"status=failed\" [1h]))",
+          "instant": true,
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "title": "Jobs created (1h)",
+      "type": "stat",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "sum(count_over_time({service=\"main-be\"} |= \"job created\" [1h]))",
+          "instant": true,
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "title": "Log volume by level",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ERROR"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "WARN"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "INFO"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "sum by (level) (count_over_time({service=~\"main-be|gpu-be\"} | level=~\"INFO|WARN|ERROR\" [$__interval]))",
+          "legendFormat": "{{level}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "id": 6,
+      "title": "Errors by service",
+      "type": "timeseries",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "unit": "short",
+          "noValue": "0"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ERROR"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "WARN"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "INFO"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "sum by (service) (count_over_time({service=~\"main-be|gpu-be\"} | level=\"ERROR\" [$__interval]))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 7,
+      "title": "Errors",
+      "type": "row",
+      "panels": []
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 8,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "ERROR — main-be + gpu-be",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=~\"main-be|gpu-be\"} | level=\"ERROR\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
+          "refId": "A"
+        }
+      ],
+      "description": "Click trace_id -> Open trace in Tempo"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "id": 9,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "Failed job stages",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"gpu-be\"} |= \"job stage\" |= \"status=failed\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-ds"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "id": 10,
+      "title": "Failed traces (status=error)",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-ds"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name =~ \"terex-.*\" && status = error }",
+          "limit": 50,
+          "tableType": "traces",
+          "refId": "A"
+        }
+      ],
+      "description": "TraceQL: any trace with an errored span"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
+      "id": 11,
+      "title": "Warnings and traces",
+      "type": "row",
+      "panels": []
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "id": 12,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "WARN — main-be + gpu-be",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=~\"main-be|gpu-be\"} | level=\"WARN\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo-ds"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "id": 13,
+      "title": "Recent traces",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo-ds"
+          },
+          "queryType": "traceql",
+          "query": "{ resource.service.name =~ \"terex-.*\" && name =~ \"job.create|http request|POST.*\" }",
+          "limit": 50,
+          "tableType": "traces",
+          "refId": "A"
+        }
+      ],
+      "description": "Latest job traces (job.create ...)"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 62
+      },
+      "id": 14,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "Full logs — all terex containers",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=~\".+\"}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

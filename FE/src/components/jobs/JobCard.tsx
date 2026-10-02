@@ -5,7 +5,7 @@ import { toUTC7 } from "@/lib/api";
 import Toggle from "@/components/ui/Toggle";
 import SubJobCard from "@/components/jobs/SubJobCard";
 import { updateJob, deleteJob } from "@/lib/api";
-import type { JobData, SubJobData, AccountsResponse } from "@/types";
+import type { JobData, SubJobData, AccountsResponse, SliceMode } from "@/types";
 
 interface JobCardProps {
   job: JobData;
@@ -28,7 +28,7 @@ const STATUS_COLORS: Record<string, string> = {
   failed:   "bg-red-900/40 text-red-300",
 };
 
-const LOCKED_STATUSES = new Set(["ready", "running", "done", "failed"]);
+const LOCKED_STATUSES = new Set(["queued", "processing", "done", "failed"]);
 
 export default function JobCard({ job, accounts, bannerOptions, backgroundOptions, selected, defaultOpenSubJobId, onToggleSelect, onUpdated, onDeleted }: JobCardProps) {
   const [open, setOpen] = useState(
@@ -42,7 +42,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
   const [trace, setTrace] = useState(job.trace ?? "");
   const [isVertical, setIsVertical] = useState(job.is_vertical);
   const [isSubtitles, setIsSubtitles] = useState(job.is_subtitles);
-  const [isSlice, setIsSlice] = useState(job.is_slice);
+  const [sliceMode, setSliceMode] = useState<SliceMode>(job.slice_mode);
   const [isBackground, setIsBackground] = useState(job.is_background);
   const [isCircle, setIsCircle] = useState(job.is_circle);
   const [minVideoDuration, setMinVideoDuration] = useState(job.min_video_duration ?? 60);
@@ -56,7 +56,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
     setTrace(job.trace ?? "");
     setIsVertical(job.is_vertical);
     setIsSubtitles(job.is_subtitles);
-    setIsSlice(job.is_slice);
+    setSliceMode(job.slice_mode);
     setIsBackground(job.is_background);
     setIsCircle(job.is_circle);
     setBackgroundName(job.background_name ?? "");
@@ -72,7 +72,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
         trace: trace || null,
         is_vertical: isVertical,
         is_subtitles: isSubtitles,
-        is_slice: isSlice,
+        slice_mode: sliceMode,
         is_background: isBackground,
         is_circle: isCircle,
         min_video_duration: minVideoDuration,
@@ -163,7 +163,9 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                   return <a href={url} target="_blank" rel="noopener noreferrer" className="text-slate-200 break-all hover:text-indigo-400 transition-colors">{job.trace}</a>;
                 })() : <span className="text-slate-200">—</span>}
                 <Row label="Background" value={job.background_name ?? "—"} />
-                <Row label="Min clip duration" value={`${job.min_video_duration ?? 60}s`} />
+                <Row label="Montage" value={job.slice_mode === "highlights" ? "Highlights" : "Full"} />
+                <Row label="Publish" value={job.approve_mode === "auto_approve" ? "Auto-approve" : "By approve"} />
+                {job.slice_mode === "full" && <Row label="Min clip duration" value={`${job.min_video_duration ?? 60}s`} />}
                 <Row label="Created" value={job.create_datetime ? toUTC7(job.create_datetime) + " UTC+7" : "—"} />
                 <Row label="Updated" value={job.last_change_datetime ? toUTC7(job.last_change_datetime) + " UTC+7" : "—"} />
               </div>
@@ -171,7 +173,6 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                 {([
                   ["Vertical", job.is_vertical],
                   ["Subtitles", job.is_subtitles],
-                  ["Slice", job.is_slice],
                   ["Background", job.is_background],
                   ["Circle", job.is_circle],
                 ] as [string, boolean][]).map(([label, val]) => (
@@ -198,15 +199,24 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                 <input type="text" value={trace} onChange={(e) => setTrace(e.target.value)}
                   className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
               </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-slate-400">Min clip duration (sec)</label>
-                <input type="number" min={1} value={minVideoDuration} onChange={(e) => setMinVideoDuration(Number(e.target.value))}
-                  className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-32" />
-              </div>
+              {sliceMode === "full" && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-slate-400">Min clip duration (sec)</label>
+                  <input type="number" min={1} value={minVideoDuration} onChange={(e) => setMinVideoDuration(Number(e.target.value))}
+                    className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-32" />
+                </div>
+              )}
               <div className="flex flex-col gap-2">
                 <Toggle label="Make vertical?" checked={isVertical} onChange={setIsVertical} />
                 <Toggle label="Add subtitles?" checked={isSubtitles} onChange={setIsSubtitles} />
-                <Toggle label="Slice video?" checked={isSlice} onChange={setIsSlice} />
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-slate-300 flex-1">Montage mode</span>
+                  <select value={sliceMode} onChange={(e) => setSliceMode(e.target.value as SliceMode)}
+                    className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="highlights">Highlights only</option>
+                    <option value="full">Full video (by intervals)</option>
+                  </select>
+                </div>
                 <Toggle label="Add background?" checked={isBackground} onChange={setIsBackground} />
                 <Toggle label="Circle?" checked={isCircle} onChange={setIsCircle} />
               </div>

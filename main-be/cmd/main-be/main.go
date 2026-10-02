@@ -1,0 +1,98 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	nethttp "net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"terex/main-be/internal/config"
+	"terex/main-be/internal/repository/gpuclient"
+	"terex/main-be/internal/repository/postgres"
+	"terex/main-be/internal/repository/youtube"
+	"terex/main-be/internal/service/assets"
+	"terex/main-be/internal/service/jobs"
+	"terex/main-be/internal/service/monitor"
+	"terex/main-be/internal/service/publish"
+	tamqp "terex/main-be/internal/transport/amqp"
+	"terex/main-be/internal/transport/cron"
+	thttp "terex/main-be/internal/transport/http"
+	"terex/proto/amqpx"
+	"terex/proto/telemetry"
+)
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		return errors.New("DATABASE_URL is required")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	shutdownTelemetry, err := telemetry.Setup(ctx, "terex-main-be")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flush, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(flush)
+	}()
+
+	if err := postgres.Migrate(cfg.DatabaseURL); err != nil {
+		return err
+	}
+	store, err := postgres.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	gpu, err := gpuclient.New(cfg.GpuGRPCAddr)
+	if err != nil {
+		return err
+	}
+	defer gpu.Close()
+
+	br := amqpx.New(cfg.RabbitURL)
+	if err := br.Connect(ctx); err != nil {
+		return err
+	}
+	defer br.Close()
+
+	jobSvc := &jobs.Service{Jobs: store, Assets: store, Accounts: store, Broker: br}
+	assetSvc := &assets.Service{Assets: store, Accounts: store, Gpu: gpu}
+	pubMgr := &publish.Manager{Clips: store, Jobs: store, Broker: br, Gpu: gpu}
+	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
+
+	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon}
+	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
+
+	go func() { _ = tamqp.Run(ctx, br, jobSvc, pubMgr) }()
+	go cron.Every(ctx, "monitor", cfg.MonitorInterval, mon)
+	go cron.Every(ctx, "publish", cfg.PublishInterval, pubMgr)
+
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	slog.Info("main-be started", "http", cfg.HTTPAddr)
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+}

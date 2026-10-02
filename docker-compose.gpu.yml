@@ -1,0 +1,11 @@
+# Overlay for the real GPU host:  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+# with GPU_RUNTIME_BASE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 USE_NVENC=true
+services:
+  gpu-be:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

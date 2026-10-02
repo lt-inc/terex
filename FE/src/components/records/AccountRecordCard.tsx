@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import Link from "next/link";
-import { captureAuthStart, captureAuthFinish, fetchAccountScheduled, fetchAccountPublished, toUTC7 } from "@/lib/api";
+import { fetchAccountScheduled, fetchAccountPublished, toUTC7 } from "@/lib/api";
 import type { AccountRecord, OutData } from "@/types";
 
 interface AccountRecordCardProps {
@@ -32,9 +32,7 @@ const STATUS_COLORS: Record<string, string> = {
   failed:     "text-red-400",
 };
 
-const NOVNC_URL = "/novnc/vnc.html?path=novnc";
 
-type CaptureState = "idle" | "starting" | "active" | "finishing" | "done" | "error";
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -140,9 +138,6 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
   const [url, setUrl] = useState(record.url ?? "");
   const [note, setNote] = useState(record.note ?? "");
 
-  const [captureState, setCaptureState] = useState<CaptureState>("idle");
-  const [captureError, setCaptureError] = useState<string | null>(null);
-
   // Expand panel
   const [expanded, setExpanded] = useState(false);
   const [scheduled, setScheduled] = useState<OutData[] | null>(null);
@@ -218,35 +213,6 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
     onDeleted();
   }
 
-  const isYouTube = record.platform === "youtube";
-  const isTikTok = record.platform === "tiktok";
-
-  async function handleStartCapture() {
-    setCaptureState("starting");
-    setCaptureError(null);
-    try {
-      await captureAuthStart(record.platform, record.name);
-      setCaptureState("active");
-      window.open(NOVNC_URL, "_blank");
-    } catch (e) {
-      setCaptureError(String(e));
-      setCaptureState("error");
-    }
-  }
-
-  async function handleFinishCapture() {
-    setCaptureState("finishing");
-    setCaptureError(null);
-    try {
-      const result = await captureAuthFinish(record.id);
-      onUpdated({ ...record, file_name: result.file_name, bucket: "cookies" });
-      setCaptureState("done");
-    } catch (e) {
-      setCaptureError(String(e));
-      setCaptureState("active");
-    }
-  }
-
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl flex flex-col">
       {/* Card header */}
@@ -263,38 +229,6 @@ export default function AccountRecordCard({ record, onUpdated, onDeleted, onSave
               {record.url && <a href={record.url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline truncate max-w-sm">{record.url}</a>}
               {record.note && <span className="text-xs text-slate-400">{record.note}</span>}
               {record.file_name && <span className="text-xs text-slate-500 font-mono">Auth: {record.file_name}</span>}
-
-              {/* Capture Auth (YouTube + TikTok) */}
-              {(isYouTube || isTikTok) && (
-                <div className="mt-1 flex flex-col gap-1">
-                  {captureState === "idle" || captureState === "error" ? (
-                    <button type="button" onClick={handleStartCapture}
-                      className={`flex items-center gap-1.5 text-xs font-medium transition-colors w-fit ${isTikTok ? "text-slate-300 hover:text-white" : "text-red-400 hover:text-red-300"}`}>
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.069A1 1 0 0121 8.87v6.26a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      {record.file_name ? "Re-capture Auth" : "Capture Auth"}
-                    </button>
-                  ) : captureState === "starting" ? (
-                    <span className="text-xs text-slate-400">Starting browser…</span>
-                  ) : captureState === "active" ? (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                      <span className="text-xs text-green-400">Browser active —</span>
-                      <a href={NOVNC_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-400 hover:underline">Open noVNC</a>
-                      <button type="button" onClick={handleFinishCapture}
-                        className="text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded-md transition-colors">
-                        Done — capture
-                      </button>
-                    </div>
-                  ) : captureState === "finishing" ? (
-                    <span className="text-xs text-slate-400">Capturing…</span>
-                  ) : captureState === "done" ? (
-                    <span className="text-xs text-emerald-400">✓ Auth updated in MinIO</span>
-                  ) : null}
-                  {captureError && <span className="text-xs text-red-400">{captureError}</span>}
-                </div>
-              )}
             </div>
 
             <div className="flex items-center gap-2 shrink-0">

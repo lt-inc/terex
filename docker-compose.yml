@@ -1,0 +1,158 @@
+# Local test stack. "VPS side": postgres, main-be, fe. "GPU side": minio, gpu-be.
+# Run from terex/:  docker compose up --build
+# Open: http://localhost:3000   (RabbitMQ UI: :15672 guest/guest, MinIO UI: :9001 minioadmin/minioadmin,
+#        Grafana: http://localhost:3001 -> Dashboards -> Terex)
+name: terex
+
+services:
+  # ───────────── shared ─────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ───────────── VPS side ─────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: main
+    ports: ["5432:5432"]
+    volumes: [pg_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d main"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  main-be:
+    build:
+      context: .
+      dockerfile: main-be/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/main?sslmode=disable
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      GPU_GRPC_ADDR: gpu-be:9090
+      HTTP_ADDR: ":8000"
+      MONITOR_INTERVAL: 1m
+      PUBLISH_INTERVAL: 15s
+      OTEL_SERVICE_NAME: terex-main-be
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}   # empty = tracing off
+      LOG_FORMAT: ${LOG_FORMAT:-text}   # json for Loki
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      tempo: { condition: service_started }
+
+  fe:
+    build:
+      context: ./FE
+      dockerfile: docker/Dockerfile
+    environment:
+      BACKEND_URL: http://main-be:8000
+    ports: ["3000:3000"]
+    volumes:
+      - ./FE:/app
+      - fe_node_modules:/app/node_modules
+    depends_on: [main-be]
+
+  # ───────────── GPU side ─────────────
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]   # 9000 must be reachable from the browser (presigned URLs)
+    volumes: [minio_data:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  gpu-be:
+    build:
+      context: .
+      dockerfile: gpu-be/Dockerfile
+      args:
+        RUNTIME_BASE: ${GPU_RUNTIME_BASE:-ubuntu:22.04}   # on the GPU host: nvidia/cuda:12.4.1-runtime-ubuntu22.04
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      GRPC_ADDR: ":9090"
+      S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: localhost:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      STATE_DIR: /data/state
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-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}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-stealth/space-bunny-alpha}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
+      USE_NVENC: ${USE_NVENC:-false}
+      CLIP_MIN_SEC: ${CLIP_MIN_SEC:-15}          # highlights: LLM picks the clip length inside [min, max]
+      CLIP_MAX_SEC: ${CLIP_MAX_SEC:-180}
+      MAX_CLIPS: ${MAX_CLIPS:-12}
+      PROMPT_TAGS: ${PROMPT_TAGS:-energy:high,energy:spike,laugh,shout,gasp,music,fast,pause_before}   # hints the LLM sees
+      OTEL_SERVICE_NAME: terex-gpu-be
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes: [gpu_state:/data/state]
+    depends_on:
+      minio: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      tempo: { condition: service_started }
+    # On the GPU host add (or use docker-compose.gpu.yml):
+    # deploy: { resources: { reservations: { devices: [{ driver: nvidia, count: all, capabilities: [gpu] }] } } }
+
+  # ───────────── observability (always on): logs -> Loki, traces -> Tempo, UI -> Grafana ─────────────
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./docker/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./docker/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    command: -config.file=/etc/promtail/promtail.yml
+    volumes:
+      - ./docker/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    ports: ["3001:3000"]   # http://localhost:3001 -> Dashboards -> Terex
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on: [tempo, loki]
+
+volumes:
+  grafana_data:
+  loki_data:
+  tempo_data:
+  pg_data:
+  minio_data:
+  gpu_state:
+  fe_node_modules:
