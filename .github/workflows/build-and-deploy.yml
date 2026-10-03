@@ -55,19 +55,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Образ теперь лёгкий (ffmpeg+python3 из apt, без CUDA/torch — те живут
-      # на хосте и монтируются через hostPath, см. k3s/admin/terex-gpu-be.yaml),
-      # но free-disk-space на всякий случай не повредит.
-      - uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: false
-          swap-storage: true
-
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
