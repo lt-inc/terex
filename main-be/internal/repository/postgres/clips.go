@@ -27,9 +27,15 @@ func (s *Store) SaveClips(ctx context.Context, jobID string, clips []domain.Clip
 	}
 	defer tx.Rollback(ctx)
 	for _, c := range clips {
+		hashtags := c.Hashtags
+		if hashtags == nil {
+			// nil биндится pgx как SQL NULL (а не пустой массив из DEFAULT),
+			// что нарушает NOT NULL — gpu-be/LLM может вернуть клип без хэштегов.
+			hashtags = []string{}
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO clips(clip_id, job_id, banner_object, bucket, object, idx, start_sec, end_sec, title, hashtags)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (clip_id) DO NOTHING`,
-			c.ClipID, jobID, c.BannerObject, c.Bucket, c.Object, c.Idx, c.StartSec, c.EndSec, c.Title, c.Hashtags); err != nil {
+			c.ClipID, jobID, c.BannerObject, c.Bucket, c.Object, c.Idx, c.StartSec, c.EndSec, c.Title, hashtags); err != nil {
 			return err
 		}
 	}
