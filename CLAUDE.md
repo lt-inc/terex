@@ -133,7 +133,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 
 ## Known gaps / TODO
 
-- Publisher module is a stub (YouTube/TikTok/Instagram publishing to be implemented behind `publisher.Publisher`).
+- YouTube publishing uses the PostgreSQL workflow coordinator, confirmed outbox and dedicated GPU workers. See `docs/PUBLISHING.ru.md` for OAuth setup, recovery and provider extension. TikTok/Instagram adapters remain future work.
 - k8s manifests and wiki in `docs/` still describe the old Python BE and need updating when deploying the new stack (readiness probe → `GET /healthz`, new env vars, gpu-be runs on the GPU host).
 - Chunked highlights cannot produce a clip that spans a chunk boundary.
 - Renderer processes the whole video before cutting (as the old pipeline did); cutting first would save GPU time for highlights mode but breaks subtitle timing.

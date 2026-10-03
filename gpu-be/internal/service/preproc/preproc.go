@@ -2,7 +2,9 @@
 package preproc
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"terex/gpu-be/internal/domain"
 	"terex/gpu-be/internal/service/reporter"
 	"terex/proto/telemetry"
+	"terex/proto/workflow"
 )
 
 const stage = "preproc"
@@ -65,6 +68,23 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 		return err
 	}
 	if err = s.Store.Upload(ctx, domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".m4a"}, pa); err != nil {
+		return err
+	}
+
+	manifest := workflow.SourceManifest{Original: domain.ObjectRef{Bucket: domain.BucketDownloads, Object: msg.JobID + ".mp4"}, Proxy: domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".mp4"}, Transcript: domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: msg.JobID + "/transcript.json"}, Options: msg.Options}
+	if prober, ok := s.Media.(interface {
+		Duration(context.Context, string) (float64, error)
+	}); ok {
+		manifest.DurationSec, err = prober.Duration(ctx, src)
+		if err != nil {
+			return err
+		}
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err = s.Store.Put(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: msg.JobID + "/source.json"}, bytes.NewReader(data), int64(len(data))); err != nil {
 		return err
 	}
 

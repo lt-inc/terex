@@ -8,6 +8,7 @@ import (
 
 	"terex/gpu-be/internal/domain"
 	"terex/proto/amqpx"
+	"terex/proto/workflow"
 )
 
 type Services struct {
@@ -23,6 +24,14 @@ type Services struct {
 	Publisher interface {
 		Handle(context.Context, domain.PublishClip) error
 	}
+	Publication interface {
+		Handle(context.Context, workflow.Command) error
+	}
+	RenderRevision interface {
+		Handle(context.Context, workflow.Command) error
+	}
+	PublisherWorkers      int
+	RenderRevisionWorkers int
 }
 
 func handler[T any](queue string, fn func(context.Context, T) error) amqpx.Handler {
@@ -56,9 +65,22 @@ func Run(ctx context.Context, b *amqpx.Broker, workers int, s Services) error {
 		domain.QueueRender:       handler(domain.QueueRender, s.Renderer.Handle),
 		domain.QueuePublishClip:  handler(domain.QueuePublishClip, s.Publisher.Handle),
 	}
+	counts := map[string]int{}
+	if s.Publication != nil {
+		consumers[workflow.QueuePublish] = handler(workflow.QueuePublish, s.Publication.Handle)
+		counts[workflow.QueuePublish] = max(1, s.PublisherWorkers)
+	}
+	if s.RenderRevision != nil {
+		consumers[workflow.QueueRender] = handler(workflow.QueueRender, s.RenderRevision.Handle)
+		counts[workflow.QueueRender] = max(1, s.RenderRevisionWorkers)
+	}
 	done := make(chan struct{}, len(consumers))
 	for q, h := range consumers {
-		go func() { _ = b.Consume(ctx, q, workers, h); done <- struct{}{} }()
+		count := workers
+		if n := counts[q]; n > 0 {
+			count = n
+		}
+		go func() { _ = b.Consume(ctx, q, count, h); done <- struct{}{} }()
 	}
 	for range consumers {
 		<-done

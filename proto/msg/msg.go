@@ -1,6 +1,8 @@
 // Package msg holds the RabbitMQ contract shared by main-be and gpu-be.
 package msg
 
+import "encoding/json"
+
 // Queue names. gpu.* are consumed by gpu-be, main.* by main-be.
 const (
 	QueueProcessVideo = "gpu.process_video"
@@ -44,14 +46,15 @@ type ObjectRef struct {
 }
 
 type Clip struct {
-	ClipID   string    `json:"clip_id"`
-	JobID    string    `json:"job_id"`
-	Object   ObjectRef `json:"object"`
-	Banner   string    `json:"banner,omitempty"` // banner object name this clip was rendered with
-	Start    float64   `json:"start"`
-	End      float64   `json:"end"`
-	Title    string    `json:"title,omitempty"`
-	Hashtags []string  `json:"hashtags,omitempty"`
+	ClipID         string          `json:"clip_id"`
+	JobID          string          `json:"job_id"`
+	Object         ObjectRef       `json:"object"`
+	Banner         string          `json:"banner,omitempty"` // banner object name this clip was rendered with
+	Start          float64         `json:"start"`
+	End            float64         `json:"end"`
+	Title          string          `json:"title,omitempty"`
+	Hashtags       []string        `json:"hashtags,omitempty"`
+	SourceManifest json.RawMessage `json:"source_manifest,omitempty"`
 }
 
 type ClipsReady struct {

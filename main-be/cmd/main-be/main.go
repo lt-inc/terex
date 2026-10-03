@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	nethttp "net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/grpc"
 	"terex/main-be/internal/config"
 	"terex/main-be/internal/repository/gpuclient"
 	"terex/main-be/internal/repository/postgres"
@@ -18,11 +21,13 @@ import (
 	"terex/main-be/internal/service/jobs"
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
+	workflowservice "terex/main-be/internal/service/workflow"
 	tamqp "terex/main-be/internal/transport/amqp"
 	"terex/main-be/internal/transport/cron"
 	thttp "terex/main-be/internal/transport/http"
 	"terex/proto/amqpx"
 	"terex/proto/telemetry"
+	"terex/proto/workflow"
 )
 
 func main() {
@@ -74,16 +79,31 @@ func run() error {
 	jobSvc := &jobs.Service{Jobs: store, Assets: store, Accounts: store, Broker: br}
 	assetSvc := &assets.Service{Assets: store, Accounts: store, Gpu: gpu}
 	pubMgr := &publish.Manager{Clips: store, Jobs: store, Broker: br, Gpu: gpu}
+	flow := &workflowservice.Service{Repo: store, Coordinator: store, Accounts: store, Clips: store, Gpu: gpu, Gateway: gpu.WorkflowGateway(), Broker: br, RedirectURL: cfg.OAuthRedirectURL, AppURL: cfg.AppPublicURL}
+	pubMgr.Workflow = flow
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
 
-	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon}
+	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon, Workflow: flow}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 
 	go func() { _ = tamqp.Run(ctx, br, jobSvc, pubMgr) }()
 	go cron.Every(ctx, "monitor", cfg.MonitorInterval, mon)
 	go cron.Every(ctx, "publish", cfg.PublishInterval, pubMgr)
+	listener, err := net.Listen("tcp", cfg.WorkflowGRPCAddr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
+	coordinator := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	workflow.RegisterCoordinatorServer(coordinator, flow)
+	defer coordinator.Stop()
 
 	errc := make(chan error, 1)
+	go func() {
+		if e := coordinator.Serve(listener); e != nil {
+			errc <- e
+		}
+	}()
 	go func() { errc <- srv.ListenAndServe() }()
 	slog.Info("main-be started", "http", cfg.HTTPAddr)
 

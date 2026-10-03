@@ -15,6 +15,7 @@ import (
 	"terex/gpu-be/internal/domain"
 	"terex/gpu-be/internal/service/reporter"
 	"terex/proto/telemetry"
+	"terex/proto/workflow"
 )
 
 const stage = "renderer"
@@ -98,6 +99,20 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 	if err = json.Unmarshal(raw, &intervals); err != nil {
 		return err
 	}
+	manifest := workflow.SourceManifest{Original: domain.ObjectRef{Bucket: domain.BucketDownloads, Object: msg.JobID + ".mp4"}, Proxy: domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".mp4"}, Transcript: domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: msg.JobID + "/transcript.json"}, Options: o}
+	if reader, ok := s.Store.(interface {
+		Read(context.Context, domain.ObjectRef) ([]byte, error)
+	}); ok {
+		if data, e := reader.Read(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: msg.JobID + "/source.json"}); e == nil {
+			_ = json.Unmarshal(data, &manifest)
+		}
+		if data, e := reader.Read(ctx, manifest.Transcript); e == nil {
+			var segs []domain.Segment
+			if json.Unmarshal(data, &segs) == nil {
+				manifest.Cues = Cues(segs)
+			}
+		}
+	}
 
 	variants := o.BannerIDs
 	if len(variants) == 0 {
@@ -124,16 +139,23 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 			if err = s.Media.Cut(ctx, base, out, iv.Start, iv.End); err != nil {
 				return fmt.Errorf("cut %d: %w", iv.ID, err)
 			}
-			ref := domain.ObjectRef{Bucket: domain.BucketClips, Object: fmt.Sprintf("%s/%d/%d.mp4", msg.JobID, vi, iv.ID)}
+			ref := domain.ObjectRef{Bucket: domain.BucketClips, Object: fmt.Sprintf("%s/initial/%s/%d/%d.mp4", msg.JobID, filepath.Base(dir), vi, iv.ID)}
 			if err = s.Store.Upload(ctx, ref, out); err != nil {
 				return err
 			}
+			clipManifest := manifest
+			clipManifest.Banner = banner
+			clipManifest.Cues = SelectCues(manifest.Cues, iv.Start, iv.End)
+			sourceJSON, _ := json.Marshal(clipManifest)
 			clips = append(clips, domain.Clip{
 				ClipID: fmt.Sprintf("%s-%d-%d", msg.JobID, vi, iv.ID), JobID: msg.JobID, Object: ref, Banner: banner,
 				Start: iv.Start, End: iv.End, Title: iv.Title, Hashtags: iv.Tags,
+				SourceManifest: sourceJSON,
 			})
 		}
-		os.Remove(base) // free disk early; the unbannered source is kept in cur
+		if base != cur {
+			os.Remove(base)
+		} // free each banner variant after its cuts
 	}
 
 	if err = s.State.SaveClips(ctx, msg.JobID, clips); err != nil {

@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import AccountCard from "@/components/create-account/AccountCard";
 import type { AccountCardData } from "@/types";
+import { request } from "@/lib/api";
+import Link from "next/link";
 
 function createEmptyCard(): AccountCardData {
   return {
@@ -22,6 +24,7 @@ export default function CreateAccountPage() {
   const [hydrated, setHydrated] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     try {
@@ -36,7 +39,9 @@ export default function CreateAccountPage() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const serializable: SerializableCard[] = cards.map(({ authFile: _, ...rest }) => rest);
+    const serializable: SerializableCard[] = cards.map(
+      ({ authFile: _, ...rest }) => rest,
+    );
     localStorage.setItem("create-account-cards", JSON.stringify(serializable));
   }, [cards, hydrated]);
 
@@ -56,18 +61,35 @@ export default function CreateAccountPage() {
     if (cards.length === 0) return;
     setSubmitting(true);
     try {
-      await Promise.all(
-        cards.map((card) => {
+      const results = await Promise.all(
+        cards.map(async (card) => {
+          if (!card.name.trim() || !card.platform)
+            return { id: card.id, error: "Choose a platform and account name" };
           const form = new FormData();
           form.append("platform", card.platform);
           form.append("name", card.name);
           form.append("url", card.url);
           form.append("note", card.note);
           if (card.authFile) form.append("auth_file", card.authFile);
-          return fetch("/api/accounts/create", { method: "POST", body: form });
-        })
+          try {
+            await request("/accounts/create", { method: "POST", body: form });
+            return { id: card.id, error: "" };
+          } catch (e) {
+            return {
+              id: card.id,
+              error: e instanceof Error ? e.message : String(e),
+            };
+          }
+        }),
       );
-      setToast(`${cards.length} account${cards.length !== 1 ? "s" : ""} created`);
+      const success = new Set(results.filter((r) => !r.error).map((r) => r.id));
+      setErrors(
+        Object.fromEntries(
+          results.filter((r) => r.error).map((r) => [r.id, r.error]),
+        ),
+      );
+      setCards((prev) => prev.filter((c) => !success.has(c.id)));
+      setToast(`${success.size} saved. Open Accounts to connect with Google.`);
       setTimeout(() => setToast(null), 3000);
     } catch {
       setToast("Failed to create accounts");
@@ -80,6 +102,9 @@ export default function CreateAccountPage() {
   return (
     <div className="p-6 flex flex-col gap-6 min-h-full">
       <h1 className="text-xl font-semibold text-slate-100">Create Account</h1>
+      <Link href="/admin/accounts" className="text-indigo-400 text-sm">
+        Accounts and Google connections →
+      </Link>
       <div className="flex items-center justify-between">
         <button
           onClick={addCard}
@@ -99,18 +124,27 @@ export default function CreateAccountPage() {
 
       {cards.length === 0 && (
         <div className="flex flex-1 items-center justify-center">
-          <p className="text-slate-500 text-sm">No accounts yet. Click &quot;Add Account&quot; to get started.</p>
+          <p className="text-slate-500 text-sm">
+            No accounts yet. Click &quot;Add Account&quot; to get started.
+          </p>
         </div>
       )}
 
       <div className="flex flex-col gap-4">
         {cards.map((card) => (
-          <AccountCard
-            key={card.id}
-            card={card}
-            onChange={(updated) => updateCard(card.id, updated)}
-            onDelete={() => deleteCard(card.id)}
-          />
+          <div key={card.id}>
+            {errors[card.id] && (
+              <p role="alert" className="text-sm text-red-400 mb-2">
+                {errors[card.id]}
+              </p>
+            )}
+            <AccountCard
+              key={card.id}
+              card={card}
+              onChange={(updated) => updateCard(card.id, updated)}
+              onDelete={() => deleteCard(card.id)}
+            />
+          </div>
         ))}
       </div>
 

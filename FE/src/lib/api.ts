@@ -1,219 +1,271 @@
-import type { AccountsResponse, VideoCardData, JobData, SubJobData, AccountRecord, AssetRecord, OutData, Channel, Clip } from "@/types";
+import type {
+  AccountsResponse,
+  VideoCardData,
+  JobData,
+  SubJobData,
+  AccountRecord,
+  AssetRecord,
+  OutData,
+  Channel,
+  Clip,
+  ClipEditor,
+  PublicationEvent,
+  PublicationHistory,
+  PublicationTarget,
+} from "@/types";
+import { formatInZone } from "./datetime";
 
-/** Convert UTC ISO string to UTC+7 formatted string (DD.MM.YYYY HH:MM) */
-export function toUTC7(iso: string): string {
-  const date = new Date(iso);
-  const shifted = new Date(date.getTime() + 7 * 60 * 60 * 1000);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(shifted.getUTCDate())}.${pad(shifted.getUTCMonth() + 1)}.${shifted.getUTCFullYear()} ${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}`;
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
-
-const BASE_URL = "/api";
-
-export async function fetchBackgrounds(): Promise<string[]> {
-  const res = await fetch(`${BASE_URL}/backgrounds`);
-  if (!res.ok) throw new Error("Failed to fetch backgrounds");
-  return res.json();
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`/api${path}`, { ...init, cache: "no-store" });
+  const body = await res.text();
+  let data: unknown;
+  try {
+    data = body ? JSON.parse(body) : undefined;
+  } catch {
+    data = undefined;
+  }
+  if (!res.ok) {
+    const error = data as { detail?: string; error?: string } | undefined;
+    throw new ApiError(
+      error?.detail ?? error?.error ?? `Request failed (${res.status})`,
+      res.status,
+    );
+  }
+  return data as T;
 }
-
-export async function fetchBanners(): Promise<string[]> {
-  const res = await fetch(`${BASE_URL}/banners`);
-  if (!res.ok) throw new Error("Failed to fetch banners");
-  return res.json();
-}
-
-export async function fetchAccounts(): Promise<AccountsResponse> {
-  const res = await fetch(`${BASE_URL}/accounts`);
-  if (!res.ok) throw new Error("Failed to fetch accounts");
-  return res.json();
-}
-
-export async function fetchJobs(showArchived = false): Promise<JobData[]> {
-  const res = await fetch(`${BASE_URL}/jobs?show_archived=${showArchived}`);
-  if (!res.ok) throw new Error("Failed to fetch jobs");
-  return res.json();
-}
-
-export async function updateJob(jobId: string, data: Partial<JobData>): Promise<JobData> {
-  const res = await fetch(`${BASE_URL}/jobs/${jobId}`, {
-    method: "PATCH",
+function json(method: string, data: unknown): RequestInit {
+  return {
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update job");
-  return res.json();
+  };
 }
-
-export async function deleteJob(jobId: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/jobs/${jobId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete job");
+export function toUTC7(iso: string) {
+  return formatInZone(iso, "Asia/Tomsk");
 }
-
-export async function updateSubJob(subJobId: string, data: {
-  publish_datetime?: string | null;
-  account_names?: string[];
-  banner_name?: string | null;
-}): Promise<SubJobData> {
-  const res = await fetch(`${BASE_URL}/sub_jobs/${subJobId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update sub_job");
-  return res.json();
+export const fetchBackgrounds = () => request<string[]>("/backgrounds");
+export const fetchBanners = () => request<string[]>("/banners");
+export const fetchAccounts = () => request<AccountsResponse>("/accounts");
+export const fetchJobs = (showArchived = false) =>
+  request<JobData[]>(`/jobs?show_archived=${showArchived}`);
+export const updateJob = (id: string, data: Partial<JobData>) =>
+  request<JobData>(`/jobs/${encodeURIComponent(id)}`, json("PATCH", data));
+export async function deleteJob(id: string) {
+  await request(`/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
-
-export async function deleteSubJob(subJobId: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/sub_jobs/${subJobId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete sub_job");
-}
-
-// ── Accounts ─────────────────────────────────────────────────────────────────
-export async function fetchAccountsList(): Promise<AccountRecord[]> {
-  const res = await fetch(`${BASE_URL}/accounts/list`);
-  if (!res.ok) throw new Error("Failed to fetch accounts list");
-  return res.json();
-}
-export async function updateAccount(id: number, data: Partial<AccountRecord>): Promise<AccountRecord> {
-  const res = await fetch(`${BASE_URL}/accounts/${id}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update account");
-  return res.json();
-}
-export async function deleteAccount(id: number): Promise<void> {
-  await fetch(`${BASE_URL}/accounts/${id}`, { method: "DELETE" });
-}
-export async function fetchAccountClips(id: number): Promise<OutData[]> {
-  const res = await fetch(`${BASE_URL}/accounts/${id}/clips`);
-  if (!res.ok) throw new Error("Failed to fetch clips");
-  return res.json();
-}
-export async function fetchAccountScheduled(id: number): Promise<OutData[]> {
-  const res = await fetch(`${BASE_URL}/accounts/${id}/scheduled`);
-  if (!res.ok) throw new Error("Failed to fetch account schedule");
-  return res.json();
-}
-export async function fetchAccountPublished(id: number): Promise<OutData[]> {
-  const res = await fetch(`${BASE_URL}/accounts/${id}/published`);
-  if (!res.ok) throw new Error("Failed to fetch published clips");
-  return res.json();
-}
-
-// ── Banners ───────────────────────────────────────────────────────────────────
-export async function fetchBannersList(): Promise<AssetRecord[]> {
-  const res = await fetch(`${BASE_URL}/banners/list`);
-  if (!res.ok) throw new Error("Failed to fetch banners list");
-  return res.json();
-}
-export async function updateBanner(id: number, data: { name?: string; note?: string }): Promise<AssetRecord> {
-  const res = await fetch(`${BASE_URL}/banners/${id}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update banner");
-  return res.json();
-}
-export async function deleteBanner(id: number): Promise<void> {
-  await fetch(`${BASE_URL}/banners/${id}`, { method: "DELETE" });
-}
-
-// ── Backgrounds ───────────────────────────────────────────────────────────────
-export async function fetchBackgroundsList(): Promise<AssetRecord[]> {
-  const res = await fetch(`${BASE_URL}/backgrounds/list`);
-  if (!res.ok) throw new Error("Failed to fetch backgrounds list");
-  return res.json();
-}
-export async function updateBackground(id: number, data: { name?: string; note?: string }): Promise<AssetRecord> {
-  const res = await fetch(`${BASE_URL}/backgrounds/${id}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update background");
-  return res.json();
-}
-export async function deleteBackground(id: number): Promise<void> {
-  await fetch(`${BASE_URL}/backgrounds/${id}`, { method: "DELETE" });
-}
-
-export async function submitJobs(cards: VideoCardData[]): Promise<{ status: string; job_id: string }[]> {
-  const results = await Promise.all(
-    cards.map((card) =>
-      fetch(`${BASE_URL}/jobs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(card),
-      }).then((r) => r.json())
-    )
+export const updateSubJob = (
+  id: string,
+  data: {
+    publish_datetime?: string | null;
+    account_names?: string[];
+    banner_name?: string | null;
+  },
+) =>
+  request<SubJobData>(
+    `/sub_jobs/${encodeURIComponent(id)}`,
+    json("PATCH", data),
   );
-  return results;
+export async function deleteSubJob(id: string) {
+  await request(`/sub_jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
-
-// ── Asset upload (browser -> MinIO via presigned URL) ────────────────────────
-export async function uploadAsset(kind: "banners" | "backgrounds", name: string, note: string, file: File): Promise<AssetRecord> {
-  const pre = await fetch(`${BASE_URL}/${kind}/presign`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_name: file.name }),
-  });
-  if (!pre.ok) throw new Error("Failed to get upload URL");
-  const { url, bucket, object } = await pre.json();
-
-  const put = await fetch(url, { method: "PUT", body: file });
-  if (!put.ok) throw new Error("Failed to upload file");
-
-  const reg = await fetch(`${BASE_URL}/${kind}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, note: note || null, bucket, object }),
-  });
-  if (!reg.ok) throw new Error("Failed to register file");
-  return reg.json();
+export const fetchAccountsList = () =>
+  request<AccountRecord[]>("/accounts/list");
+export const updateAccount = (id: number, data: Partial<AccountRecord>) =>
+  request<AccountRecord>(`/accounts/${id}`, json("PATCH", data));
+export async function deleteAccount(id: number) {
+  await request(`/accounts/${id}`, { method: "DELETE" });
 }
-
-// ── Channels (monitoring) ────────────────────────────────────────────────────
-export async function fetchChannels(): Promise<Channel[]> {
-  const res = await fetch(`${BASE_URL}/channels`);
-  if (!res.ok) throw new Error("Failed to fetch channels");
-  return res.json();
+export const fetchAccountClips = (id: number) =>
+  request<OutData[]>(`/accounts/${id}/clips`);
+export const fetchAccountScheduled = (id: number) =>
+  request<OutData[]>(`/accounts/${id}/scheduled`);
+export const fetchAccountPublished = (id: number) =>
+  request<OutData[]>(`/accounts/${id}/published`);
+export const fetchBannersList = () => request<AssetRecord[]>("/banners/list");
+export const updateBanner = (
+  id: number,
+  data: { name?: string; note?: string },
+) => request<AssetRecord>(`/banners/${id}`, json("PATCH", data));
+export async function deleteBanner(id: number) {
+  await request(`/banners/${id}`, { method: "DELETE" });
 }
-
-export async function createChannel(data: { name: string; url: string; approve_mode: string; spec: Partial<VideoCardData> }): Promise<Channel> {
-  const res = await fetch(`${BASE_URL}/channels`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? "Failed to create channel");
-  return res.json();
+export const fetchBackgroundsList = () =>
+  request<AssetRecord[]>("/backgrounds/list");
+export const updateBackground = (
+  id: number,
+  data: { name?: string; note?: string },
+) => request<AssetRecord>(`/backgrounds/${id}`, json("PATCH", data));
+export async function deleteBackground(id: number) {
+  await request(`/backgrounds/${id}`, { method: "DELETE" });
 }
-
-export async function updateChannel(id: number, data: Partial<Pick<Channel, "name" | "approve_mode" | "enabled">>): Promise<Channel> {
-  const res = await fetch(`${BASE_URL}/channels/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!res.ok) throw new Error("Failed to update channel");
-  return res.json();
+export async function submitJobs(cards: VideoCardData[]) {
+  return Promise.all(
+    cards.map(async (card) => {
+      try {
+        const result = await request<{ status: string; job_id: string }>(
+          "/jobs",
+          json("POST", card),
+        );
+        return { id: card.id, ok: true as const, ...result };
+      } catch (e) {
+        return {
+          id: card.id,
+          ok: false as const,
+          error: e instanceof Error ? e.message : "Failed to submit job",
+        };
+      }
+    }),
+  );
 }
-
-export async function deleteChannel(id: number): Promise<void> {
-  const res = await fetch(`${BASE_URL}/channels/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete channel");
+export async function uploadAsset(
+  kind: "banners" | "backgrounds",
+  name: string,
+  note: string,
+  file: File,
+): Promise<AssetRecord> {
+  const pre = await request<{ url: string; bucket: string; object: string }>(
+    `/${kind}/presign`,
+    json("POST", { file_name: file.name }),
+  );
+  const put = await fetch(pre.url, { method: "PUT", body: file });
+  if (!put.ok)
+    throw new ApiError(`File upload failed (${put.status})`, put.status);
+  return request(
+    `/${kind}`,
+    json("POST", {
+      name,
+      note: note || null,
+      bucket: pre.bucket,
+      object: pre.object,
+    }),
+  );
 }
-
-// ── Clips / approval ─────────────────────────────────────────────────────────
-export async function fetchClips(approval = ""): Promise<Clip[]> {
-  const res = await fetch(`${BASE_URL}/clips?approval=${approval}`);
-  if (!res.ok) throw new Error("Failed to fetch clips");
-  return res.json();
+export const fetchChannels = () => request<Channel[]>("/channels");
+export const createChannel = (data: {
+  name: string;
+  url: string;
+  approve_mode: string;
+  spec: Partial<VideoCardData>;
+}) => request<Channel>("/channels", json("POST", data));
+export const updateChannel = (
+  id: number,
+  data: Partial<Pick<Channel, "name" | "approve_mode" | "enabled" | "spec">>,
+) => request<Channel>(`/channels/${id}`, json("PATCH", data));
+export async function deleteChannel(id: number) {
+  await request(`/channels/${id}`, { method: "DELETE" });
 }
-
-export async function approveClip(id: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/clips/${id}/approve`, { method: "POST" });
-  if (!res.ok) throw new Error("Failed to approve clip");
+export const fetchClips = (approval = "") =>
+  request<Clip[]>(`/clips?approval=${encodeURIComponent(approval)}`);
+export async function approveClip(id: string, version?: number) {
+  await request(
+    `/clips/${encodeURIComponent(id)}/approve`,
+    json("POST", { expected_version: version }),
+  );
 }
-
-export async function rejectClip(id: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/clips/${id}/reject`, { method: "POST" });
-  if (!res.ok) throw new Error("Failed to reject clip");
+export async function rejectClip(id: string) {
+  await request(`/clips/${encodeURIComponent(id)}/reject`, { method: "POST" });
 }
+export async function fetchClipEditor(id: string): Promise<ClipEditor> {
+  const data = await request<ClipEditor>(
+    `/clips/${encodeURIComponent(id)}/editor`,
+  );
+  return {
+    ...data,
+    title: data.title ?? "",
+    description: data.description ?? "",
+    hashtags: data.hashtags ?? [],
+    cues: data.cues ?? [],
+  };
+}
+export const saveClipEditor = (id: string, data: ClipEditor) =>
+  request<ClipEditor>(
+    `/clips/${encodeURIComponent(id)}/editor`,
+    json("PUT", {
+      expected_version: data.version,
+      start_sec: data.start_sec,
+      end_sec: data.end_sec,
+      title: data.title,
+      description: data.description,
+      visibility: data.visibility ?? "public",
+      hashtags: data.hashtags,
+      cues: data.cues,
+      subtitles_enabled: data.subtitles_enabled,
+    }),
+  );
+export const fetchPublications = (filters: Record<string, string>) =>
+  request<PublicationEvent[]>(`/publications?${new URLSearchParams(filters)}`);
+export const updatePublication = (
+  id: number,
+  data: { version: number; publish_at: string; timezone: string },
+) =>
+  request<PublicationEvent>(
+    `/publications/${id}`,
+    json("PATCH", { ...data, expected_version: data.version }),
+  );
+export const actPublication = (
+  id: number,
+  action: "approve" | "retry" | "cancel" | "publish-now",
+  version: number,
+) =>
+  request<PublicationEvent>(
+    `/publications/${id}/${action}`,
+    json("POST", { expected_version: version }),
+  );
+export const fetchPublicationHistory = (id: number) =>
+  request<PublicationHistory[]>(`/publications/${id}/history`);
+export const connectAccount = (account: AccountRecord) =>
+  request<{ url: string }>(
+    `/accounts/${account.id}/oauth/connect`,
+    json("POST", { expected_version: account.version }),
+  );
+export const checkAccount = (id: number) =>
+  request<AccountRecord>(`/accounts/${id}/oauth/check`, { method: "POST" });
+export const disconnectAccount = (account: AccountRecord) =>
+  request<AccountRecord>(
+    `/accounts/${account.id}/oauth/disconnect`,
+    json("POST", { expected_version: account.version }),
+  );
+export const confirmAccount = (account: AccountRecord) =>
+  request<AccountRecord>(
+    `/accounts/${account.id}/oauth/confirm`,
+    json("POST", {
+      expected_version: account.version,
+      remote_account_id: account.remote_account_id,
+    }),
+  );
+export const retryClipRender = (id: string, version: number) =>
+  request<ClipEditor>(
+    `/clips/${encodeURIComponent(id)}/render`,
+    json("POST", { expected_version: version }),
+  );
+export const restoreClipRevision = (
+  id: string,
+  version: number,
+  revisionID: number,
+) =>
+  request<ClipEditor>(
+    `/clips/${encodeURIComponent(id)}/restore`,
+    json("POST", { expected_version: version, revision_id: revisionID }),
+  );
+export const fetchSubJobTargets = (id: string) =>
+  request<{ version: number; targets: PublicationTarget[] }>(
+    `/sub_jobs/${encodeURIComponent(id)}/targets`,
+  );
+export const saveSubJobTargets = (
+  id: string,
+  version: number,
+  targets: PublicationTarget[],
+) =>
+  request<{ version: number; targets: PublicationTarget[] }>(
+    `/sub_jobs/${encodeURIComponent(id)}/targets`,
+    json("PUT", { expected_version: version, targets }),
+  );

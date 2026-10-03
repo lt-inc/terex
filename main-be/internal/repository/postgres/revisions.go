@@ -1,0 +1,352 @@
+package postgres
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"terex/main-be/internal/domain"
+)
+
+const revisionCols = `id,clip_id,revision_no,spec,render_state,COALESCE(bucket,''),COALESCE(object,''),manifest,approved_at,error,created_at`
+
+func scanRevision(row pgx.Row) (domain.Revision, error) {
+	var r domain.Revision
+	var spec []byte
+	err := row.Scan(&r.ID, &r.ClipID, &r.Version, &spec, &r.RenderState, &r.Bucket, &r.Object, &r.Manifest, &r.ApprovedAt, &r.Error, &r.CreatedAt)
+	if err == nil {
+		err = json.Unmarshal(spec, &r.EditSpec)
+	}
+	return r, mapErr(err)
+}
+
+func (s *Store) InitializeRevision(ctx context.Context, clipID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var id int64
+	err = tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,bucket,object)
+      SELECT clip_id,1,jsonb_build_object('start_sec',start_sec,'end_sec',end_sec,'title',title,'description','','hashtags',hashtags,'cues','[]'::jsonb),bucket,object FROM clips WHERE clip_id=$1
+      ON CONFLICT(clip_id,revision_no) DO UPDATE SET clip_id=EXCLUDED.clip_id RETURNING id`, clipID).Scan(&id)
+	if err != nil {
+		return mapErr(err)
+	}
+	_, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=COALESCE(latest_revision_id,$2) WHERE clip_id=$1`, clipID, id)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) LatestRevision(ctx context.Context, clipID string) (domain.Revision, error) {
+	return scanRevision(s.pool.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=(SELECT latest_revision_id FROM clips WHERE clip_id=$1)`, clipID))
+}
+func (s *Store) RevisionByID(ctx context.Context, id int64) (domain.Revision, error) {
+	return scanRevision(s.pool.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1`, id))
+}
+func (s *Store) SetRevisionManifest(ctx context.Context, id int64, m json.RawMessage) error {
+	_, err := s.pool.Exec(ctx, `UPDATE clip_revisions SET manifest=$2,
+      spec=CASE WHEN revision_no=1 AND approved_at IS NULL AND jsonb_array_length(COALESCE(spec->'cues','[]'::jsonb))=0 THEN
+      spec||jsonb_build_object('cues',COALESCE($2::jsonb->'cues','[]'::jsonb),'subtitles_enabled',COALESCE(($2::jsonb->'options'->>'subtitles')::boolean,FALSE)) ELSE spec END
+      WHERE id=$1`, id, m)
+	return err
+}
+
+func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRequest, manifest json.RawMessage, rerender bool) (domain.Revision, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	defer tx.Rollback(ctx)
+	var currentID int64
+	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&currentID); err != nil {
+		return domain.Revision{}, mapErr(err)
+	}
+	prev, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1`, currentID))
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	if prev.Version != u.Version {
+		return domain.Revision{}, domain.ErrConflict
+	}
+	state, bucket, object := prev.RenderState, prev.Bucket, prev.Object
+	if rerender {
+		state = "pending"
+		bucket = ""
+		object = ""
+	}
+	spec, err := json.Marshal(u.EditSpec)
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	if len(manifest) == 0 {
+		manifest = prev.Manifest
+	}
+	r, err := scanRevision(tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,render_state,bucket,object,manifest)
+      VALUES($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),$7) RETURNING `+revisionCols, clipID, prev.Version+1, spec, state, bucket, object, manifest))
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, r.ID, u.StartSec, u.EndSec, u.Title, u.Hashtags); err != nil {
+		return domain.Revision{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL,updated_at=now() WHERE publication_id IN (SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, clipID); err != nil {
+		return domain.Revision{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,status='on_hold',version=version+1,metadata=$3,cancel_requested=FALSE,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('cancelled','published','needs_attention')`, clipID, r.ID, spec); err != nil {
+		return domain.Revision{}, err
+	}
+	if rerender {
+		attempt := uuid.NewString()
+		if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,now()+interval '2 minutes')`, attempt, r.ID); err != nil {
+			return domain.Revision{}, err
+		}
+		payload, _ := json.Marshal(map[string]any{"kind": "render", "revision_id": r.ID, "attempt_id": attempt, "expected_version": r.Version})
+		if _, err = tx.Exec(ctx, `INSERT INTO publication_outbox(id,kind,payload)VALUES($1,'render_revision',$2)`, uuid.NewString(), payload); err != nil {
+			return domain.Revision{}, err
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.Revision{}, err
+	}
+	return r, nil
+}
+
+func (s *Store) ApproveRevision(ctx context.Context, clipID string, now time.Time) error {
+	return s.ApproveRevisionWithVersion(ctx, clipID, 0, now)
+}
+func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, version int, now time.Time) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var rid int64
+	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
+		return mapErr(err)
+	}
+	r, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1`, rid))
+	if err != nil {
+		return err
+	}
+	if version != 0 && r.Version != version {
+		return domain.ErrConflict
+	}
+	if r.RenderState != "ready" || r.Object == "" {
+		return fmt.Errorf("%w: rendered revision is not ready", domain.ErrConflict)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET approved_at=COALESCE(approved_at,$2) WHERE id=$1`, rid, now); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE clips SET approval='approved',bucket=$2,object=$3 WHERE clip_id=$1`, clipID, r.Bucket, r.Object); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE sub_job_targets t SET start_at=$2 FROM sub_jobs sj LEFT JOIN banners b ON b.id=sj.banner_id,clips c WHERE t.sub_job_id=sj.sub_job_id AND c.clip_id=$1 AND sj.job_id=c.job_id AND COALESCE(b.file_name,'')=c.banner_object AND t.start_at IS NULL`, clipID, now); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO publications(clip_id,sub_job_id,account_id,platform,publish_at,revision_id,timezone,metadata,status)
+      SELECT c.clip_id,sj.sub_job_id,a.id,a.platform,COALESCE(t.start_at,$2)+make_interval(secs=>c.idx*t.interval_seconds),$3,t.timezone,$4,'scheduled'
+      FROM clips c JOIN sub_jobs sj ON sj.job_id=c.job_id LEFT JOIN banners b ON b.id=sj.banner_id
+      JOIN sub_job_targets t ON t.sub_job_id=sj.sub_job_id JOIN accounts a ON a.id=t.account_id
+      WHERE c.clip_id=$1 AND COALESCE(b.file_name,'')=c.banner_object
+      ON CONFLICT(clip_id,account_id) DO UPDATE SET revision_id=EXCLUDED.revision_id,metadata=EXCLUDED.metadata,status='scheduled',version=publications.version+1,error=NULL,next_attempt_at=now()
+      WHERE publications.started_at IS NULL AND publications.status IN ('on_hold','failed','scheduled')`, clipID, now, rid, mustJSON(r.EditSpec)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
+
+func (s *Store) RejectRevision(ctx context.Context, clipID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE clips SET approval='rejected' WHERE clip_id=$1`, clipID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publications SET status=CASE WHEN started_at IS NULL THEN 'cancelled' ELSE 'cancel_pending' END,cancel_requested=TRUE,version=version+1,next_attempt_at=now() WHERE clip_id=$1 AND status NOT IN ('published','cancelled')`, clipID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) FinishRevision(ctx context.Context, id int64, bucket, object, errMsg string) error {
+	state := "ready"
+	if errMsg != "" {
+		state = "failed"
+	}
+	_, err := s.pool.Exec(ctx, `UPDATE clip_revisions SET render_state=$2,bucket=NULLIF($3,''),object=NULLIF($4,''),error=NULLIF($5,'') WHERE id=$1`, id, state, bucket, object, errMsg)
+	return err
+}
+
+func (s *Store) Targets(ctx context.Context, id string) ([]domain.AccountTarget, error) {
+	rows, err := s.pool.Query(ctx, `SELECT account_id,start_at,interval_seconds,timezone,legacy_shared FROM sub_job_targets WHERE sub_job_id=$1 ORDER BY account_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.AccountTarget{}
+	for rows.Next() {
+		var t domain.AccountTarget
+		if err = rows.Scan(&t.AccountID, &t.StartAt, &t.IntervalSeconds, &t.Timezone, &t.LegacyShared); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+func (s *Store) TargetVersion(ctx context.Context, id string) (int, error) {
+	var version int
+	err := s.pool.QueryRow(ctx, `SELECT workflow_version FROM sub_jobs WHERE sub_job_id=$1`, id).Scan(&version)
+	return version, mapErr(err)
+}
+func (s *Store) ReplaceTargets(ctx context.Context, id string, version int, targets []domain.AccountTarget) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var current int
+	if err = tx.QueryRow(ctx, `SELECT workflow_version FROM sub_jobs WHERE sub_job_id=$1 FOR UPDATE`, id).Scan(&current); err != nil {
+		return mapErr(err)
+	}
+	if version != current {
+		return domain.ErrConflict
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM sub_job_targets WHERE sub_job_id=$1`, id); err != nil {
+		return err
+	}
+	ids := []int64{}
+	for _, t := range targets {
+		ids = append(ids, t.AccountID)
+		if _, err = tx.Exec(ctx, `INSERT INTO sub_job_targets(sub_job_id,account_id,start_at,interval_seconds,timezone)VALUES($1,$2,$3,$4,$5)`, id, t.AccountID, t.StartAt, t.IntervalSeconds, t.Timezone); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE sub_job_targets t SET start_at=(SELECT min(r.approved_at) FROM sub_jobs sj JOIN clips c ON c.job_id=sj.job_id LEFT JOIN banners b ON b.id=sj.banner_id JOIN clip_revisions r ON r.id=c.latest_revision_id WHERE sj.sub_job_id=t.sub_job_id AND c.banner_object=COALESCE(b.file_name,'') AND r.approved_at IS NOT NULL) WHERE sub_job_id=$1 AND start_at IS NULL`, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE sub_jobs SET account_ids=$2,workflow_version=workflow_version+1 WHERE sub_job_id=$1`, id, ids); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publications p SET publish_at=COALESCE(t.start_at,p.publish_at)+make_interval(secs=>c.idx*t.interval_seconds),status=CASE WHEN p.status IN ('queued','retry_wait') THEN 'scheduled' ELSE p.status END,version=p.version+1,error=NULL FROM sub_job_targets t,clips c WHERE p.sub_job_id=$1 AND t.sub_job_id=p.sub_job_id AND t.account_id=p.account_id AND c.clip_id=p.clip_id AND p.started_at IS NULL AND p.status NOT IN ('published','cancelled','needs_attention')`, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='cancelled',cancel_requested=TRUE,version=version+1 WHERE sub_job_id=$1 AND started_at IS NULL AND NOT(account_id=ANY($2)) AND status NOT IN ('published','cancelled')`, id, ids); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE sub_job_id=$1 AND started_at IS NULL)`, id); err != nil {
+		return err
+	}
+	// New recipients also receive already-approved clips. Started and legacy work
+	// is preserved by the unique clip/account constraint and the conflict clause.
+	if _, err = tx.Exec(ctx, `INSERT INTO publications(clip_id,sub_job_id,account_id,platform,publish_at,revision_id,timezone,metadata,status)
+      SELECT c.clip_id,sj.sub_job_id,a.id,a.platform,COALESCE(t.start_at,r.approved_at)+make_interval(secs=>c.idx*t.interval_seconds),r.id,t.timezone,r.spec,'scheduled'
+      FROM sub_jobs sj JOIN clips c ON c.job_id=sj.job_id LEFT JOIN banners b ON b.id=sj.banner_id
+      JOIN clip_revisions r ON r.id=c.latest_revision_id JOIN sub_job_targets t ON t.sub_job_id=sj.sub_job_id JOIN accounts a ON a.id=t.account_id
+      WHERE sj.sub_job_id=$1 AND c.banner_object=COALESCE(b.file_name,'') AND r.approved_at IS NOT NULL AND r.render_state='ready'
+      ON CONFLICT(clip_id,account_id) DO NOTHING`, id); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Store) RevisionHistory(ctx context.Context, clipID string) ([]domain.Revision, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE clip_id=$1 ORDER BY revision_no DESC LIMIT 100`, clipID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.Revision{}
+	for rows.Next() {
+		r, e := scanRevision(rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var rid int64
+	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
+		return mapErr(err)
+	}
+	r, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1 FOR UPDATE`, rid))
+	if err != nil {
+		return err
+	}
+	if r.Version != version {
+		return domain.ErrConflict
+	}
+	if r.RenderState == "ready" || r.RenderState == "pending" || r.RenderState == "rendering" {
+		return nil
+	}
+	var source map[string]any
+	if json.Unmarshal(r.Manifest, &source) != nil || source["original"] == nil {
+		return fmt.Errorf("%w: source unavailable", domain.ErrConflict)
+	}
+	attempt := uuid.NewString()
+	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='pending',error=NULL WHERE id=$1`, rid); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,now()+interval '2 minutes')`, attempt, rid); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO publication_outbox(id,kind,payload)VALUES($1,'render_revision',$2)`, uuid.NewString(), mustJSON(map[string]any{"kind": "render", "revision_id": rid, "attempt_id": attempt, "expected_version": r.Version})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int, targetID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var rid int64
+	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
+		return mapErr(err)
+	}
+	current, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1`, rid))
+	if err != nil {
+		return err
+	}
+	if current.Version != version {
+		return domain.ErrConflict
+	}
+	old, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1 AND clip_id=$2`, targetID, clipID))
+	if err != nil {
+		return err
+	}
+	if old.RenderState != "ready" || old.Object == "" {
+		return fmt.Errorf("%w: selected revision has no finished asset", domain.ErrConflict)
+	}
+	spec := mustJSON(old.EditSpec)
+	var nextID int64
+	if err = tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,render_state,bucket,object,manifest)VALUES($1,$2,$3,'ready',$4,$5,$6)RETURNING id`, clipID, version+1, spec, old.Bucket, old.Object, old.Manifest).Scan(&nextID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, nextID, old.StartSec, old.EndSec, old.Title, old.Hashtags); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL)`, clipID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,metadata=$3,status='on_hold',version=version+1,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('published','cancelled','needs_attention')`, clipID, nextID, spec); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

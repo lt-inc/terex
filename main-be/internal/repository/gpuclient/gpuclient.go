@@ -12,6 +12,7 @@ import (
 	gpuv1 "terex/proto/gpu/v1"
 
 	"terex/main-be/internal/domain"
+	"terex/proto/workflow"
 )
 
 type Client struct {
@@ -29,7 +30,8 @@ func New(addr string) (*Client, error) {
 	return &Client{conn: conn, c: gpuv1.NewGpuServiceClient(conn)}, nil
 }
 
-func (c *Client) Close() error { return c.conn.Close() }
+func (c *Client) Close() error                      { return c.conn.Close() }
+func (c *Client) WorkflowGateway() workflow.Gateway { return workflow.NewGatewayClient(c.conn) }
 
 func rpc(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, 15*time.Second)

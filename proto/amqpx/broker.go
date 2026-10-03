@@ -38,9 +38,11 @@ func (c headerCarrier) Keys() []string {
 type Broker struct {
 	url string
 
-	mu   sync.Mutex
-	conn *amqp.Connection
-	pub  *amqp.Channel
+	mu        sync.Mutex
+	conn      *amqp.Connection
+	pub       *amqp.Channel
+	confirmed *amqp.Channel
+	returns   <-chan amqp.Return
 }
 
 func New(url string) *Broker { return &Broker{url: url} }
@@ -115,6 +117,60 @@ func (b *Broker) Publish(ctx context.Context, queue string, msg any) (err error)
 		slog.DebugContext(ctx, "message published", "queue", queue, "bytes", len(body))
 	}
 	return err
+}
+
+// PublishConfirmed is used by the workflow outbox. Delivery is recorded in
+// PostgreSQL only after RabbitMQ confirms the durable message. An ambiguous
+// failure may produce another notification; the coordinator deduplicates it.
+func (b *Broker) PublishConfirmed(ctx context.Context, queue string, value any) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if err = b.connect(); err != nil {
+		return err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.confirmed == nil || b.confirmed.IsClosed() {
+		b.confirmed, err = b.conn.Channel()
+		if err != nil {
+			return err
+		}
+		if err = b.confirmed.Confirm(false); err != nil {
+			_ = b.confirmed.Close()
+			return err
+		}
+		b.returns = b.confirmed.NotifyReturn(make(chan amqp.Return, 1))
+	}
+	// Declare on the same channel so a missing route cannot silently lose work.
+	if _, err = b.confirmed.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+		return err
+	}
+	headers := amqp.Table{}
+	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
+	confirmation, err := b.confirmed.PublishWithDeferredConfirmWithContext(ctx, "", queue, true, false, amqp.Publishing{
+		ContentType: "application/json", DeliveryMode: amqp.Persistent, Headers: headers, Body: body,
+	})
+	if err != nil {
+		return err
+	}
+	acked, err := confirmation.WaitContext(ctx)
+	if err != nil {
+		_ = b.confirmed.Close()
+		return err
+	}
+	if !acked {
+		return fmt.Errorf("broker rejected workflow command")
+	}
+	select {
+	case returned := <-b.returns:
+		return fmt.Errorf("workflow command unroutable: %d %s", returned.ReplyCode, returned.ReplyText)
+	default:
+		return nil
+	}
 }
 
 // Handler returns nil to ack; error -> nack without requeue (dead-letter / drop). Use

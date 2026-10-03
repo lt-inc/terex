@@ -56,21 +56,54 @@ func step(sc domain.PublishSchedule) int {
 }
 
 // subJob builds one sub-job from per-platform account names and schedules; nil when no accounts.
-func (s *Service) subJob(ctx context.Context, jobID string, accounts map[string][]string, schedules map[string]domain.PublishSchedule, bannerName string) (*domain.NewSubJob, error) {
+func (s *Service) subJob(ctx context.Context, jobID string, accounts map[string][]string, schedules map[string]domain.PublishSchedule, bannerName string, targets []domain.AccountTarget) (*domain.NewSubJob, error) {
 	var ids []int64
+	resolved := []domain.AccountTarget{}
+	seen := map[int64]bool{}
+	for _, target := range targets {
+		if target.AccountID <= 0 || seen[target.AccountID] || target.IntervalSeconds < 0 {
+			return nil, fmt.Errorf("%w: invalid account target", domain.ErrInvalid)
+		}
+		if target.Timezone == "" {
+			target.Timezone = "Asia/Tomsk"
+		}
+		if _, err := time.LoadLocation(target.Timezone); err != nil {
+			return nil, fmt.Errorf("%w: invalid timezone", domain.ErrInvalid)
+		}
+		if _, err := s.Accounts.GetAccount(ctx, target.AccountID); err != nil {
+			return nil, err
+		}
+		ids = append(ids, target.AccountID)
+		resolved = append(resolved, target)
+		seen[target.AccountID] = true
+	}
 	for _, platform := range []string{"youtube", "tiktok", "instagram"} {
 		for _, name := range accounts[platform] {
 			id, err := s.Accounts.GetOrCreateAccount(ctx, platform, name)
 			if err != nil {
 				return nil, err
 			}
-			ids = append(ids, id)
+			if !seen[id] && len(targets) == 0 {
+				sc := schedules[platform]
+				n := step(sc)
+				if n < 0 {
+					return nil, fmt.Errorf("%w: invalid publish interval", domain.ErrInvalid)
+				}
+				if str, ok := sc.Step.(string); ok && strings.TrimSpace(str) != "" {
+					if _, err := strconv.Atoi(strings.TrimSpace(str)); err != nil {
+						return nil, fmt.Errorf("%w: use numeric account interval_seconds", domain.ErrInvalid)
+					}
+				}
+				ids = append(ids, id)
+				resolved = append(resolved, domain.AccountTarget{AccountID: id, StartAt: ParseSchedule(sc), IntervalSeconds: n * 60, Timezone: "Asia/Tomsk"})
+				seen[id] = true
+			}
 		}
 	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	sj := &domain.NewSubJob{SubJobID: jobID + "-" + shortID(), AccountIDs: ids}
+	sj := &domain.NewSubJob{SubJobID: jobID + "-" + shortID(), AccountIDs: ids, Targets: resolved}
 	for _, platform := range []string{"youtube", "tiktok", "instagram"} { // first platform with a schedule wins
 		if sc, ok := schedules[platform]; ok {
 			if dt := ParseSchedule(sc); dt != nil {
@@ -125,7 +158,7 @@ func (s *Service) Create(ctx context.Context, card domain.VideoCard, channelID *
 	if len(card.Banners) == 0 {
 		sj, err := s.subJob(ctx, jobID, map[string][]string{
 			"youtube": card.YoutubeAccounts, "tiktok": card.TiktokAccounts, "instagram": card.InstagramAccounts,
-		}, card.Schedules, "")
+		}, card.Schedules, "", card.Targets)
 		if err != nil {
 			return "", err
 		}
@@ -136,7 +169,7 @@ func (s *Service) Create(ctx context.Context, card domain.VideoCard, channelID *
 	for _, b := range card.Banners {
 		sj, err := s.subJob(ctx, jobID, map[string][]string{
 			"youtube": b.YoutubeAccounts, "tiktok": b.TiktokAccounts, "instagram": b.InstagramAccounts,
-		}, b.Schedules, b.BannerName)
+		}, b.Schedules, b.BannerName, b.Targets)
 		if err != nil {
 			return "", err
 		}

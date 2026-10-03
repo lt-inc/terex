@@ -2,6 +2,7 @@ package minio
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/url"
 	"time"
@@ -68,6 +69,34 @@ func (s *Store) Delete(ctx context.Context, ref domain.ObjectRef) error {
 func (s *Store) Put(ctx context.Context, ref domain.ObjectRef, r io.Reader, size int64) error {
 	_, err := s.internal.PutObject(ctx, ref.Bucket, ref.Object, r, size, mc.PutObjectOptions{})
 	return err
+}
+
+// Read is bounded for JSON documents and credentials; videos use streaming FGet.
+func (s *Store) Read(ctx context.Context, ref domain.ObjectRef) ([]byte, error) {
+	o, err := s.internal.GetObject(ctx, ref.Bucket, ref.Object, mc.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer o.Close()
+	b, err := io.ReadAll(io.LimitReader(o, 16*1024*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 16*1024*1024 {
+		return nil, fmt.Errorf("JSON object exceeds 16 MiB")
+	}
+	return b, nil
+}
+
+func (s *Store) Exists(ctx context.Context, ref domain.ObjectRef) (bool, error) {
+	_, err := s.internal.StatObject(ctx, ref.Bucket, ref.Object, mc.StatObjectOptions{})
+	if err == nil {
+		return true, nil
+	}
+	if mc.ToErrorResponse(err).Code == "NoSuchKey" || mc.ToErrorResponse(err).Code == "NoSuchBucket" {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *Store) PresignGet(ctx context.Context, ref domain.ObjectRef, ttl time.Duration) (string, error) {
