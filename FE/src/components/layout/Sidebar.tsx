@@ -58,7 +58,19 @@ const ADMIN_GROUPS = [
     label: "Clips",
     links: [{ href: "/admin/clips", label: "Approval" }],
   },
+  {
+    key: "twitch",
+    label: "Twitch",
+    links: [{ href: "/admin/twitch", label: "Sources & settings" }],
+  },
+  {
+    key: "compilations",
+    label: "Compilations",
+    links: [{ href: "/admin/compilations", label: "Build & review" }],
+  },
 ];
+
+const activePath = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -88,7 +100,7 @@ export default function Sidebar() {
     Object.fromEntries(
       ADMIN_GROUPS.map((g) => [
         g.key,
-        g.links.some((l) => pathname === l.href),
+        g.links.some((l) => activePath(pathname, l.href)),
       ]),
     );
 
@@ -100,7 +112,7 @@ export default function Sidebar() {
     setGroupOpen((prev) => {
       const next = { ...prev };
       for (const g of ADMIN_GROUPS) {
-        if (g.links.some((l) => pathname === l.href)) {
+        if (g.links.some((l) => activePath(pathname, l.href))) {
           next[g.key] = true;
         }
       }
@@ -125,6 +137,7 @@ export default function Sidebar() {
         <div>
           <button
             onClick={() => setAdminOpen((o) => !o)}
+            aria-expanded={adminOpen}
             className="w-full flex items-center gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-widest text-slate-400 hover:text-slate-200 transition-colors"
           >
             <ChevronIcon open={adminOpen} />
@@ -136,13 +149,14 @@ export default function Sidebar() {
               {ADMIN_GROUPS.map((group) => {
                 const isOpen = groupOpen[group.key] ?? false;
                 const isGroupActive = group.links.some(
-                  (l) => pathname === l.href,
+                  (l) => activePath(pathname, l.href),
                 );
                 return (
                   <li key={group.key}>
                     {/* Sub-group header */}
                     <button
                       onClick={() => toggleGroup(group.key)}
+                      aria-expanded={isOpen}
                       className={`w-full flex items-center gap-2 px-5 py-1.5 text-xs font-medium transition-colors ${
                         isGroupActive
                           ? "text-indigo-300"
@@ -160,8 +174,9 @@ export default function Sidebar() {
                           <li key={href}>
                             <Link
                               href={href}
+                              aria-current={activePath(pathname, href) ? "page" : undefined}
                               className={`flex items-center gap-2 px-8 py-1.5 text-sm rounded-md mx-2 transition-colors ${
-                                pathname === href
+                                activePath(pathname, href)
                                   ? "bg-indigo-600 text-white"
                                   : "text-slate-300 hover:bg-slate-700 hover:text-white"
                               }`}

@@ -47,14 +47,22 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 			}
 		}
 	}()
-	media, err := w.Renderer.RenderRevision(ctx, *l.Render)
+	work, err := w.Renderer.MaterializeAssembly(ctx, *l.Render)
+	var media workflow.ObjectRef
+	if err == nil {
+		media, err = w.Renderer.RenderRevision(ctx, work)
+	}
 	if ctx.Err() != nil {
 		cancel()
 		<-done
 		return nil
 	}
 	if err == nil {
-		r, e := w.Coordinator.Complete(ctx, &workflow.CompleteRequest{LeaseRequest: q, Checkpoint: workflow.Checkpoint{State: "rendered"}, Media: media})
+		var source *workflow.SourceManifest
+		if work.Source.Assembly != nil && work.Source.Original != l.Render.Source.Original {
+			source = &work.Source
+		}
+		r, e := w.Coordinator.Complete(ctx, &workflow.CompleteRequest{LeaseRequest: q, Checkpoint: workflow.Checkpoint{State: "rendered"}, Media: media, Source: source})
 		err = e
 		if e == nil && !r.Accepted {
 			err = fmt.Errorf("render lease expired before completion")

@@ -17,3 +17,7 @@ service Gateway {
   rpc Disconnect(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
   rpc EditorContext(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
 }
+service IngestGateway {
+  rpc ReserveUpload(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc VerifyUpload(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+}

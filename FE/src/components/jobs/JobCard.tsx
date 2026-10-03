@@ -6,6 +6,7 @@ import Toggle from "@/components/ui/Toggle";
 import SubJobCard from "@/components/jobs/SubJobCard";
 import { updateJob, deleteJob } from "@/lib/api";
 import type { JobData, SubJobData, AccountsResponse, SliceMode } from "@/types";
+import { jobSourceLabel, jobSourceURL, montageLabel } from "@/lib/job-source";
 
 interface JobCardProps {
   job: JobData;
@@ -38,7 +39,8 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  const [youtubeUrl, setYoutubeUrl] = useState(job.youtube_url);
+  const [youtubeUrl, setYoutubeUrl] = useState(job.youtube_url ?? "");
+  const [actionError, setActionError] = useState("");
   const [trace, setTrace] = useState(job.trace ?? "");
   const [isVertical, setIsVertical] = useState(job.is_vertical);
   const [isSubtitles, setIsSubtitles] = useState(job.is_subtitles);
@@ -50,9 +52,10 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
 
   const locked = LOCKED_STATUSES.has(job.status);
   const canStart = job.status === "pending";
+  const imported = jobSourceLabel(job) !== "YouTube";
 
   function resetEdit() {
-    setYoutubeUrl(job.youtube_url);
+    setYoutubeUrl(job.youtube_url ?? "");
     setTrace(job.trace ?? "");
     setIsVertical(job.is_vertical);
     setIsSubtitles(job.is_subtitles);
@@ -66,9 +69,10 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
 
   async function handleSave() {
     setSaving(true);
+    setActionError("");
     try {
       const updated = await updateJob(job.job_id, {
-        youtube_url: youtubeUrl,
+        ...(!imported ? { youtube_url: youtubeUrl } : {}),
         trace: trace || null,
         is_vertical: isVertical,
         is_subtitles: isSubtitles,
@@ -79,6 +83,8 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
       });
       onUpdated({ ...updated, sub_jobs: job.sub_jobs });
       setEditing(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to save job");
     } finally {
       setSaving(false);
     }
@@ -87,9 +93,12 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
   async function handleStartJob() {
     if (!confirm(`Start job ${job.job_id}? It will be locked for editing.`)) return;
     setStarting(true);
+    setActionError("");
     try {
       const updated = await updateJob(job.job_id, { status: "ready" });
       onUpdated({ ...updated, sub_jobs: job.sub_jobs });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Failed to start job");
     } finally {
       setStarting(false);
     }
@@ -131,7 +140,8 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
           {job.is_archived && (
             <span className="text-xs font-medium px-2 py-0.5 rounded shrink-0 bg-slate-700 text-slate-400">archived</span>
           )}
-          <span className="text-sm text-slate-400 truncate">{job.youtube_url}</span>
+          <span className="text-xs text-indigo-300 shrink-0">{jobSourceLabel(job)}</span>
+          <span className="text-sm text-slate-400 truncate">{jobSourceURL(job) || job.source_id || "—"}</span>
           <span className="text-xs text-slate-500 ml-auto shrink-0">{job.sub_jobs.length} sub</span>
         </button>
         {canStart && (
@@ -154,7 +164,9 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
           {!editing ? (
             <>
               <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
-                <Row label="YouTube URL" value={job.youtube_url || "—"} />
+                <Row label="Source" value={jobSourceLabel(job)} />
+                <Row label="Source URL" value={jobSourceURL(job) || "—"} />
+                {job.source_id && <Row label="Source ID" value={job.source_id} />}
                 <Row label="Status" value={job.status} />
                 <span className="text-slate-500">Trace</span>
                 {job.trace ? (() => {
@@ -163,7 +175,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
                   return <a href={url} target="_blank" rel="noopener noreferrer" className="text-slate-200 break-all hover:text-indigo-400 transition-colors">{job.trace}</a>;
                 })() : <span className="text-slate-200">—</span>}
                 <Row label="Background" value={job.background_name ?? "—"} />
-                <Row label="Montage" value={job.slice_mode === "highlights" ? "Highlights" : "Full"} />
+                <Row label="Montage" value={montageLabel(job.slice_mode)} />
                 <Row label="Publish" value={job.approve_mode === "auto_approve" ? "Auto-approve" : "By approve"} />
                 {job.slice_mode === "full" && <Row label="Min clip duration" value={`${job.min_video_duration ?? 60}s`} />}
                 <Row label="Created" value={job.create_datetime ? toUTC7(job.create_datetime) + " UTC+7" : "—"} />
@@ -189,11 +201,11 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
             </>
           ) : (
             <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
+              {!imported && <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-400">YouTube URL</label>
                 <input type="text" value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)}
                   className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              </div>
+              </div>}
               <div className="flex flex-col gap-1">
                 <label className="text-xs text-slate-400">Trace</label>
                 <input type="text" value={trace} onChange={(e) => setTrace(e.target.value)}
@@ -208,15 +220,15 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
               )}
               <div className="flex flex-col gap-2">
                 <Toggle label="Make vertical?" checked={isVertical} onChange={setIsVertical} />
-                <Toggle label="Add subtitles?" checked={isSubtitles} onChange={setIsSubtitles} />
-                <div className="flex items-center gap-3">
+                {!imported && <Toggle label="Add subtitles?" checked={isSubtitles} onChange={setIsSubtitles} />}
+                {!imported && <div className="flex items-center gap-3">
                   <span className="text-sm text-slate-300 flex-1">Montage mode</span>
                   <select value={sliceMode} onChange={(e) => setSliceMode(e.target.value as SliceMode)}
                     className="bg-slate-700 border border-slate-600 rounded-md px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                     <option value="highlights">Highlights only</option>
                     <option value="full">Full video (by intervals)</option>
                   </select>
-                </div>
+                </div>}
                 <Toggle label="Add background?" checked={isBackground} onChange={setIsBackground} />
                 <Toggle label="Circle?" checked={isCircle} onChange={setIsCircle} />
               </div>
@@ -262,6 +274,7 @@ export default function JobCard({ job, accounts, bannerOptions, backgroundOption
           )}
         </div>
       )}
+      {actionError && <p role="alert" className="px-5 pb-3 text-sm text-red-400">{actionError}</p>}
     </div>
   );
 }

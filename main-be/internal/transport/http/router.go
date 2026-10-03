@@ -16,15 +16,19 @@ import (
 	"terex/main-be/internal/service/jobs"
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
+	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/workflow"
 )
 
 type API struct {
-	Jobs     *jobs.Service
-	Assets   *assets.Service
-	Publish  *publish.Manager
-	Monitor  *monitor.Service
-	Workflow *workflow.Service
+	Jobs      *jobs.Service
+	Assets    *assets.Service
+	Publish   *publish.Manager
+	Monitor   *monitor.Service
+	Workflow  *workflow.Service
+	Twitch    *twitchservice.Service
+	Auth      *OperatorAuth
+	Collector *CollectorProxy
 }
 
 func (a *API) Router() http.Handler {
@@ -32,6 +36,29 @@ func (a *API) Router() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(a.Auth.Protect)
+		if a.Twitch != nil {
+			r.Get("/twitch/settings", a.twitchSettings)
+			r.Put("/twitch/settings", a.saveTwitchSettings)
+			r.Get("/twitch/channels", a.Collector.ServeHTTP)
+			r.Post("/twitch/channels", a.Collector.ServeHTTP)
+			r.Put("/twitch/channels", a.Collector.ServeHTTP)
+			r.Patch("/twitch/channels/{id}", a.Collector.ServeHTTP)
+			r.Delete("/twitch/channels/{id}", a.Collector.ServeHTTP)
+			r.Get("/twitch/clips", a.Collector.ServeHTTP)
+			r.Get("/twitch/status", a.Collector.ServeHTTP)
+			r.Post("/twitch/check", a.Collector.ServeHTTP)
+			r.Get("/imports", a.listImports)
+			r.Post("/imports", a.reserveImport)
+			r.Get("/imports/{id}", a.getImport)
+			r.Patch("/imports/{id}", a.patchImport)
+			r.Post("/imports/{id}/complete", a.completeImport)
+			r.Get("/compilations", a.compilations)
+			r.Post("/compilations", a.createCompilation)
+			r.Post("/compilations/auto", a.autoCompilation)
+			r.Get("/compilations/{id}", a.getCompilation)
+			r.Put("/compilations/{id}", a.updateCompilation)
+		}
 		// jobs
 		r.Get("/jobs", a.listJobs)
 		r.Post("/jobs", a.createJob)

@@ -21,6 +21,7 @@ jobs:
         ports: ['5672:5672']
     env:
       TEST_DATABASE_URL: postgres://postgres:workflow_test@localhost:5432/workflow_test?sslmode=disable
+      COLLECTOR_TEST_DATABASE_URL: postgres://postgres:workflow_test@localhost:5432/workflow_test?sslmode=disable
       TEST_AMQP_URL: amqp://guest:guest@localhost:5672/
       CGO_ENABLED: '0'
     steps:
@@ -29,12 +30,14 @@ jobs:
         with:
           go-version: '1.26.0'
           cache-dependency-path: '**/go.sum'
-      - run: go test ./proto/... ./main-be/... ./gpu-be/...
+      - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/...
+      - name: Build pinned collector image
+        run: docker build -f twitch-collector/Dockerfile -t terex-twitch-collector:ci .
       - name: Media smoke with runtime media packages
         run: |
           go test -c -o /tmp/media-smoke ./gpu-be/internal/repository/ffmpeg
           docker build -f docker/Dockerfile.media-smoke -t terex-media-smoke:ci .
-          docker run --rm -e MEDIA_SMOKE=1 -v /tmp/media-smoke:/smoke/test:ro terex-media-smoke:ci /smoke/test -test.run TestMediaSmoke -test.v
+          docker run --rm -e MEDIA_SMOKE=1 -v /tmp/media-smoke:/smoke/test:ro terex-media-smoke:ci /smoke/test -test.run 'Test.*MediaSmoke' -test.v
   frontend:
     runs-on: ubuntu-22.04
     defaults:

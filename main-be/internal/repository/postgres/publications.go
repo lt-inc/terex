@@ -51,6 +51,9 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	p, err := scanPublication(tx.QueryRow(ctx, `SELECT `+publicationCols+` FROM publications p JOIN accounts a ON a.id=p.account_id WHERE p.id=$1 FOR UPDATE OF p`, id))
 	if err != nil {
 		return err
@@ -93,6 +96,9 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	if err = insertEvent(ctx, tx, id, "", "edited", state, map[string]any{"requires_reapproval": state == "on_hold"}); err != nil {
 		return err
 	}
+	if err = enforceTwitchCaps(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 func (s *Store) ActPublication(ctx context.Context, id int64, action string, version int, now time.Time) error {
@@ -101,6 +107,9 @@ func (s *Store) ActPublication(ctx context.Context, id int64, action string, ver
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	p, err := scanPublication(tx.QueryRow(ctx, `SELECT `+publicationCols+` FROM publications p JOIN accounts a ON a.id=p.account_id WHERE p.id=$1 FOR UPDATE OF p`, id))
 	if err != nil {
 		return err
@@ -113,6 +122,9 @@ func (s *Store) ActPublication(ctx context.Context, id int64, action string, ver
 	at := p.PublishAt
 	switch action {
 	case "approve":
+		if err = requireTwitchSources(ctx, tx, p.ClipID, p.RevisionID); err != nil {
+			return err
+		}
 		if p.Status != "on_hold" && p.Status != "scheduled" && p.Status != "needs_attention" {
 			return domain.ErrConflict
 		}
@@ -175,6 +187,11 @@ func (s *Store) ActPublication(ctx context.Context, id int64, action string, ver
 	if err = insertEvent(ctx, tx, id, "", action, state, map[string]any{"publish_at": at}); err != nil {
 		return err
 	}
+	if action != "cancel" {
+		if err = enforceTwitchCaps(ctx, tx); err != nil {
+			return err
+		}
+	}
 	return tx.Commit(ctx)
 }
 func insertEvent(ctx context.Context, tx pgx.Tx, id int64, attempt, kind, state string, detail any) error {
@@ -204,6 +221,9 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='blocked',error=CASE WHEN p.platform<>'youtube' THEN 'Publishing for this platform is not implemented' ELSE 'Account OAuth connection is required' END FROM accounts a WHERE a.id=p.account_id AND p.status IN ('scheduled','retry_wait') AND p.publish_at<=$1 AND (p.platform<>'youtube' OR a.connection_state<>'connected')`, now); err != nil {
 		return err
 	}
@@ -243,6 +263,11 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	for _, d := range ds {
+		if ok, e := twitchRuntimeCapacity(ctx, tx, d.id, now); e != nil {
+			return e
+		} else if !ok {
+			continue
+		}
 		attempt := uuid.NewString()
 		_, err = tx.Exec(ctx, `INSERT INTO publication_attempts(id,publication_id,publication_version,phase,lease_until,checkpoint)
         VALUES($1,$2,$3,$4,$5,COALESCE((SELECT checkpoint FROM publication_attempts WHERE publication_id=$2 ORDER BY created_at DESC LIMIT 1),'{}'::jsonb))`, attempt, d.id, d.version, d.state, now.Add(2*time.Minute))

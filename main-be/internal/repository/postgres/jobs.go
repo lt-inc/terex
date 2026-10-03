@@ -48,14 +48,16 @@ func (s *Store) CreateJob(ctx context.Context, j domain.NewJob) error {
 	return tx.Commit(ctx)
 }
 
-const jobCols = `j.job_id, j.channel_id, j.youtube_url, j.is_vertical, j.is_subtitles, j.slice_mode, j.min_video_duration,
-	j.background_id, bg.name, j.is_circle, j.approve_mode, j.status, j.fail_place, j.trace, j.is_archived, j.created_at, j.updated_at`
+const jobCols = `j.job_id, j.channel_id, COALESCE(j.youtube_url,''), j.is_vertical, j.is_subtitles, j.slice_mode, j.min_video_duration,
+	j.background_id, bg.name, j.is_circle, j.approve_mode, j.status, j.fail_place, j.trace, j.is_archived, j.created_at, j.updated_at,
+	j.source_kind,j.source_url,j.source_id,j.output_format`
 
 func scanJob(r pgx.Row) (domain.Job, error) {
 	var j domain.Job
 	var created, updated time.Time
 	err := r.Scan(&j.JobID, &j.ChannelID, &j.YoutubeURL, &j.IsVertical, &j.IsSubtitles, &j.SliceMode, &j.MinVideoDuration,
-		&j.BackgroundID, &j.BackgroundName, &j.IsCircle, &j.ApproveMode, &j.Status, &j.FailPlace, &j.Trace, &j.IsArchived, &created, &updated)
+		&j.BackgroundID, &j.BackgroundName, &j.IsCircle, &j.ApproveMode, &j.Status, &j.FailPlace, &j.Trace, &j.IsArchived, &created, &updated,
+		&j.SourceKind, &j.SourceURL, &j.SourceID, &j.OutputFormat)
 	j.IsBackground = j.BackgroundID != nil
 	j.CreateDatetime, j.LastChange = &created, &updated
 	j.SubJobs = []domain.SubJob{}
