@@ -6,7 +6,7 @@ import (
 	"terex/main-be/internal/domain"
 )
 
-const accountCols = "id, platform, name, url, note, bucket, file_name"
+const accountCols = "id, platform, name, url, note, bucket, file_name, connection_state,remote_account_id,connection_error,connection_checked_at,connection_scopes,credential_expires_at,connection_version,credential_ref->>'display_name'"
 
 func (s *Store) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	rows, err := s.pool.Query(ctx, "SELECT "+accountCols+" FROM accounts ORDER BY id")
@@ -17,7 +17,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 	out := []domain.Account{}
 	for rows.Next() {
 		var a domain.Account
-		if err := rows.Scan(&a.ID, &a.Platform, &a.Name, &a.URL, &a.Note, &a.Bucket, &a.FileName); err != nil {
+		if err := rows.Scan(&a.ID, &a.Platform, &a.Name, &a.URL, &a.Note, &a.Bucket, &a.FileName, &a.ConnectionState, &a.RemoteAccountID, &a.ConnectionError, &a.ConnectionCheckedAt, &a.ConnectionScopes, &a.CredentialExpiresAt, &a.ConnectionVersion, &a.RemoteAccountName); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -28,7 +28,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]domain.Account, error) {
 func (s *Store) GetAccount(ctx context.Context, id int64) (domain.Account, error) {
 	var a domain.Account
 	err := s.pool.QueryRow(ctx, "SELECT "+accountCols+" FROM accounts WHERE id=$1", id).
-		Scan(&a.ID, &a.Platform, &a.Name, &a.URL, &a.Note, &a.Bucket, &a.FileName)
+		Scan(&a.ID, &a.Platform, &a.Name, &a.URL, &a.Note, &a.Bucket, &a.FileName, &a.ConnectionState, &a.RemoteAccountID, &a.ConnectionError, &a.ConnectionCheckedAt, &a.ConnectionScopes, &a.CredentialExpiresAt, &a.ConnectionVersion, &a.RemoteAccountName)
 	return a, mapErr(err)
 }
 

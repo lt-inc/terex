@@ -1,5 +1,5 @@
-// Package publisher is a stub: it acknowledges every publish request without posting anywhere.
-// A real implementation (YouTube, TikTok, ...) can replace Stub behind the Publisher interface.
+// Package publisher preserves the legacy queue as a manual workflow. Real API
+// publications use the fenced workflow publisher, never legacy cookie files.
 package publisher
 
 import (
@@ -12,10 +12,10 @@ type Publisher interface {
 	Publish(ctx context.Context, req domain.PublishClip) (domain.PublishResult, error)
 }
 
-type Stub struct{}
+type Manual struct{}
 
-func (Stub) Publish(_ context.Context, req domain.PublishClip) (domain.PublishResult, error) {
-	return domain.PublishResult{ClipID: req.ClipID, AccountID: req.AccountID, Status: "scheduled", UploadID: "stub-" + req.ClipID}, nil
+func (Manual) Publish(_ context.Context, req domain.PublishClip) (domain.PublishResult, error) {
+	return domain.PublishResult{ClipID: req.ClipID, AccountID: req.AccountID, Status: "manual_required", Error: "legacy account requires manual publication or Google OAuth connection"}, nil
 }
 
 type Service struct {

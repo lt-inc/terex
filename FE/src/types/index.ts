@@ -16,6 +16,7 @@ export interface BannerConfig {
   tiktokAccounts: string[];
   instagramAccounts: string[];
   schedules: Partial<Record<Platform, PublishSchedule>>;
+  targets?: PublicationTarget[];
 }
 
 export interface VideoCardData {
@@ -35,6 +36,7 @@ export interface VideoCardData {
   instagramAccounts: string[];
   schedules: Partial<Record<Platform, PublishSchedule>>;
   banners: BannerConfig[];
+  targets?: PublicationTarget[];
 }
 
 export interface AccountsResponse {
@@ -61,12 +63,18 @@ export interface AssetCardData {
 
 export interface AccountRecord {
   id: number;
+  version?: number;
   platform: string;
   name: string;
   url: string | null;
   note: string | null;
   bucket: string | null;
   file_name: string | null;
+  connection_state?: string;
+  remote_account_id?: string;
+  remote_account_name?: string;
+  connection_error?: string;
+  last_checked_at?: string | null;
 }
 
 export interface AssetRecord {
@@ -97,6 +105,7 @@ export interface OutData {
 
 export interface SubJobData {
   sub_job_id: string;
+  version?: number;
   publish_datetime: string | null;
   status: string;
   fail_place: string;
@@ -153,4 +162,86 @@ export interface Clip {
   approval: "pending" | "approved" | "rejected";
   created_at: string;
   preview_url?: string;
+  description?: string;
+  current_revision?: number;
+  render_state?: string;
+}
+
+export interface PublicationTarget {
+  account_id: number;
+  start_at?: string | null;
+  interval_seconds: number;
+  timezone: string;
+}
+
+export interface PublicationEvent {
+  id: number;
+  clip_id: string;
+  account_id: number;
+  account_name: string;
+  platform: string;
+  publish_at: string;
+  published_at?: string | null;
+  state: string;
+  version: number;
+  revision_id?: number;
+  started_at?: string | null;
+  uploaded_at?: string | null;
+  processed_at?: string | null;
+  cancel_requested?: boolean;
+  title: string;
+  description?: string;
+  hashtags?: string[];
+  upload_id?: string;
+  external_url?: string;
+  error?: string;
+  legacy?: boolean;
+  history?: PublicationHistory[];
+}
+
+export interface PublicationHistory {
+	attempt_id?: string;
+  id: string;
+  created_at: string;
+  kind: string;
+  state: string;
+  detail?: unknown;
+}
+
+export interface SubtitleCue {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+}
+export interface ClipEditor {
+	visibility?: "public" | "unlisted" | "private";
+  clip_id: string;
+  version: number;
+  start_sec: number;
+  end_sec: number;
+  title: string;
+  description: string;
+  hashtags: string[];
+  cues: SubtitleCue[];
+  subtitles_enabled: boolean;
+  source_url?: string;
+  source_available?: boolean;
+  source_error?: string;
+  source_duration_sec?: number;
+  rendered_preview_url?: string;
+  revision_id: number;
+  approved_revision_id?: number | null;
+  approved_at?: string | null;
+  error?: string | null;
+  render_state: string;
+  render_error?: string;
+  approval: string;
+  approved_revision?: number | null;
+  revisions?: {
+    revision_id: number;
+    version: number;
+    render_state: string;
+    created_at?: string;
+  }[];
 }

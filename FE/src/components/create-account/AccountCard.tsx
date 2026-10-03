@@ -1,11 +1,10 @@
 "use client";
 
-import FileDropzone from "@/components/ui/FileDropzone";
 import type { AccountCardData } from "@/types";
 
 const PLATFORMS = [
-  { value: "youtube",   label: "YouTube" },
-  { value: "tiktok",    label: "TikTok" },
+  { value: "youtube", label: "YouTube" },
+  { value: "tiktok", label: "TikTok" },
   { value: "instagram", label: "Instagram" },
 ];
 
@@ -15,8 +14,15 @@ interface AccountCardProps {
   onDelete: () => void;
 }
 
-export default function AccountCard({ card, onChange, onDelete }: AccountCardProps) {
-  function update<K extends keyof AccountCardData>(key: K, value: AccountCardData[K]) {
+export default function AccountCard({
+  card,
+  onChange,
+  onDelete,
+}: AccountCardProps) {
+  function update<K extends keyof AccountCardData>(
+    key: K,
+    value: AccountCardData[K],
+  ) {
     onChange({ ...card, [key]: value });
   }
 
@@ -39,7 +45,9 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
         >
           <option value="">— select platform —</option>
           {PLATFORMS.map((p) => (
-            <option key={p.value} value={p.value}>{p.label}</option>
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
           ))}
         </select>
       </div>
@@ -70,11 +78,10 @@ export default function AccountCard({ card, onChange, onDelete }: AccountCardPro
 
       {/* Auth file */}
       <div className="flex flex-col gap-2">
-        <label className="text-xs text-slate-400">Auth file</label>
-        <FileDropzone
-          file={card.authFile}
-          onChange={(f) => update("authFile", f)}
-        />
+        <p className="text-xs text-slate-400">
+          Save the account, then use Connect with Google on the Accounts page.
+          Connections for other providers will be available later.
+        </p>
       </div>
 
       {/* Note */}

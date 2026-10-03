@@ -26,6 +26,9 @@ func ttl(sec int32) time.Duration {
 }
 
 func (s *Service) PresignGet(ctx context.Context, ref domain.ObjectRef, ttlSec int32) (string, error) {
+	if ref.Bucket == domain.BucketCredentials {
+		return "", fmt.Errorf("OAuth credentials are available only through the connection gateway")
+	}
 	return s.Store.PresignGet(ctx, ref, ttl(ttlSec))
 }
 
@@ -54,5 +57,8 @@ func (s *Service) PutAuthFile(ctx context.Context, platform, account string, con
 }
 
 func (s *Service) Delete(ctx context.Context, ref domain.ObjectRef) error {
+	if ref.Bucket == domain.BucketCredentials {
+		return fmt.Errorf("OAuth credentials must be disconnected through the connection gateway")
+	}
 	return s.Store.Delete(ctx, ref)
 }

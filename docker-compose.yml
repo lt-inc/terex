@@ -37,6 +37,9 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/main?sslmode=disable
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       GPU_GRPC_ADDR: gpu-be:9090
+      WORKFLOW_GRPC_ADDR: ":9091"
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3000}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
       HTTP_ADDR: ":8000"
       MONITOR_INTERVAL: 1m
       PUBLISH_INTERVAL: 15s
@@ -86,6 +89,12 @@ services:
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       GRPC_ADDR: ":9090"
+      MAIN_COORDINATOR_ADDR: main-be:9091
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
+      PUBLISHER_WORKERS: ${PUBLISHER_WORKERS:-2}
+      RENDER_REVISION_WORKERS: ${RENDER_REVISION_WORKERS:-1}
       S3_ENDPOINT: minio:9000
       S3_PUBLIC_ENDPOINT: localhost:9000
       S3_ACCESS_KEY: minioadmin

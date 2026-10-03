@@ -1,0 +1,19 @@
+syntax = "proto3";
+package terex.workflow.v1;
+import "google/protobuf/wrappers.proto";
+// Payloads are JSON objects defined in types.go, carried by a standard protobuf
+// message. Versioned service/queue names allow a future incompatible migration.
+service Coordinator {
+  rpc Claim(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc Renew(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc Checkpoint(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc Complete(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc Fail(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+}
+service Gateway {
+  rpc OAuthURL(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc OAuthExchange(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc CheckConnection(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc Disconnect(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc EditorContext(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+}

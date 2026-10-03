@@ -29,6 +29,21 @@ func (s *Store) CreateJob(ctx context.Context, j domain.NewJob) error {
 			VALUES ($1,$2,$3,$4,$5,$6)`, sj.SubJobID, j.JobID, sj.BannerID, sj.AccountIDs, sj.PublishStep, sj.PublishDatetime); err != nil {
 			return err
 		}
+		targets := sj.Targets
+		if targets == nil {
+			for _, aid := range sj.AccountIDs {
+				targets = append(targets, domain.AccountTarget{AccountID: aid, StartAt: sj.PublishDatetime, IntervalSeconds: sj.PublishStep * 60, Timezone: "Asia/Tomsk"})
+			}
+		}
+		for _, target := range targets {
+			zone := target.Timezone
+			if zone == "" {
+				zone = "Asia/Tomsk"
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO sub_job_targets(sub_job_id,account_id,start_at,interval_seconds,timezone)VALUES($1,$2,$3,$4,$5)`, sj.SubJobID, target.AccountID, target.StartAt, target.IntervalSeconds, zone); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -110,7 +125,7 @@ func (s *Store) hydrate(ctx context.Context, jobs []domain.Job) error {
 	rows.Close()
 
 	rows, err = s.pool.Query(ctx, `SELECT sj.sub_job_id, sj.job_id, sj.banner_id, b.name, sj.account_ids, sj.publish_step,
-		sj.publish_datetime, sj.status, sj.fail_place FROM sub_jobs sj LEFT JOIN banners b ON b.id=sj.banner_id
+		sj.publish_datetime, sj.status, sj.fail_place,sj.workflow_version FROM sub_jobs sj LEFT JOIN banners b ON b.id=sj.banner_id
 		WHERE sj.job_id = ANY($1) ORDER BY sj.sub_job_id`, ids)
 	if err != nil {
 		return err
@@ -119,7 +134,7 @@ func (s *Store) hydrate(ctx context.Context, jobs []domain.Job) error {
 	for rows.Next() {
 		var sj domain.SubJob
 		if err := rows.Scan(&sj.SubJobID, &sj.JobID, &sj.BannerID, &sj.BannerName, &sj.AccountIDs, &sj.PublishStep,
-			&sj.PublishDatetime, &sj.Status, &sj.FailPlace); err != nil {
+			&sj.PublishDatetime, &sj.Status, &sj.FailPlace, &sj.Version); err != nil {
 			rows.Close()
 			return err
 		}
@@ -136,6 +151,16 @@ func (s *Store) hydrate(ctx context.Context, jobs []domain.Job) error {
 		subIdx[sj.SubJobID] = [2]int{ji, len(jobs[ji].SubJobs) - 1}
 	}
 	rows.Close()
+
+	for ji := range jobs {
+		for si := range jobs[ji].SubJobs {
+			targets, e := s.Targets(ctx, jobs[ji].SubJobs[si].SubJobID)
+			if e != nil {
+				return e
+			}
+			jobs[ji].SubJobs[si].Targets = targets
+		}
+	}
 
 	prows, err := s.pool.Query(ctx, pubSelect+` WHERE c.job_id = ANY($1) ORDER BY p.id`, ids)
 	if err != nil {
@@ -169,8 +194,22 @@ func (s *Store) UpdateJob(ctx context.Context, id string, u domain.JobUpdate) er
 }
 
 func (s *Store) DeleteJob(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, "DELETE FROM jobs WHERE job_id=$1", id)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE publications SET status=CASE WHEN started_at IS NULL THEN 'cancelled' ELSE 'cancel_pending' END,cancel_requested=TRUE,version=version+1,next_attempt_at=now() WHERE clip_id IN (SELECT clip_id FROM clips WHERE job_id=$1) AND status NOT IN ('published','cancelled')`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE jobs SET is_archived=TRUE,updated_at=now() WHERE job_id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) UpdateSubJob(ctx context.Context, id string, u domain.SubJobUpdate, accountIDs []int64, bannerID *int64) error {
@@ -181,8 +220,25 @@ func (s *Store) UpdateSubJob(ctx context.Context, id string, u domain.SubJobUpda
 }
 
 func (s *Store) DeleteSubJob(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, "DELETE FROM sub_jobs WHERE sub_job_id=$1", id)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `UPDATE publications SET status=CASE WHEN started_at IS NULL THEN 'cancelled' ELSE 'cancel_pending' END,cancel_requested=TRUE,version=version+1,next_attempt_at=now() WHERE sub_job_id=$1 AND status NOT IN ('published','cancelled')`, id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL WHERE publication_id IN (SELECT id FROM publications WHERE sub_job_id=$1) AND status='active'`, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM sub_jobs WHERE sub_job_id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) SetJobStatus(ctx context.Context, id, status, failPlace string) error {

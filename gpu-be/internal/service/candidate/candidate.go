@@ -90,6 +90,13 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 	if err = put("intervals.json", raw); err != nil {
 		return err
 	}
+	structured, err := json.Marshal(segs)
+	if err != nil {
+		return err
+	}
+	if err = put("transcript.json", structured); err != nil {
+		return err
+	}
 
 	s.Rep.Report(ctx, msg.JobID, stage, "done", "")
 	return s.Broker.Publish(ctx, domain.QueueRender, msg)

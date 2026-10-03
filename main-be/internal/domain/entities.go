@@ -25,13 +25,21 @@ const (
 )
 
 type Account struct {
-	ID       int64   `json:"id"`
-	Platform string  `json:"platform"`
-	Name     string  `json:"name"`
-	URL      *string `json:"url"`
-	Note     *string `json:"note"`
-	Bucket   *string `json:"bucket"`
-	FileName *string `json:"file_name"`
+	ID                  int64      `json:"id"`
+	Platform            string     `json:"platform"`
+	Name                string     `json:"name"`
+	URL                 *string    `json:"url"`
+	Note                *string    `json:"note"`
+	Bucket              *string    `json:"bucket"`
+	FileName            *string    `json:"file_name"`
+	ConnectionState     string     `json:"connection_state"`
+	RemoteAccountID     *string    `json:"remote_account_id"`
+	RemoteAccountName   *string    `json:"remote_account_name"`
+	ConnectionError     *string    `json:"connection_error"`
+	ConnectionCheckedAt *time.Time `json:"last_checked_at"`
+	ConnectionScopes    []string   `json:"scopes"`
+	CredentialExpiresAt *time.Time `json:"expires_at"`
+	ConnectionVersion   int        `json:"version"`
 }
 
 type AccountUpdate struct {
@@ -70,6 +78,7 @@ type BannerConfig struct {
 	TiktokAccounts    []string                   `json:"tiktokAccounts"`
 	InstagramAccounts []string                   `json:"instagramAccounts"`
 	Schedules         map[string]PublishSchedule `json:"schedules"`
+	Targets           []AccountTarget            `json:"targets"`
 }
 
 type VideoCard struct {
@@ -88,6 +97,7 @@ type VideoCard struct {
 	InstagramAccounts []string                   `json:"instagramAccounts"`
 	Schedules         map[string]PublishSchedule `json:"schedules"`
 	Banners           []BannerConfig             `json:"banners"`
+	Targets           []AccountTarget            `json:"targets"`
 }
 
 // ── Job views ────────────────────────────────────────────────────────────────
@@ -112,18 +122,20 @@ type Publication struct {
 }
 
 type SubJob struct {
-	SubJobID        string        `json:"sub_job_id"`
-	JobID           string        `json:"-"`
-	PublishDatetime *time.Time    `json:"publish_datetime"`
-	PublishStep     int           `json:"publish_step"`
-	Status          string        `json:"status"`
-	FailPlace       string        `json:"fail_place"`
-	AccountIDs      []int64       `json:"account_ids"`
-	AccountNames    []string      `json:"account_names"`
-	IsAddBanner     bool          `json:"is_add_banner"`
-	BannerID        *int64        `json:"banner_id"`
-	BannerName      *string       `json:"banner_name"`
-	Outs            []Publication `json:"outs"`
+	Version         int             `json:"version"`
+	SubJobID        string          `json:"sub_job_id"`
+	JobID           string          `json:"-"`
+	PublishDatetime *time.Time      `json:"publish_datetime"`
+	PublishStep     int             `json:"publish_step"`
+	Status          string          `json:"status"`
+	FailPlace       string          `json:"fail_place"`
+	AccountIDs      []int64         `json:"account_ids"`
+	AccountNames    []string        `json:"account_names"`
+	IsAddBanner     bool            `json:"is_add_banner"`
+	BannerID        *int64          `json:"banner_id"`
+	BannerName      *string         `json:"banner_name"`
+	Outs            []Publication   `json:"outs"`
+	Targets         []AccountTarget `json:"targets"`
 }
 
 type Job struct {
@@ -191,6 +203,7 @@ type NewSubJob struct {
 	AccountIDs      []int64
 	PublishStep     int
 	PublishDatetime *time.Time
+	Targets         []AccountTarget
 }
 
 // ── Clips ────────────────────────────────────────────────────────────────────

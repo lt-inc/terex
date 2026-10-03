@@ -16,13 +16,15 @@ import (
 	"terex/main-be/internal/service/jobs"
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
+	"terex/main-be/internal/service/workflow"
 )
 
 type API struct {
-	Jobs    *jobs.Service
-	Assets  *assets.Service
-	Publish *publish.Manager
-	Monitor *monitor.Service
+	Jobs     *jobs.Service
+	Assets   *assets.Service
+	Publish  *publish.Manager
+	Monitor  *monitor.Service
+	Workflow *workflow.Service
 }
 
 func (a *API) Router() http.Handler {
@@ -66,6 +68,24 @@ func (a *API) Router() http.Handler {
 		r.Get("/clips", a.listClips)
 		r.Post("/clips/{id}/approve", a.approveClip)
 		r.Post("/clips/{id}/reject", a.rejectClip)
+		if a.Workflow != nil {
+			r.Get("/clips/{id}/editor", a.clipEditor)
+			r.Put("/clips/{id}/editor", a.saveClipEditor)
+			r.Post("/clips/{id}/render", a.retryClipRender)
+			r.Post("/clips/{id}/restore", a.restoreClipRevision)
+			r.Get("/sub_jobs/{id}/targets", a.subJobTargets)
+			r.Put("/sub_jobs/{id}/targets", a.saveSubJobTargets)
+			r.Get("/publications", a.listPublications)
+			r.Patch("/publications/{id}", a.patchPublication)
+			r.Post("/publications/{id}/{action:approve|retry|cancel|publish-now}", a.publicationAction)
+			r.Get("/publications/{id}/history", a.publicationHistory)
+			r.Get("/publications/{id}/events", a.publicationHistory)
+			r.Post("/accounts/{id}/oauth/connect", a.accountConnect)
+			r.Post("/accounts/{id}/oauth/check", a.accountConnectionCheck)
+			r.Post("/accounts/{id}/oauth/disconnect", a.accountDisconnect)
+			r.Post("/accounts/{id}/oauth/confirm", a.accountConfirm)
+			r.Get("/accounts/oauth/callback", a.oauthCallback)
+		}
 	})
 	return r
 }
@@ -82,6 +102,12 @@ func fail(w http.ResponseWriter, err error) {
 	code := http.StatusInternalServerError
 	if errors.Is(err, domain.ErrNotFound) {
 		code = http.StatusNotFound
+	}
+	if errors.Is(err, domain.ErrConflict) {
+		code = http.StatusConflict
+	}
+	if errors.Is(err, domain.ErrInvalid) {
+		code = http.StatusBadRequest
 	}
 	if code == 500 {
 		slog.Error("request failed", "err", err)

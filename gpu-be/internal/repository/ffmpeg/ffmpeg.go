@@ -2,8 +2,10 @@ package ffmpeg
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -46,7 +48,30 @@ func (c *Client) vcodec(crf int, preset string) []string {
 func (c *Client) VideoProxy(ctx context.Context, in, out string, height int) error {
 	// proxy stays on CPU: tiny and fast, keeps GPU free
 	return c.run(ctx, "video_proxy", "-i", in, "-vf", fmt.Sprintf("scale=-2:%d", height),
-		"-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-an", out)
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", out)
+}
+
+func (c *Client) Duration(ctx context.Context, in string) (float64, error) {
+	b, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", in).Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe: %w", err)
+	}
+	var v struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	if err = json.Unmarshal(b, &v); err != nil {
+		return 0, err
+	}
+	duration, err := strconv.ParseFloat(v.Format.Duration, 64)
+	if err != nil {
+		return 0, err
+	}
+	if duration <= 0 || math.IsNaN(duration) || math.IsInf(duration, 0) {
+		return 0, fmt.Errorf("source has no finite positive duration")
+	}
+	return duration, nil
 }
 
 func (c *Client) AudioProxy(ctx context.Context, in, out string) error {
@@ -118,10 +143,10 @@ func (c *Client) Banner(ctx context.Context, in, bannerPath, out string, rectMod
 		if rectMode {
 			pos = fmt.Sprintf("(W-w)/2:(H-h-%d)", p)
 		}
-		filter = fmt.Sprintf("[1:v][0:v]scale2ref=w=ref_w-%d:h=ref_h/6[logo_raw][base];[logo_raw]format=rgba,geq=%s[logo];[base][logo]overlay=%s,format=yuv420p", 2*p, geq, pos)
+		filter = fmt.Sprintf("[1:v][0:v]scale2ref=w=iw-%d:h=ih/6[logo_raw][base];[logo_raw]format=rgba,geq=%s[logo];[base][logo]overlay=%s,format=yuv420p", 2*p, geq, pos)
 		args = []string{"-i", in, "-loop", "1", "-i", bannerPath}
 	}
-	args = append(args, "-filter_complex", filter)
+	args = append(args, "-filter_complex", filter+"[video]", "-map", "[video]", "-map", "0:a?")
 	args = append(args, c.vcodec(18, "veryfast")...)
 	args = append(args, "-c:a", "copy", "-shortest", out)
 	return c.run(ctx, "banner", args...)

@@ -342,6 +342,18 @@ func (a *API) listClips(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) approveClip(w http.ResponseWriter, r *http.Request) {
+	if a.Workflow != nil {
+		var u domain.PublicationAction
+		if !decode(w, r, &u) {
+			return
+		}
+		if err := a.Workflow.ApproveVersion(r.Context(), chi.URLParam(r, "id"), u.Version); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]string{"status": "approved"})
+		return
+	}
 	if err := a.Publish.Approve(r.Context(), chi.URLParam(r, "id")); err != nil {
 		fail(w, err)
 		return

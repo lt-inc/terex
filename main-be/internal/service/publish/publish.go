@@ -4,6 +4,7 @@ package publish
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
 
@@ -12,11 +13,18 @@ import (
 )
 
 type Manager struct {
-	Clips  domain.ClipRepo
-	Jobs   domain.JobRepo
-	Broker domain.Broker
-	Gpu    domain.Gpu
-	Now    func() time.Time
+	Clips    domain.ClipRepo
+	Jobs     domain.JobRepo
+	Broker   domain.Broker
+	Gpu      domain.Gpu
+	Now      func() time.Time
+	Workflow interface {
+		InitializeClip(context.Context, string, json.RawMessage) error
+		Approve(context.Context, string) error
+		AutoApprove(context.Context, string) error
+		Reject(context.Context, string) error
+		Tick(context.Context) error
+	}
 }
 
 func (m *Manager) now() time.Time {
@@ -41,6 +49,13 @@ func (m *Manager) HandleClipsReady(ctx context.Context, ready msg.ClipsReady) er
 	if err := m.Clips.SaveClips(ctx, ready.JobID, clips); err != nil {
 		return err
 	}
+	if m.Workflow != nil {
+		for _, c := range ready.Clips {
+			if err := m.Workflow.InitializeClip(ctx, c.ClipID, c.SourceManifest); err != nil {
+				return err
+			}
+		}
+	}
 	if err := m.Jobs.SetJobStatus(ctx, ready.JobID, "done", ""); err != nil {
 		return err
 	}
@@ -50,7 +65,11 @@ func (m *Manager) HandleClipsReady(ctx context.Context, ready msg.ClipsReady) er
 	}
 	if mode == domain.ApproveAuto {
 		for _, c := range clips {
-			if err := m.Approve(ctx, c.ClipID); err != nil {
+			approve := m.Approve
+			if m.Workflow != nil {
+				approve = m.Workflow.AutoApprove
+			}
+			if err := approve(ctx, c.ClipID); err != nil {
 				return err
 			}
 		}
@@ -59,6 +78,9 @@ func (m *Manager) HandleClipsReady(ctx context.Context, ready msg.ClipsReady) er
 }
 
 func (m *Manager) Approve(ctx context.Context, clipID string) error {
+	if m.Workflow != nil {
+		return m.Workflow.Approve(ctx, clipID)
+	}
 	if err := m.Clips.SetApproval(ctx, clipID, domain.ClipApproved); err != nil {
 		return err
 	}
@@ -68,6 +90,9 @@ func (m *Manager) Approve(ctx context.Context, clipID string) error {
 }
 
 func (m *Manager) Reject(ctx context.Context, clipID string) error {
+	if m.Workflow != nil {
+		return m.Workflow.Reject(ctx, clipID)
+	}
 	slog.InfoContext(ctx, "clip rejected", "clip_id", clipID)
 	return m.Clips.SetApproval(ctx, clipID, domain.ClipRejected)
 }
@@ -91,6 +116,9 @@ func (m *Manager) AccountPublications(ctx context.Context, accountID int64, kind
 
 // Tick sends due publications to gpu-be; call periodically.
 func (m *Manager) Tick(ctx context.Context) error {
+	if m.Workflow != nil {
+		return m.Workflow.Tick(ctx)
+	}
 	due, err := m.Clips.DuePublications(ctx, m.now(), 50)
 	if err != nil {
 		return err
@@ -109,6 +137,9 @@ func (m *Manager) Tick(ctx context.Context) error {
 
 // HandleResult records the publisher's answer.
 func (m *Manager) HandleResult(ctx context.Context, r msg.PublishResult) error {
+	if m.Workflow != nil {
+		return nil
+	} // Legacy stub results never confirm a real publication.
 	status := domain.PubSent // "scheduled" from the publisher means accepted, not yet published
 	switch r.Status {
 	case "published":
