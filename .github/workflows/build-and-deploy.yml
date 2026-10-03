@@ -55,9 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Base-образ (terex-gpu-be-base) сам по себе 3.3GB+ — стандартный GH-раннер
-      # не тянет пулл+распаковку даже без пересборки CUDA/torch с нуля. Без этого
-      # шага падает "no space left on device" на самом раннере, а не на нашем VPS.
+      # Образ теперь лёгкий (ffmpeg+python3 из apt, без CUDA/torch — те живут
+      # на хосте и монтируются через hostPath, см. k3s/admin/terex-gpu-be.yaml),
+      # но free-disk-space на всякий случай не повредит.
       - uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
