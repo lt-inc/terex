@@ -1,0 +1,174 @@
+package twitch
+
+import (
+	"context"
+	"encoding/hex"
+	"fmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"math"
+	"net/url"
+	"regexp"
+	"strings"
+	"terex/main-be/internal/domain"
+	t "terex/proto/twitch"
+	"terex/proto/workflow"
+	"time"
+)
+
+type Service struct {
+	Repo    domain.TwitchRepo
+	Gateway workflow.IngestGateway
+	Gpu     domain.Gpu
+	Now     func() time.Time
+}
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now().UTC()
+}
+
+var clipID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,180}$`)
+var broadcasterID = regexp.MustCompile(`^[0-9]{1,32}$`)
+var broadcasterLogin = regexp.MustCompile(`^[A-Za-z0-9_]{1,25}$`)
+
+func ValidateImport(r t.ImportRequest, now time.Time) error {
+	if r.SchemaVersion != 1 || r.IdempotencyKey == "" || len(r.IdempotencyKey) > 250 {
+		return fmt.Errorf("%w: schema_version=1 and a bounded idempotency_key are required", domain.ErrInvalid)
+	}
+	src := r.Source
+	if src.Platform != "twitch" || !clipID.MatchString(src.ClipID) || !broadcasterID.MatchString(src.BroadcasterID) || !broadcasterLogin.MatchString(src.BroadcasterLogin) || src.CreatedAt.IsZero() || src.CreatedAt.After(now.Add(5*time.Minute)) || src.ViewCount < 0 || math.IsNaN(src.DurationSec) || math.IsInf(src.DurationSec, 0) || src.DurationSec <= 0 || src.DurationSec > 60 {
+		return fmt.Errorf("%w: invalid Twitch source metadata", domain.ErrInvalid)
+	}
+	u, err := url.Parse(src.URL)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return fmt.Errorf("%w: expected an HTTPS Twitch clip URL", domain.ErrInvalid)
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "clips.twitch.tv" {
+		if strings.Trim(u.Path, "/") != src.ClipID {
+			return fmt.Errorf("%w: clip URL does not match source ID", domain.ErrInvalid)
+		}
+	} else if host == "www.twitch.tv" || host == "twitch.tv" {
+		if !strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/clip/"+src.ClipID) {
+			return fmt.Errorf("%w: clip URL does not match source ID", domain.ErrInvalid)
+		}
+	} else {
+		return fmt.Errorf("%w: only public Twitch clip URLs are accepted", domain.ErrInvalid)
+	}
+	if strings.TrimSpace(src.Title) == "" || len([]rune(src.Title)) > 100 {
+		return fmt.Errorf("%w: title must contain 1 to 100 characters", domain.ErrInvalid)
+	}
+	return nil
+}
+func (s *Service) Settings(ctx context.Context) (t.Settings, error) {
+	return s.Repo.TwitchSettings(ctx)
+}
+func (s *Service) SaveSettings(ctx context.Context, v t.Settings) (t.Settings, error) {
+	if err := v.Validate(); err != nil {
+		return v, fmt.Errorf("%w: %s", domain.ErrInvalid, err)
+	}
+	err := s.Repo.SaveTwitchSettings(ctx, v)
+	return v, err
+}
+func (s *Service) Reserve(ctx context.Context, r t.ImportRequest) (t.Import, error) {
+	if err := ValidateImport(r, s.now()); err != nil {
+		return t.Import{}, err
+	}
+	out, err := s.Repo.ReserveTwitchImport(ctx, r, s.now())
+	if err != nil {
+		return out, err
+	}
+	if out.ClipID != "" || out.Rejected {
+		return out, nil
+	}
+	if s.Gateway == nil {
+		return out, fmt.Errorf("ingest gateway is unavailable")
+	}
+	timeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	upload, err := s.Gateway.ReserveUpload(timeout, &workflow.ReserveUploadRequest{ImportID: out.ImportID, Ref: out.Original})
+	if err != nil {
+		return out, err
+	}
+	if err = s.Repo.SetTwitchUpload(ctx, out.ImportID, upload.Ref, upload.ExpiresAt); err != nil {
+		return out, err
+	}
+	out.Original, out.UploadURL, out.UploadExpiresAt = upload.Ref, upload.UploadURL, &upload.ExpiresAt
+	return out, nil
+}
+func (s *Service) Complete(ctx context.Context, id string, r t.ImportCompleteRequest) (t.Import, error) {
+	out, err := s.Repo.GetTwitchImport(ctx, id)
+	if err != nil {
+		return out, err
+	}
+	if out.ClipID != "" {
+		return out, nil
+	}
+	if out.Rejected {
+		return out, fmt.Errorf("%w: import is rejected", domain.ErrConflict)
+	}
+	hash, err := hex.DecodeString(r.SHA256)
+	if err != nil || len(hash) != 32 || r.SizeBytes <= 0 || r.SizeBytes > 512<<20 {
+		return out, fmt.Errorf("%w: valid SHA256 and a file of at most 512 MiB are required", domain.ErrInvalid)
+	}
+	if out.Original.Object == "" {
+		return out, fmt.Errorf("%w: media upload has not been reserved", domain.ErrConflict)
+	}
+	if s.Gateway == nil {
+		return out, fmt.Errorf("ingest gateway is unavailable")
+	}
+	timeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	media, err := s.Gateway.VerifyUpload(timeout, &workflow.VerifyUploadRequest{ImportID: id, Ref: out.Original, ExpectedSHA256: strings.ToLower(r.SHA256), ExpectedSizeBytes: r.SizeBytes, ExpectedDurationSec: out.Source.DurationSec})
+	if err != nil {
+		if code := status.Code(err); code == codes.InvalidArgument || code == codes.DataLoss {
+			_ = s.Repo.FailTwitchImport(ctx, id, "Media verification failed; check the file and retry")
+			return out, fmt.Errorf("%w: media verification failed", domain.ErrInvalid)
+		}
+		_ = s.Repo.FailTwitchImport(ctx, id, "Media verification is temporarily unavailable; retry this import")
+		return out, fmt.Errorf("media verification is temporarily unavailable: %w", err)
+	}
+	return s.Repo.FinishTwitchImport(ctx, id, media, s.now())
+}
+func (s *Service) Imports(ctx context.Context, pending bool, state string) ([]t.Import, error) {
+	return s.Repo.ListTwitchImports(ctx, pending, state)
+}
+func (s *Service) Import(ctx context.Context, id string) (t.Import, error) {
+	return s.Repo.GetTwitchImport(ctx, id)
+}
+func (s *Service) Reject(ctx context.Context, id string, rejected bool) (t.Import, error) {
+	if err := s.Repo.RejectTwitchImport(ctx, id, rejected); err != nil {
+		return t.Import{}, err
+	}
+	return s.Import(ctx, id)
+}
+func (s *Service) preview(ctx context.Context, c *domain.Compilation) {
+	if c.State == "ready" && c.Object != "" && s.Gpu != nil {
+		c.PreviewURL, _ = s.Gpu.PresignGet(ctx, c.Bucket, c.Object)
+	}
+}
+func (s *Service) Compilations(ctx context.Context) ([]domain.Compilation, error) {
+	out, err := s.Repo.ListCompilations(ctx)
+	for i := range out {
+		s.preview(ctx, &out[i])
+	}
+	return out, err
+}
+func (s *Service) Compilation(ctx context.Context, id string) (domain.Compilation, error) {
+	out, err := s.Repo.GetCompilation(ctx, id)
+	s.preview(ctx, &out)
+	return out, err
+}
+func (s *Service) CreateCompilation(ctx context.Context, r t.CompilationRequest) (domain.Compilation, error) {
+	return s.Repo.CreateCompilation(ctx, r, nil, s.now())
+}
+func (s *Service) UpdateCompilation(ctx context.Context, id string, r domain.CompilationUpdate) (domain.Compilation, error) {
+	return s.Repo.UpdateCompilation(ctx, id, r, s.now())
+}
+func (s *Service) AutoCompilation(ctx context.Context) (*domain.Compilation, error) {
+	return s.Repo.AutoCompilation(ctx, s.now())
+}
+func (s *Service) Tick(ctx context.Context) error { _, err := s.AutoCompilation(ctx); return err }

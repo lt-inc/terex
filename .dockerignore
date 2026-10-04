@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+**/__pycache__
+**/venv
+**/dist
+**/build
+**/tmp
+**/.env
+**/.env.*

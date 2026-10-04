@@ -27,6 +27,7 @@ import (
 	"terex/gpu-be/internal/repository/ytdlp"
 	"terex/gpu-be/internal/service/candidate"
 	"terex/gpu-be/internal/service/googleauth"
+	"terex/gpu-be/internal/service/ingestgateway"
 	"terex/gpu-be/internal/service/preproc"
 	"terex/gpu-be/internal/service/publisher"
 	"terex/gpu-be/internal/service/publishworker"
@@ -78,7 +79,7 @@ func run() error {
 		return err
 	}
 	if err := store.EnsureBuckets(ctx, domain.BucketDownloads, domain.BucketProxy, domain.BucketTranscripts,
-		domain.BucketClips, domain.BucketBanners, domain.BucketBackgrounds, domain.BucketCookies, domain.BucketCredentials); err != nil {
+		domain.BucketClips, domain.BucketBanners, domain.BucketBackgrounds, domain.BucketCookies, domain.BucketCredentials, ingestgateway.Bucket); err != nil {
 		return err
 	}
 
@@ -119,6 +120,7 @@ func run() error {
 	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	gpuv1.RegisterGpuServiceServer(gs, &tgrpc.Server{State: state, GW: gw})
 	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, TmpDir: cfg.TmpDir})
+	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir})
 	go func() { _ = gs.Serve(lis) }()
 	slog.Info("gpu-be started", "grpc", cfg.GRPCAddr)
 

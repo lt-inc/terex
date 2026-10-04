@@ -1,4 +1,4 @@
-export type SliceMode = "highlights" | "full";
+export type SliceMode = "highlights" | "full" | "full_clip" | "compilation";
 export type ApproveMode = "by_approve" | "auto_approve";
 
 export type Platform = "youtube" | "tiktok" | "instagram";
@@ -119,7 +119,10 @@ export interface SubJobData {
 
 export interface JobData {
   job_id: string;
-  youtube_url: string;
+  youtube_url?: string;
+  source_kind?: string;
+  source_url?: string;
+  source_id?: string;
   is_vertical: boolean;
   is_subtitles: boolean;
   slice_mode: SliceMode;

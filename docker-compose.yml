@@ -8,7 +8,7 @@ services:
   # ───────────── shared ─────────────
   rabbitmq:
     image: rabbitmq:3.13-management
-    ports: ["5672:5672", "15672:15672"]
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -21,7 +21,7 @@ services:
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: main
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]
     volumes: [pg_data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d main"]
@@ -41,13 +41,18 @@ services:
       APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3000}
       GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
       HTTP_ADDR: ":8000"
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      TEREX_SERVICE_TOKEN: ${TEREX_SERVICE_TOKEN:-}
+      COLLECTOR_URL: http://twitch-collector:8080
+      COLLECTOR_SERVICE_TOKEN: ${COLLECTOR_SERVICE_TOKEN:-}
       MONITOR_INTERVAL: 1m
       PUBLISH_INTERVAL: 15s
       OTEL_SERVICE_NAME: terex-main-be
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}   # empty = tracing off
       LOG_FORMAT: ${LOG_FORMAT:-text}   # json for Loki
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     depends_on:
       postgres: { condition: service_healthy }
       rabbitmq: { condition: service_healthy }
@@ -59,7 +64,9 @@ services:
       dockerfile: docker/Dockerfile
     environment:
       BACKEND_URL: http://main-be:8000
-    ports: ["3000:3000"]
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    ports: ["127.0.0.1:3000:3000"]
     volumes:
       - ./FE:/app
       - fe_node_modules:/app/node_modules
@@ -72,7 +79,7 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    ports: ["9000:9000", "9001:9001"]   # 9000 must be reachable from the browser (presigned URLs)
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
     volumes: [minio_data:/data]
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
@@ -96,12 +103,12 @@ services:
       PUBLISHER_WORKERS: ${PUBLISHER_WORKERS:-2}
       RENDER_REVISION_WORKERS: ${RENDER_REVISION_WORKERS:-1}
       S3_ENDPOINT: minio:9000
-      S3_PUBLIC_ENDPOINT: localhost:9000
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-localhost:9000}
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       STATE_DIR: /data/state
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-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}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-stealth/space-bunny-alpha}
       LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
       USE_NVENC: ${USE_NVENC:-false}
@@ -151,7 +158,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
-    ports: ["3001:3000"]   # http://localhost:3001 -> Dashboards -> Terex
+    ports: ["127.0.0.1:3001:3000"]
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana

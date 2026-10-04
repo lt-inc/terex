@@ -102,8 +102,8 @@ func (c *Client) Vertical(ctx context.Context, in, out string, v domain.Vertical
 		filter = fmt.Sprintf("[0:v]scale=%d:1920:force_original_aspect_ratio=decrease,boxblur=%d:1,scale=%d:1920[bg];"+
 			"[0:v]scale=%d:%d,format=yuva420p,%s[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p,setsar=1", w, blur, w, w, w, circleAlpha)
 	default:
-		filter = fmt.Sprintf("[0:v]scale=%d:-2[fg];[0:v]scale=%d:1920:force_original_aspect_ratio=decrease,boxblur=%d:1,scale=%d:1920[bg];"+
-			"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1", w, w, blur, w)
+		filter = fmt.Sprintf("[0:v]split=2[f][b];[f]scale=%d:1920:force_original_aspect_ratio=decrease[fg];[b]scale=%d:1920:force_original_aspect_ratio=increase,crop=%d:1920,boxblur=%d:1[bg];"+
+			"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p", w, w, w, blur)
 	}
 	if v.BgPath != "" {
 		args = []string{"-stream_loop", "-1", "-i", v.BgPath, "-i", in, "-filter_complex", filter, "-map", "1:a?", "-shortest"}
@@ -111,7 +111,7 @@ func (c *Client) Vertical(ctx context.Context, in, out string, v domain.Vertical
 		args = []string{"-i", in, "-filter_complex", filter}
 	}
 	args = append(args, c.vcodec(20, "veryfast")...)
-	args = append(args, "-c:a", "copy", out)
+	args = append(args, "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out)
 	return c.run(ctx, "vertical", args...)
 }
 

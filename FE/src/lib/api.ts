@@ -14,6 +14,7 @@ import type {
   PublicationTarget,
 } from "@/types";
 import { formatInZone } from "./datetime";
+import type { Compilation, CompilationRequest, ImportedClip, TwitchSettings, TwitchChannel, TwitchClip, TwitchCollectorStatus } from "@/types/twitch";
 
 export class ApiError extends Error {
   constructor(
@@ -269,3 +270,21 @@ export const saveSubJobTargets = (
     `/sub_jobs/${encodeURIComponent(id)}/targets`,
     json("PUT", { expected_version: version, targets }),
   );
+
+export const fetchTwitchSettings = () => request<TwitchSettings>("/twitch/settings");
+export const saveTwitchSettings = (settings: TwitchSettings) => request<TwitchSettings>("/twitch/settings", json("PUT", settings));
+export const fetchTwitchChannels = () => request<TwitchChannel[]>("/twitch/channels");
+export const createTwitchChannel = (input: string) => request<TwitchChannel>("/twitch/channels", json("POST", { input }));
+export const updateTwitchChannel = (id: string, paused: boolean) => request<TwitchChannel>(`/twitch/channels/${encodeURIComponent(id)}`, json("PATCH", { paused }));
+export const archiveTwitchChannel = (id: string) => request<TwitchChannel>(`/twitch/channels/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const fetchTwitchClips = () => request<TwitchClip[]>("/twitch/clips?limit=100");
+export const fetchTwitchStatus = () => request<TwitchCollectorStatus>("/twitch/status");
+export const checkTwitchNow = () => request<{ accepted: boolean }>("/twitch/check", json("POST", {}));
+export const fetchImports = (state = "") => request<ImportedClip[]>(`/imports${state ? `?state=${encodeURIComponent(state)}` : ""}`);
+export const rejectImport = (id: string) => request<ImportedClip>(`/imports/${encodeURIComponent(id)}`, json("PATCH", { rejected: true }));
+export const fetchCompilations = () => request<Compilation[]>("/compilations");
+export const fetchCompilation = (id: string) => request<Compilation>(`/compilations/${encodeURIComponent(id)}`);
+export const createCompilation = (spec: CompilationRequest) => request<Compilation>("/compilations", json("POST", spec));
+export const saveCompilation = (id: string, version: number, spec: CompilationRequest) =>
+  request<Compilation>(`/compilations/${encodeURIComponent(id)}`, json("PUT", { expected_version: version, ...spec }));
+export const triggerAutoCompilation = () => request<{ created: boolean; compilation: Compilation | null }>("/compilations/auto", json("POST", {}));

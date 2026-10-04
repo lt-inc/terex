@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"time"
 
 	mc "github.com/minio/minio-go/v7"
@@ -18,6 +19,44 @@ import (
 type Store struct {
 	internal *mc.Client // used for data transfer inside the network
 	public   *mc.Client // used only to sign URLs reachable from the browser
+}
+
+// PresignInternalPut grants the collector write access to exactly one staging
+// object. The storage credentials never leave this process.
+func (s *Store) PresignInternalPut(ctx context.Context, ref domain.ObjectRef, ttl time.Duration) (string, error) {
+	u, err := s.internal.PresignedPutObject(ctx, ref.Bucket, ref.Object, ttl)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+func (s *Store) DownloadLimited(ctx context.Context, ref domain.ObjectRef, dest string, limit int64) error {
+	st, err := s.internal.StatObject(ctx, ref.Bucket, ref.Object, mc.StatObjectOptions{})
+	if err != nil {
+		return err
+	}
+	if st.Size <= 0 || st.Size > limit {
+		return fmt.Errorf("object must contain 1..%d bytes", limit)
+	}
+	obj, err := s.internal.GetObject(ctx, ref.Bucket, ref.Object, mc.GetObjectOptions{})
+	if err != nil {
+		return err
+	}
+	defer obj.Close()
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	n, err := io.Copy(f, io.LimitReader(obj, limit+1))
+	if err != nil {
+		return err
+	}
+	if n > limit || n != st.Size {
+		return fmt.Errorf("object size changed during verification")
+	}
+	return f.Sync()
 }
 
 func New(endpoint, publicEndpoint, access, secret string, ssl bool) (*Store, error) {

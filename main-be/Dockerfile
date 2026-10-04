@@ -4,6 +4,7 @@ WORKDIR /src
 COPY go.work go.work.sum ./
 COPY proto ./proto
 COPY main-be ./main-be
+ENV GOWORK=off
 # go.work lists gpu-be too; stub it so the workspace resolves
 RUN mkdir -p gpu-be && printf 'module terex/gpu-be\n\ngo 1.26\n' > gpu-be/go.mod
 RUN cd main-be && CGO_ENABLED=0 go build -o /out/main-be ./cmd/main-be

@@ -142,6 +142,10 @@ type Job struct {
 	JobID            string     `json:"job_id"`
 	ChannelID        *int64     `json:"channel_id"`
 	YoutubeURL       string     `json:"youtube_url"`
+	SourceKind       string     `json:"source_kind"`
+	SourceURL        string     `json:"source_url"`
+	SourceID         string     `json:"source_id"`
+	OutputFormat     string     `json:"output_format"`
 	IsVertical       bool       `json:"is_vertical"`
 	IsSubtitles      bool       `json:"is_subtitles"`
 	SliceMode        string     `json:"slice_mode"`

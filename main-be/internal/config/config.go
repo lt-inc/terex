@@ -15,6 +15,11 @@ type Config struct {
 	WorkflowGRPCAddr string
 	OAuthRedirectURL string
 	AppPublicURL     string
+	AdminUsername    string
+	AdminPassword    string
+	ServiceToken     string
+	CollectorURL     string
+	CollectorToken   string
 }
 
 func Load() Config {
@@ -28,6 +33,11 @@ func Load() Config {
 		WorkflowGRPCAddr: env("WORKFLOW_GRPC_ADDR", ":9091"),
 		OAuthRedirectURL: env("GOOGLE_REDIRECT_URL", env("APP_PUBLIC_URL", "http://localhost:3000")+"/api/accounts/oauth/callback"),
 		AppPublicURL:     env("APP_PUBLIC_URL", "http://localhost:3000"),
+		AdminUsername:    os.Getenv("ADMIN_USERNAME"),
+		AdminPassword:    os.Getenv("ADMIN_PASSWORD"),
+		ServiceToken:     os.Getenv("TEREX_SERVICE_TOKEN"),
+		CollectorURL:     os.Getenv("COLLECTOR_URL"),
+		CollectorToken:   os.Getenv("COLLECTOR_SERVICE_TOKEN"),
 	}
 }
 

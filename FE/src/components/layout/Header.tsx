@@ -8,6 +8,8 @@ const pages = [
   ["/admin/clips", "Clips"],
   ["/admin/accounts", "Accounts"],
   ["/admin/channels", "Channels"],
+  ["/admin/twitch", "Twitch"],
+  ["/admin/compilations", "Compilations"],
   ["/admin/banners-list", "Banners"],
   ["/admin/backgrounds-list", "Backgrounds"],
 ];

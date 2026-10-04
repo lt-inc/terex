@@ -21,6 +21,7 @@ import (
 	"terex/main-be/internal/service/jobs"
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
+	twitchservice "terex/main-be/internal/service/twitch"
 	workflowservice "terex/main-be/internal/service/workflow"
 	tamqp "terex/main-be/internal/transport/amqp"
 	"terex/main-be/internal/transport/cron"
@@ -41,6 +42,9 @@ func run() error {
 	cfg := config.Load()
 	if cfg.DatabaseURL == "" {
 		return errors.New("DATABASE_URL is required")
+	}
+	if cfg.AdminUsername == "" || cfg.AdminPassword == "" || cfg.ServiceToken == "" {
+		return errors.New("ADMIN_USERNAME, ADMIN_PASSWORD and TEREX_SERVICE_TOKEN are required")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -83,12 +87,16 @@ func run() error {
 	pubMgr.Workflow = flow
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
 
-	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon, Workflow: flow}
+	twitchSvc := &twitchservice.Service{Repo: store, Gateway: gpu.IngestGateway(), Gpu: gpu}
+	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon, Workflow: flow,
+		Twitch: twitchSvc, Auth: &thttp.OperatorAuth{Username: cfg.AdminUsername, Password: cfg.AdminPassword, ServiceToken: cfg.ServiceToken, AllowedOrigin: cfg.AppPublicURL},
+		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken}}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 
 	go func() { _ = tamqp.Run(ctx, br, jobSvc, pubMgr) }()
 	go cron.Every(ctx, "monitor", cfg.MonitorInterval, mon)
 	go cron.Every(ctx, "publish", cfg.PublishInterval, pubMgr)
+	go cron.Every(ctx, "twitch compilation", time.Minute, twitchSvc)
 	listener, err := net.Listen("tcp", cfg.WorkflowGRPCAddr)
 	if err != nil {
 		return err

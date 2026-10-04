@@ -49,6 +49,7 @@ type SourceManifest struct {
 	Options     msg.JobOptions `json:"options"`
 	Banner      string         `json:"banner,omitempty"`
 	Cues        []Cue          `json:"cues,omitempty"`
+	Assembly    *AssemblySpec  `json:"assembly,omitempty"`
 }
 
 type PublicationWork struct {
@@ -124,7 +125,8 @@ type CheckpointRequest struct {
 type CompleteRequest struct {
 	LeaseRequest
 	Checkpoint
-	Media ObjectRef `json:"media,omitempty"`
+	Media  ObjectRef       `json:"media,omitempty"`
+	Source *SourceManifest `json:"source,omitempty"`
 }
 type FailRequest struct {
 	LeaseRequest

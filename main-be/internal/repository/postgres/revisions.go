@@ -63,6 +63,9 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 		return domain.Revision{}, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return domain.Revision{}, err
+	}
 	var currentID int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&currentID); err != nil {
 		return domain.Revision{}, mapErr(err)
@@ -93,6 +96,9 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 		return domain.Revision{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, r.ID, u.StartSec, u.EndSec, u.Title, u.Hashtags); err != nil {
+		return domain.Revision{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal) SELECT $1,source_revision_id,source_clip_id,ordinal FROM twitch_compilation_items WHERE compilation_revision_id=$2`, r.ID, prev.ID); err != nil {
 		return domain.Revision{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL,updated_at=now() WHERE publication_id IN (SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, clipID); err != nil {
@@ -126,6 +132,9 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
 		return mapErr(err)
@@ -139,6 +148,9 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
 	}
 	if r.RenderState != "ready" || r.Object == "" {
 		return fmt.Errorf("%w: rendered revision is not ready", domain.ErrConflict)
+	}
+	if err = requireTwitchSources(ctx, tx, clipID, rid); err != nil {
+		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET approved_at=COALESCE(approved_at,$2) WHERE id=$1`, rid, now); err != nil {
 		return err
@@ -158,6 +170,9 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
       WHERE publications.started_at IS NULL AND publications.status IN ('on_hold','failed','scheduled')`, clipID, now, rid, mustJSON(r.EditSpec)); err != nil {
 		return err
 	}
+	if err = enforceTwitchCaps(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
@@ -168,6 +183,15 @@ func (s *Store) RejectRevision(ctx context.Context, clipID string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_imports SET rejected=TRUE,updated_at=now() WHERE clip_id=$1`, clipID); err != nil {
+		return err
+	}
+	if err = rejectTwitchDependencies(ctx, tx, clipID); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE clips SET approval='rejected' WHERE clip_id=$1`, clipID); err != nil {
 		return err
 	}
@@ -213,12 +237,28 @@ func (s *Store) ReplaceTargets(ctx context.Context, id string, version int, targ
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	var current int
 	if err = tx.QueryRow(ctx, `SELECT workflow_version FROM sub_jobs WHERE sub_job_id=$1 FOR UPDATE`, id).Scan(&current); err != nil {
 		return mapErr(err)
 	}
 	if version != current {
 		return domain.ErrConflict
+	}
+	var kind string
+	if err = tx.QueryRow(ctx, `SELECT j.source_kind FROM sub_jobs s JOIN jobs j ON j.job_id=s.job_id WHERE s.sub_job_id=$1`, id).Scan(&kind); err != nil {
+		return mapErr(err)
+	}
+	if kind == "twitch" || kind == "twitch_compilation" {
+		settings, e := readTwitchSettings(ctx, tx)
+		if e != nil {
+			return e
+		}
+		if len(targets) != 1 || targets[0].AccountID != settings.TargetAccountID || settings.TargetAccountID <= 0 {
+			return fmt.Errorf("%w: Twitch drafts use the single configured YouTube account", domain.ErrInvalid)
+		}
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM sub_job_targets WHERE sub_job_id=$1`, id); err != nil {
 		return err
@@ -253,6 +293,9 @@ func (s *Store) ReplaceTargets(ctx context.Context, id string, version int, targ
       JOIN clip_revisions r ON r.id=c.latest_revision_id JOIN sub_job_targets t ON t.sub_job_id=sj.sub_job_id JOIN accounts a ON a.id=t.account_id
       WHERE sj.sub_job_id=$1 AND c.banner_object=COALESCE(b.file_name,'') AND r.approved_at IS NOT NULL AND r.render_state='ready'
       ON CONFLICT(clip_id,account_id) DO NOTHING`, id); err != nil {
+		return err
+	}
+	if err = enforceTwitchCaps(ctx, tx); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -302,6 +345,12 @@ func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) e
 	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='pending',error=NULL WHERE id=$1`, rid); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(ctx, `UPDATE jobs j SET status='processing',fail_place='',updated_at=now() FROM clips c WHERE c.job_id=j.job_id AND c.latest_revision_id=$1 AND j.source_kind IN('twitch','twitch_compilation')`, rid); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_imports i SET state='rendering',error=NULL,updated_at=now() FROM clips c WHERE c.clip_id=i.clip_id AND c.latest_revision_id=$1`, rid); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,now()+interval '2 minutes')`, attempt, rid); err != nil {
 		return err
 	}
@@ -316,6 +365,9 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
 		return mapErr(err)
@@ -340,6 +392,9 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, nextID, old.StartSec, old.EndSec, old.Title, old.Hashtags); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal) SELECT $1,source_revision_id,source_clip_id,ordinal FROM twitch_compilation_items WHERE compilation_revision_id=$2`, nextID, targetID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL)`, clipID); err != nil {

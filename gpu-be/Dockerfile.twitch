@@ -1,0 +1,12 @@
+# CPU-only media worker for Twitch imports. Legacy YouTube discovery/Whisper
+# still uses Dockerfile; this image deliberately runs only imported media jobs.
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY proto ./proto
+COPY gpu-be ./gpu-be
+ENV GOWORK=off CGO_ENABLED=0
+RUN cd gpu-be && go build -o /out/gpu-be ./cmd/gpu-be
+FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-liberation ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/gpu-be /usr/local/bin/gpu-be
+ENTRYPOINT ["gpu-be"]

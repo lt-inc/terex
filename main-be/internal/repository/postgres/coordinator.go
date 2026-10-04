@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +20,9 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return nil, err
+	}
 	out := &workflow.Lease{Granted: false, AttemptID: q.AttemptID, ExpectedVersion: q.ExpectedVersion}
 	token := uuid.NewString()
 	until := now.Add(leaseDuration)
@@ -83,6 +88,16 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 			return nil, err
 		}
 		if p.Version != version || p.Status != "queued" {
+			return out, nil
+		}
+		if p.StartedAt == nil {
+			if allowed, e := twitchRuntimeCapacity(ctx, tx, pid, now); e != nil {
+				return nil, e
+			} else if !allowed {
+				return out, nil
+			}
+		}
+		if err = requireTwitchSources(ctx, tx, p.ClipID, p.RevisionID); err != nil && !p.CancelRequested {
 			return out, nil
 		}
 		r, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1`, p.RevisionID))
@@ -297,10 +312,38 @@ func (s *Store) CompleteWorkflow(ctx context.Context, q *workflow.CompleteReques
 		if q.Media.Bucket == "" || q.Media.Object == "" {
 			return false, nil
 		}
+		if q.Source != nil {
+			if math.IsNaN(q.Source.DurationSec) || math.IsInf(q.Source.DurationSec, 0) || q.Source.DurationSec <= 0 || q.Source.Original.Bucket != "imports" || q.Source.Original.Object == "" {
+				return false, fmt.Errorf("invalid resolved assembly source")
+			}
+			var old workflow.SourceManifest
+			var data []byte
+			if err = tx.QueryRow(ctx, `SELECT manifest FROM clip_revisions WHERE id=$1`, rid).Scan(&data); err != nil {
+				return false, err
+			}
+			if err = json.Unmarshal(data, &old); err != nil {
+				return false, err
+			}
+			if old.Assembly == nil || q.Source.Assembly == nil || string(mustJSON(old.Assembly)) != string(mustJSON(q.Source.Assembly)) {
+				return false, fmt.Errorf("assembly specification changed during rendering")
+			}
+			if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET manifest=$2,spec=spec||jsonb_build_object('start_sec',0,'end_sec',$3::double precision) WHERE id=$1`, rid, mustJSON(q.Source), q.Source.DurationSec); err != nil {
+				return false, err
+			}
+		}
 		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='ready',bucket=$2,object=$3,error=NULL WHERE id=$1`, rid, q.Media.Bucket, q.Media.Object); err != nil {
 			return false, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE render_attempts SET status='completed',lease_token=NULL WHERE id=$1`, q.AttemptID); err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE clips c SET bucket=$2,object=$3,start_sec=(r.spec->>'start_sec')::double precision,end_sec=(r.spec->>'end_sec')::double precision FROM clip_revisions r WHERE r.id=$1 AND c.latest_revision_id=r.id`, rid, q.Media.Bucket, q.Media.Object); err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE twitch_imports i SET state='ready',error=NULL,updated_at=now() FROM clips c WHERE c.clip_id=i.clip_id AND c.latest_revision_id=$1`, rid); err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE jobs j SET status='done',fail_place='',updated_at=now() FROM clips c WHERE c.job_id=j.job_id AND c.latest_revision_id=$1 AND j.source_kind IN('twitch','twitch_compilation')`, rid); err != nil {
 			return false, err
 		}
 	}
@@ -365,6 +408,16 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 			state = "pending"
 		}
 		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state=$2,error=$3 WHERE id=$1`, rid, state, q.Message); err != nil {
+			return false, err
+		}
+		importState, jobState := "failed", "failed"
+		if q.Retryable {
+			importState, jobState = "rendering", "processing"
+		}
+		if _, err = tx.Exec(ctx, `UPDATE twitch_imports i SET state=$3,error=$2,updated_at=now() FROM clips c WHERE c.clip_id=i.clip_id AND c.latest_revision_id=$1`, rid, q.Message, importState); err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE jobs j SET status=$2,fail_place='render_revision',updated_at=now() FROM clips c WHERE c.job_id=j.job_id AND c.latest_revision_id=$1 AND j.source_kind IN('twitch','twitch_compilation')`, rid, jobState); err != nil {
 			return false, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE render_attempts SET status='failed' WHERE id=$1`, q.AttemptID); err != nil {

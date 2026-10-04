@@ -34,6 +34,9 @@ func NewGatewayClient(conn grpc.ClientConnInterface) Gateway         { return &g
 
 func call[Q, R any](ctx context.Context, conn grpc.ClientConnInterface, method string, req *Q) (*R, error) {
 	timeout := 15 * time.Second
+	if strings.HasSuffix(method, "/VerifyUpload") {
+		timeout = 5 * time.Minute
+	}
 	if strings.HasSuffix(method, "/EditorContext") {
 		timeout = 2 * time.Minute
 	}
