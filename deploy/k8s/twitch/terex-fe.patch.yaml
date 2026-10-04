@@ -1,0 +1,36 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: terex-fe
+          env:
+            - name: ADMIN_USERNAME
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-operator
+                  key: ADMIN_USERNAME
+            - name: ADMIN_PASSWORD
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-operator
+                  key: ADMIN_PASSWORD
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            periodSeconds: 30
+            timeoutSeconds: 2

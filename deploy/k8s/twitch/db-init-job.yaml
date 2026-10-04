@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: terex-collector-db-init
+  namespace: admin
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 240
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: terex-collector-db-init
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: db-init
+          image: postgres:16-alpine
+          command: [sh, /bootstrap/init.sh]
+          envFrom:
+            - secretRef:
+                name: terex-collector-db-init
+          env:
+            - name: COLLECTOR_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: terex-twitch-collector
+                  key: DATABASE_URL
+            - name: PGCONNECT_TIMEOUT
+              value: "10"
+            - name: PGOPTIONS
+              value: "-c statement_timeout=30000 -c lock_timeout=10000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: bootstrap
+              mountPath: /bootstrap
+              readOnly: true
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: bootstrap
+          configMap:
+            name: terex-collector-db-init
+            defaultMode: 0444
+        - name: temporary
+          emptyDir:
+            sizeLimit: 16Mi

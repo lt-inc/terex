@@ -1,0 +1,52 @@
+# Apply once with a cluster administrator, alongside the existing k3s Role.
+# CI does not manage Secrets or its own RBAC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: terex-twitch-deployer
+  namespace: admin
+rules:
+  # Kubernetes cannot restrict create to resourceNames. Other verbs are scoped.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [terex-twitch-collector]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [terex-collector-db-init]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [services]
+    resourceNames: [terex-twitch-collector, terex-be, terex-gpu-be]
+    verbs: [get, patch, update]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create]
+  - apiGroups: [batch]
+    resources: [jobs]
+    resourceNames: [terex-collector-db-init]
+    verbs: [get, list, watch, patch, update, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: terex-twitch-deployer
+  namespace: admin
+subjects:
+  # These are the ServiceAccounts used by the existing admin/github-deployer.yml.
+  - kind: ServiceAccount
+    name: github-deployer
+    namespace: pipeline
+  - kind: ServiceAccount
+    name: github-deployer
+    namespace: warmup
+roleRef:
+  kind: Role
+  name: terex-twitch-deployer
+  apiGroup: rbac.authorization.k8s.io

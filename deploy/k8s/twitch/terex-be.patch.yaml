@@ -1,0 +1,66 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: terex-be
+          env:
+            - name: ADMIN_USERNAME
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-operator
+                  key: ADMIN_USERNAME
+            - name: ADMIN_PASSWORD
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-operator
+                  key: ADMIN_PASSWORD
+            - name: TEREX_SERVICE_TOKEN
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-service-tokens
+                  key: TEREX_SERVICE_TOKEN
+            - name: COLLECTOR_SERVICE_TOKEN
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-service-tokens
+                  key: COLLECTOR_SERVICE_TOKEN
+            - name: COLLECTOR_URL
+              valueFrom: null
+              value: http://terex-twitch-collector:8080
+            - name: WORKFLOW_GRPC_ADDR
+              valueFrom: null
+              value: ":9091"
+            - name: GPU_GRPC_ADDR
+              valueFrom: null
+              value: terex-gpu-be:9090
+            - name: RABBITMQ_URL
+              value: null
+              valueFrom:
+                secretKeyRef:
+                  name: terex-runtime
+                  key: RABBITMQ_URL
+          ports:
+            - name: workflow-grpc
+              containerPort: 9091
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 2

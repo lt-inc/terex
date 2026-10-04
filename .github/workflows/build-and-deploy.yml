@@ -5,11 +5,17 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# Bootstrap uses one fixed Job name; do not overlap deployments to this cluster.
+concurrency:
+  group: terex-admin-deploy
+  cancel-in-progress: false
+
 env:
   # main-be keeps the old image name: the k8s deployment `terex-be` (admin namespace) already points to it
   IMAGE_BE: registry.legendary-trio.me/lt-inc/terex-be
   IMAGE_GPU: registry.legendary-trio.me/lt-inc/terex-gpu-be
   IMAGE_FE: registry.legendary-trio.me/lt-inc/terex-fe
+  IMAGE_COLLECTOR: registry.legendary-trio.me/lt-inc/terex-twitch-collector
 
 jobs:
   build-be:
@@ -113,10 +119,131 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           cache-to: type=registry,ref=${{ env.IMAGE_FE }}:buildcache,mode=max
 
+  build-twitch-collector:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: registry.legendary-trio.me
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_COLLECTOR }}
+          tags: |
+            type=sha,format=long,prefix=,priority=1000
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: twitch-collector/Dockerfile
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.IMAGE_COLLECTOR }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_COLLECTOR }}:buildcache,mode=max
+
   deploy:
     runs-on: ubuntu-latest
-    needs: [build-be, build-gpu-be, build-fe]
+    timeout-minutes: 15
+    needs: [build-be, build-gpu-be, build-fe, build-twitch-collector]
     steps:
+      - uses: actions/checkout@v4
+      - name: Package DB bootstrap and pin collector image
+        env:
+          COLLECTOR_IMAGE: ${{ env.IMAGE_COLLECTOR }}:${{ needs.build-twitch-collector.outputs.image-tag }}
+        run: python3 scripts/render-twitch-deploy.py --image "$COLLECTOR_IMAGE"
+
+      # Secrets and github-deployer-rbac.yaml are provisioned once by an admin.
+      # The deployment workflow never reads or writes their values.
+      - name: Apply shared DB bootstrap script
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: apply -f .twitch-deploy/db-init-configmap.json
+
+      - name: Remove previous DB bootstrap Job
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: delete job terex-collector-db-init -n admin --ignore-not-found --wait=true --timeout=60s
+
+      - name: Provision collector database principal
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: apply -f deploy/k8s/twitch/db-init-job.yaml
+
+      - name: Wait for DB provisioning and restricted-login verification
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: wait --for=condition=complete job/terex-collector-db-init -n admin --timeout=300s
+
+      - name: Connect main-be to collector and operator Secrets
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: patch deployment terex-be -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-be.patch.yaml
+
+      - name: Expose main-be workflow callbacks inside the cluster
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: patch service terex-be -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-be-service.patch.yaml
+
+      - name: Expose media worker RPC inside the cluster
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: apply -f deploy/k8s/twitch/gpu-service.yaml
+
+      - name: Connect panel to operator Secret and public health probe
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: patch deployment terex-fe -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-fe.patch.yaml
+
+      - name: Connect GPU worker to main-be workflow callbacks
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: patch deployment terex-gpu-be -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-gpu-be.patch.yaml
+
       - uses: actions-hub/kubectl@master
         env:
           KUBE_HOST: ${{ secrets.KUBE_HOST }}
@@ -164,3 +291,57 @@ jobs:
           KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
         with:
           args: rollout restart deployment/terex-fe -n admin
+
+      - name: Deploy collector with this build's commit tag
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: apply -f .twitch-deploy/collector.yaml
+
+      - name: Reload collector Secrets on repeated deployments
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout restart deployment/terex-twitch-collector -n admin
+
+      - name: Check main-be rollout
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout status deployment/terex-be -n admin --timeout=180s
+
+      - name: Check gpu-be rollout
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout status deployment/terex-gpu-be -n admin --timeout=180s
+
+      - name: Check panel rollout
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout status deployment/terex-fe -n admin --timeout=180s
+
+      - name: Check collector rollout
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout status deployment/terex-twitch-collector -n admin --timeout=180s
