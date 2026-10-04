@@ -124,6 +124,18 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_FORMAT`, `LOG_LEVEL` | both | service name, empty (off), `text`, `info` |
 | `BACKEND_URL` | FE | `http://localhost:8000` |
 
+In production (k3s), these env vars that are actual credentials
+(`DATABASE_URL`, `RABBITMQ_URL`, `S3_ACCESS_KEY`/`S3_SECRET_KEY`,
+`OPENROUTER_API_KEY`) come from k8s `Secret` objects (`terex-secret`,
+`rabbitmq-secret`, `s3-secret` in namespace `admin`), which are synced from
+**Infisical** by a Kubernetes Operator — not hand-edited and not sourced from
+this repo's `docker-compose.yml` defaults. To add a new secret-backed env var
+for `main-be`/`gpu-be`, or to rotate an existing one, see the step-by-step
+guide in `../k3s/CLAUDE.md` ("Secrets management (Infisical)") — the actual
+CR/manifest files live in that repo (`k3s/admin/terex-secret-infisical.yml`,
+`k3s/admin/rabbitmq-secret-infisical.yml`, `k3s/admin/s3-secret-infisical.yml`),
+not here.
+
 ## FE notes
 
 - Sidebar groups: Jobs, Accounts, Banners, Backgrounds, **Channels**, **Clips**, plus external service links.
