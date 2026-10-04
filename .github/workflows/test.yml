@@ -30,7 +30,28 @@ jobs:
         with:
           go-version: '1.26.0'
           cache-dependency-path: '**/go.sum'
+      - name: Validate deployment workflow and Kubernetes resources
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          python3 scripts/render-twitch-deploy.py --image "registry.legendary-trio.me/lt-inc/terex-twitch-collector:${{ github.sha }}"
+          go run github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0 -strict -summary -kubernetes-version 1.31.0 .twitch-deploy/collector.yaml .twitch-deploy/db-init-configmap.json deploy/k8s/twitch/db-init-job.yaml deploy/k8s/twitch/github-deployer-rbac.yaml deploy/k8s/twitch/gpu-service.yaml
+          sh -n docker/collector-db-init.sh
       - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/...
+      - name: Verify real DB bootstrap, restricted login and repeated provisioning
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGDATABASE: workflow_test
+          PGUSER: postgres
+          PGPASSWORD: workflow_test
+          COLLECTOR_DB_PASSWORD: workflow_collector_only
+          COLLECTOR_DATABASE_URL: postgres://twitch_collector:workflow_collector_only@localhost:5432/workflow_test?sslmode=disable
+        run: |
+          docker run --rm --network host \
+            -e PGHOST -e PGPORT -e PGDATABASE -e PGUSER -e PGPASSWORD \
+            -e COLLECTOR_DB_PASSWORD -e COLLECTOR_DATABASE_URL \
+            -v "$PWD/docker/collector-db-init.sh:/init.sh:ro" \
+            postgres:16-alpine sh -c 'sh /init.sh && sh /init.sh'
       - name: Build pinned collector image
         run: docker build -f twitch-collector/Dockerfile -t terex-twitch-collector:ci .
       - name: Media smoke with runtime media packages

@@ -6,6 +6,8 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+deploy/k8s/twitch/secrets/*.env
+.twitch-deploy/
 node_modules/
 .next/
 .DS_Store
