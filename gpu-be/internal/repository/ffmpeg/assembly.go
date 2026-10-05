@@ -39,7 +39,7 @@ func (c *Client) Assemble(ctx context.Context, segments []domain.AssemblySegment
 			return fmt.Errorf("empty segment")
 		}
 		target := filepath.Join(dir, fmt.Sprintf("clip-%02d.mp4", i))
-		args := []string{"-i", s.File}
+		args := append(c.hwaccel(), "-i", s.File)
 		audio := "0:a:0"
 		if !p.HasAudio {
 			args = append(args, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo")
@@ -88,7 +88,7 @@ func (c *Client) Assemble(ctx context.Context, segments []domain.AssemblySegment
 	}
 	// Re-encoding the final timeline eliminates AAC priming and concat timestamp
 	// drift across independently encoded clips/cards.
-	args := []string{"-f", "concat", "-safe", "0", "-i", listFile}
+	args := append(c.hwaccel(), "-f", "concat", "-safe", "0", "-i", listFile)
 	args = append(args, c.vcodec(20, "veryfast")...)
 	args = append(args, "-r", "30", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", out)
 	return c.run(ctx, "assembly_concat", args...)
