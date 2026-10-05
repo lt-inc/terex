@@ -41,6 +41,10 @@ services:
       TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
       HTTP_ADDR: ":8080"
       TMP_DIR: /tmp/twitch-collector
+      OTEL_SERVICE_NAME: terex-twitch-collector
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4317}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=700m
     mem_limit: 768m
@@ -50,3 +54,4 @@ services:
       collector-db-init: {condition: service_completed_successfully}
       main-be: {condition: service_started}
       gpu-be: {condition: service_started}
+      tempo: {condition: service_started}

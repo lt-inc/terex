@@ -1,7 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"terex/proto/twitch"
 	"terex/twitch-collector/internal/domain"
@@ -11,14 +14,15 @@ import (
 
 type fakeStore struct {
 	domain.Store
-	mu         sync.Mutex
-	paused     bool
-	invalid    bool
-	deferred   int
-	failed     int
-	retry      *time.Time
-	completed  int
-	lastChecks int
+	mu          sync.Mutex
+	paused      bool
+	invalid     bool
+	deferred    int
+	failed      int
+	retry       *time.Time
+	completed   int
+	lastChecks  int
+	lastMessage string
 }
 
 func (f *fakeStore) GetChannel(context.Context, string) (domain.Channel, error) {
@@ -64,12 +68,13 @@ type fakeTerex struct {
 	settings twitch.Settings
 	imports  int
 	pending  int
+	err      error
 }
 
 func (f *fakeTerex) Settings(context.Context) (domain.Settings, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.settings, nil
+	return f.settings, f.err
 }
 func (f *fakeTerex) PendingCount(context.Context) (int, error) { return f.pending, nil }
 func (f *fakeTerex) Import(context.Context, domain.Clip, domain.Download, int64, func(context.Context) error) (string, error) {
@@ -148,9 +153,43 @@ func TestNetworkFailureSchedulesOnlyAllowedRetry(t *testing.T) {
 	}
 }
 
-func (f *fakeStore) SetLastCheck(context.Context, time.Time, string) error {
+func (f *fakeStore) SetLastCheck(_ context.Context, _ time.Time, message string) error {
 	f.lastChecks++
+	f.lastMessage = message
 	return nil
+}
+
+type fakeTwitch struct {
+	domain.Twitch
+	ready bool
+}
+
+func (f fakeTwitch) Ready() bool { return f.ready }
+
+func TestSchedulerExplainsBlockedCollectionWithoutPollingLogSpam(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		cfg   twitch.Settings
+		ready bool
+		err   error
+		want  string
+	}{
+		{name: "missing account", cfg: twitch.DefaultSettings(), ready: true, want: "Choose a connected YouTube account"},
+		{name: "paused", cfg: func() twitch.Settings { cfg := settings(); cfg.Enabled = false; return cfg }(), ready: true, want: "Collector is paused"},
+		{name: "missing Twitch keys", cfg: settings(), want: "Twitch application credentials"},
+		{name: "backend authorization", cfg: settings(), ready: true, err: &domain.Failure{Kind: "import", Message: "Terex request failed (HTTP 401)", HTTPStatus: 401}, want: "HTTP 401"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			store := &fakeStore{}
+			svc := New(store, fakeTwitch{ready: test.ready}, &fakeTerex{settings: test.cfg, err: test.err}, nil, slog.New(slog.NewJSONHandler(&output, nil)))
+			svc.scheduleOnce(context.Background())
+			svc.scheduleOnce(context.Background())
+			if store.lastChecks != 1 || !strings.Contains(store.lastMessage, test.want) || strings.Count(output.String(), "collector waiting") != 1 {
+				t.Fatalf("skip not explained or repeated: checks=%d message=%q logs=%s", store.lastChecks, store.lastMessage, output.String())
+			}
+		})
+	}
 }
 func TestBacklogAndGlobalPauseBlockDiscovery(t *testing.T) {
 	for _, paused := range []bool{false, true} {

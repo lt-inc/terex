@@ -58,6 +58,7 @@ type Status struct {
 	CredentialsReady bool       `json:"credentials_ready"`
 	LastCheckAt      *time.Time `json:"last_check_at,omitempty"`
 	LastError        string     `json:"last_error,omitempty"`
+	BlockReason      string     `json:"block_reason,omitempty"`
 	Channels         int        `json:"channels"`
 	Queued           int        `json:"queued"`
 	Downloading      int        `json:"downloading"`
@@ -81,6 +82,7 @@ type Failure struct {
 	Message    string
 	Retryable  bool
 	RetryAfter time.Duration
+	HTTPStatus int
 }
 
 func (e *Failure) Error() string { return e.Message }

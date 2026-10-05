@@ -1,0 +1,176 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": []
+  },
+  "description": "Twitch collector checks, candidate filtering, downloads and Terex imports",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": [
+    "terex",
+    "logs",
+    "loki"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Terex Twitch Collector",
+  "uid": "terex-twitch-collector",
+  "version": 1,
+  "panels": [
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "INFO",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"twitch-collector\"} | level=\"INFO\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .channel }}  channel={{.channel}}{{ end }}{{ if .channels }}  channels={{.channels}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .import_id }}  import_id={{.import_id}}{{ end }}{{ if .fetched }}  fetched={{.fetched}}{{ end }}{{ if .eligible }}  eligible={{.eligible}}{{ end }}{{ if .selected }}  selected={{.selected}}{{ end }}{{ if .reserved }}  reserved={{.reserved}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .duration }}  duration={{.duration}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .summary }}  summary={{.summary}}{{ end }}{{ if .component }}  component={{.component}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .error_kind }}  error_kind={{.error_kind}}{{ end }}{{ if .http_status }}  http_status={{.http_status}}{{ end }}{{ if .duration_ms }}  duration_ms={{.duration_ms}}{{ end }}{{ if .size_bytes }}  size_bytes={{.size_bytes}}{{ end }}{{ if .retry_at }}  retry_at={{.retry_at}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 2,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "ERROR",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"twitch-collector\"} | level=\"ERROR\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .channel }}  channel={{.channel}}{{ end }}{{ if .channels }}  channels={{.channels}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .import_id }}  import_id={{.import_id}}{{ end }}{{ if .fetched }}  fetched={{.fetched}}{{ end }}{{ if .eligible }}  eligible={{.eligible}}{{ end }}{{ if .selected }}  selected={{.selected}}{{ end }}{{ if .reserved }}  reserved={{.reserved}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .duration }}  duration={{.duration}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .summary }}  summary={{.summary}}{{ end }}{{ if .component }}  component={{.component}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .error_kind }}  error_kind={{.error_kind}}{{ end }}{{ if .http_status }}  http_status={{.http_status}}{{ end }}{{ if .duration_ms }}  duration_ms={{.duration_ms}}{{ end }}{{ if .size_bytes }}  size_bytes={{.size_bytes}}{{ end }}{{ if .retry_at }}  retry_at={{.retry_at}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 3,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "WARNING",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"twitch-collector\"} | level=\"WARN\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .channel }}  channel={{.channel}}{{ end }}{{ if .channels }}  channels={{.channels}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .import_id }}  import_id={{.import_id}}{{ end }}{{ if .fetched }}  fetched={{.fetched}}{{ end }}{{ if .eligible }}  eligible={{.eligible}}{{ end }}{{ if .selected }}  selected={{.selected}}{{ end }}{{ if .reserved }}  reserved={{.reserved}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .duration }}  duration={{.duration}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .summary }}  summary={{.summary}}{{ end }}{{ if .component }}  component={{.component}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .error_kind }}  error_kind={{.error_kind}}{{ end }}{{ if .http_status }}  http_status={{.http_status}}{{ end }}{{ if .duration_ms }}  duration_ms={{.duration_ms}}{{ end }}{{ if .size_bytes }}  size_bytes={{.size_bytes}}{{ end }}{{ if .retry_at }}  retry_at={{.retry_at}}{{ end }}`",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "gridPos": {
+        "h": 15,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "id": 4,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "Full logs",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "expr": "{service=\"twitch-collector\"}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

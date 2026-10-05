@@ -6,6 +6,8 @@ Service, ConfigMap, InfisicalSecret, подготовку БД, ingress и пр�
 Здесь находятся код четырёх приложений, Docker images и workflow их выпуска.
 GitHub Actions только обновляет images существующих Deployment и ждёт rollout.
 
+Короткая инструкция для оператора: [как включить collector и смотреть логи](TWITCH-COLLECTOR.ru.md).
+
 Инструкции по первому запуску и переходу с прежнего CI-развёртывания:
 [runbook k3s](https://github.com/lt-inc/k3s/blob/master/docs/terex-twitch-rollout.md).
 Применять инфраструктуру нужно с отдельным kubeconfig LT-Inc. Не используйте
@@ -112,3 +114,20 @@ download → import → render и появляется как готовый ч�
 импорты и очередь. Она не отменяет уже одобренные публикации: ими управляет
 календарь Terex. При обновлении приложения состояние восстанавливается из БД;
 временные файлы в ограниченном `emptyDir` могут быть скачаны заново.
+
+## Логи collector
+
+Collector использует общий `proto/telemetry`, как main-be и GPU worker.
+В k3s `terex-twitch-collector-config` задаёт `LOG_LEVEL=info`, `LOG_FORMAT=text`
+и отправку traces в Tempo. Логи stdout собираются Promtail в Loki с
+`service="twitch-collector"`; dashboard **Terex Twitch Collector** находится
+в папке **Terex**. JSON dashboard хранится здесь и импортируется Terraform из
+соседнего checkout Terex — перед применением обновите оба репозитория.
+
+После первого применения новых настроек Promtail перезапустите его DaemonSet:
+его ConfigMap смонтирован через `subPath` и не обновляет уже работающие Pod.
+Используйте тот же явно выбранный kubeconfig LT-Inc:
+
+```bash
+kubectl --kubeconfig <LT-Inc-kubeconfig> -n monitoring rollout restart daemonset/promtail
+```

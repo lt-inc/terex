@@ -66,18 +66,18 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return "", errors.New("Twitch token service unavailable")
+		return "", &domain.Failure{Kind: "network", Message: "Twitch token service unavailable"}
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return "", fmt.Errorf("Twitch application token rejected (HTTP %d)", res.StatusCode)
+		return "", &domain.Failure{Kind: "twitch_auth", Message: fmt.Sprintf("Twitch application token rejected (HTTP %d)", res.StatusCode), HTTPStatus: res.StatusCode}
 	}
 	var body struct {
 		Token   string `json:"access_token"`
 		Expires int    `json:"expires_in"`
 	}
 	if err = json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&body); err != nil || body.Token == "" || body.Expires < 1 {
-		return "", errors.New("invalid Twitch token response")
+		return "", &domain.Failure{Kind: "twitch_response", Message: "invalid Twitch token response"}
 	}
 	c.token = body.Token
 	c.expires = time.Now().Add(time.Duration(body.Expires)*time.Second - 30*time.Second)
@@ -97,7 +97,7 @@ func (c *Client) get(ctx context.Context, path string, values url.Values, out an
 		req.Header.Set("Client-Id", c.ClientID)
 		res, err := c.HTTP.Do(req)
 		if err != nil {
-			return errors.New("Twitch metadata request unavailable")
+			return &domain.Failure{Kind: "network", Message: "Twitch metadata request unavailable"}
 		}
 		if res.StatusCode == 401 && attempt == 0 {
 			res.Body.Close()
@@ -110,16 +110,16 @@ func (c *Client) get(ctx context.Context, path string, values url.Values, out an
 		}
 		if res.StatusCode != 200 {
 			res.Body.Close()
-			return fmt.Errorf("Twitch metadata request failed (HTTP %d)", res.StatusCode)
+			return &domain.Failure{Kind: "twitch_metadata", Message: fmt.Sprintf("Twitch metadata request failed (HTTP %d)", res.StatusCode), HTTPStatus: res.StatusCode}
 		}
 		err = json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(out)
 		res.Body.Close()
 		if err != nil {
-			return errors.New("invalid Twitch metadata response")
+			return &domain.Failure{Kind: "twitch_response", Message: "invalid Twitch metadata response"}
 		}
 		return nil
 	}
-	return errors.New("Twitch application token expired")
+	return &domain.Failure{Kind: "twitch_auth", Message: "Twitch application token expired"}
 }
 func (c *Client) ResolveChannel(ctx context.Context, input string) (domain.Channel, error) {
 	login, err := Login(input)

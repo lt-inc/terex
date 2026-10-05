@@ -1,0 +1,98 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"terex/twitch-collector/internal/domain"
+)
+
+type gateLog struct {
+	reason string
+	at     time.Time
+}
+
+func settingsBlockReason(cfg domain.Settings, err error, credentialsReady bool) string {
+	if err != nil {
+		return "Terex settings unavailable: " + safeErrorMessage(err, "check backend connectivity and service token")
+	}
+	if cfg.TargetAccountID <= 0 {
+		return "Choose a connected YouTube account and enable collection"
+	}
+	if !cfg.Enabled {
+		return "Collector is paused; enable collection and save settings"
+	}
+	if !credentialsReady {
+		return "Twitch application credentials are not configured"
+	}
+	return ""
+}
+
+// State changes are immediately visible; a continuing problem is repeated at
+// most once every five minutes, even though the worker polls every five seconds.
+func (s *Service) logGate(ctx context.Context, component, reason string, err error) bool {
+	now := time.Now()
+	s.mu.Lock()
+	previous, exists := s.gateLogs[component]
+	if exists && previous.reason == reason && (reason == "" || now.Sub(previous.at) < 5*time.Minute) {
+		s.mu.Unlock()
+		return false
+	}
+	s.gateLogs[component] = gateLog{reason: reason, at: now}
+	s.mu.Unlock()
+	if reason == "" {
+		if exists && previous.reason != "" {
+			s.log.InfoContext(ctx, "collector resumed", "component", component)
+		}
+		return false
+	}
+	fields := []any{"component", component, "reason", reason}
+	if err != nil {
+		fields = append(fields, errorFields(err)...)
+		s.log.WarnContext(ctx, "collector waiting", fields...)
+	} else {
+		s.log.InfoContext(ctx, "collector waiting", fields...)
+	}
+	return true
+}
+
+// Provider adapters return fixed diagnostics and HTTP status codes. Unknown
+// errors can contain DSNs, signed URLs or command output and are not printed.
+func safeErrorMessage(err error, fallback string) string {
+	var failure *domain.Failure
+	if errors.As(err, &failure) {
+		return failure.Message
+	}
+	if errors.Is(err, context.Canceled) {
+		return "operation canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "operation timed out"
+	}
+	return fallback
+}
+
+func sanitizedError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.New(safeErrorMessage(err, "collector operation failed"))
+}
+
+func errorFields(err error) []any {
+	var failure *domain.Failure
+	if errors.As(err, &failure) {
+		fields := []any{"error_kind", failure.Kind, "err", failure.Message}
+		if failure.HTTPStatus != 0 {
+			fields = append(fields, "http_status", failure.HTTPStatus)
+		}
+		return fields
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) {
+		return []any{"error_kind", "database", "sql_state", pgError.Code}
+	}
+	return []any{"error_kind", "internal", "err", safeErrorMessage(err, "operation unavailable")}
+}

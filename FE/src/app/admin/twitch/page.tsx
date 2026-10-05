@@ -57,8 +57,8 @@ export default function TwitchPage() {
   const [confirmation, setConfirmation] = useState<{ kind: "archive"; channel: TwitchChannel } | { kind: "reject"; item: ImportedClip } | null>(null);
   const connectedAccounts = accounts.filter((account) => account.platform === "youtube" && account.connection_state === "connected");
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     const results = await Promise.allSettled([fetchTwitchChannels(), fetchTwitchClips(), fetchTwitchStatus(), fetchImports()]);
     const [channelResult, clipResult, statusResult, importResult] = results;
     if (channelResult.status === "fulfilled") setChannels(channelResult.value ?? []);
@@ -67,8 +67,8 @@ export default function TwitchPage() {
     else setStatus(null);
     if (importResult.status === "fulfilled") setImports(importResult.value ?? []);
     const failures = results.filter((result) => result.status === "rejected");
-    setError(failures.map((result) => messageOf(result.reason)).join("; "));
-    setLoading(false);
+    if (showLoading || failures.length) setError(failures.map((result) => messageOf(result.reason)).join("; "));
+    if (showLoading) setLoading(false);
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -84,10 +84,13 @@ export default function TwitchPage() {
   }, [refresh, loadSettings]);
 
   useEffect(() => {
-    if (!status?.running) return;
-    const timer = setInterval(() => { void refresh(); }, 10000);
+    // Scheduled checks can start and finish while the page is idle. Keep their
+    // results current without flashing the loading state on every poll.
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh(false);
+    }, 10000);
     return () => clearInterval(timer);
-  }, [status?.running, refresh]);
+  }, [refresh]);
 
   async function action(key: string, run: () => Promise<void>) {
     setBusy(key); setError(""); setNotice("");
@@ -103,7 +106,10 @@ export default function TwitchPage() {
       setError("Connect and confirm the selected YouTube account before enabling collection."); return;
     }
     await action("settings", async () => {
-      setSettings(await saveTwitchSettings(settings)); setNotice("Settings saved."); await refresh();
+      const saved = await saveTwitchSettings(settings);
+      setSettings(saved);
+      setNotice(saved.enabled ? "Settings saved. Scheduled collection is enabled." : "Settings saved. Collection remains off.");
+      await refresh();
     });
   }
 
@@ -125,7 +131,7 @@ export default function TwitchPage() {
         <div className="flex gap-2">
           <button className={button} disabled={loading || !!busy} onClick={() => void refresh()}>{loading ? "Refreshing…" : "Refresh"}</button>
           <button className="rounded-lg bg-indigo-600 px-3 py-2 text-sm hover:bg-indigo-500 disabled:opacity-40"
-            disabled={!!busy || !status?.credentials_ready || status.running}
+            disabled={!!busy || !status?.credentials_ready || status.running || status.paused || !!status.block_reason}
             onClick={() => void action("check", async () => { await checkTwitchNow(); setNotice("Check requested. New clips still require review before publication."); await refresh(); })}>
             {status?.running ? "Checking…" : "Check now"}
           </button>
@@ -142,8 +148,11 @@ export default function TwitchPage() {
             <span>{status.running ? "Checking channels" : status.paused ? "Paused" : "Ready"}</span>
             <span className="text-slate-400">{status.channels} channels · {status.queued} queued · {status.downloading} downloading · {status.imported} imported · {status.failed} failed</span>
           </div>
-          <p className="mt-2 text-xs text-slate-400">Last check: {checkedAt(status.last_check_at)}</p>
-          {status.last_error && <p role="alert" className="mt-2 text-sm text-red-400">{status.last_error}</p>}
+          <p className="mt-2 text-xs text-slate-400">Last successful check: {checkedAt(status.last_check_at)}</p>
+          {(status.block_reason || status.paused) && <p role="status" className="mt-2 text-sm text-amber-300">
+            {status.block_reason || "Collection is off. Choose a connected YouTube account, enable scheduled collection and save settings."}
+          </p>}
+          {status.last_error && status.last_error !== status.block_reason && <p role="alert" className="mt-2 text-sm text-red-400">Last check message: {status.last_error}</p>}
         </> : <p className="text-sm text-slate-400">{loading ? "Loading collector status…" : "Collector status unavailable. Refresh after the service is available."}</p>}
       </section>
 
@@ -160,6 +169,9 @@ export default function TwitchPage() {
                   {settings.target_account_id > 0 && !connectedAccounts.some((account) => account.id === settings.target_account_id) && <option value={settings.target_account_id} disabled>Account {settings.target_account_id} · not connected</option>}
                   {connectedAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} · {account.remote_account_name || account.remote_account_id}</option>)}
                 </select>
+                {connectedAccounts.length === 0 && <span className="text-amber-300">
+                  Connect and confirm a YouTube account in Accounts before enabling collection.
+                </span>}
               </label>
               <label className="flex flex-col gap-1 text-xs text-slate-400">Daily limits timezone
                 <input className={input} required value={settings.timezone} onChange={(event) => setSettings((previous) => ({ ...previous, timezone: event.target.value }))} />
@@ -168,7 +180,7 @@ export default function TwitchPage() {
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{fields(discoveryFields)}</div>
             <div className="grid gap-3 border-t border-slate-700 pt-4 sm:grid-cols-2 xl:grid-cols-3">{fields(outputFields)}</div>
           </fieldset>
-          <p className="text-xs text-slate-400">Limits cap preparation. Publication uses the existing editor approval and calendar; no automatic rights check is performed.</p>
+          <p className="text-xs text-slate-400">Changing the interval does not enable collection. Select a connected account, enable scheduled collection and save settings. Clips are published only after review and scheduling.</p>
           <div className="flex flex-wrap items-center gap-3">
             <button className="rounded-lg bg-indigo-600 px-4 py-2 text-sm hover:bg-indigo-500 disabled:opacity-40" disabled={!settingsLoaded || !!busy}>{busy === "settings" ? "Saving…" : "Save settings"}</button>
             <Link href="/admin/accounts" className="text-sm text-indigo-400">Manage account connections →</Link>

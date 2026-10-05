@@ -2,7 +2,9 @@
 
 Standalone service with its own `twitch_collector` PostgreSQL schema. It fetches public clip metadata with a Twitch application token, downloads selected public clips with pinned yt-dlp, validates them with ffprobe and imports originals into Terex using temporary upload URLs. Streamer login is not part of this workflow. Uploading to YouTube belongs to Terex.
 
-For the existing k3s deployment, see [the staging setup guide](../docs/TWITCH-K8S.ru.md). The shared build/deploy workflow publishes the collector image, provisions its restricted DB principal with a Job, connects Secrets and checks all four application rollouts.
+For the existing k3s deployment, see [the staging setup guide](../docs/TWITCH-K8S.ru.md) and [the short operator guide](../docs/TWITCH-COLLECTOR.ru.md). k3s Terraform owns the collector workload, restricted DB bootstrap Job and Infisical Secret wiring. Terex CI publishes four images and updates only existing Deployment images.
+
+Collection starts disabled. Choose a connected YouTube account, enable scheduled collection and save settings before using Check now. Changing the polling interval alone does not enable collection. The panel displays the current blocking reason and refreshes results even when a scheduled check finishes between page updates.
 
 The service reads administrator settings from `/api/twitch/settings`. Defaults: top 100 clips created in the previous 72 hours, at least 100 views and 60 minutes old, duration 5–60 seconds, check every 144 minutes. Daily reservations use midnight in the configured timezone, maximum 10 new clips and 2 per channel. Round-robin choices give every channel a first candidate before a second. Exact IDs, intersecting known VOD intervals and hashes of previously imported originals prevent duplicates. At most 10 nonarchived channels can be tracked, including paused channels.
 

@@ -67,6 +67,7 @@ export interface TwitchCollectorStatus {
   running: boolean;
   paused: boolean;
   credentials_ready: boolean;
+  block_reason?: string;
   last_check_at?: string | null;
   last_error?: string;
   channels: number;
