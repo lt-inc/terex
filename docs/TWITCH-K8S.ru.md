@@ -121,8 +121,12 @@ Collector использует общий `proto/telemetry`, как main-be и G
 В k3s `terex-twitch-collector-config` задаёт `LOG_LEVEL=info`, `LOG_FORMAT=text`
 и отправку traces в Tempo. Логи stdout собираются Promtail в Loki с
 `service="twitch-collector"`; dashboard **Terex Twitch Collector** находится
-в папке **Terex**. JSON dashboard хранится здесь и импортируется Terraform из
-соседнего checkout Terex — перед применением обновите оба репозитория.
+в папке **Terex**. Стейджевый JSON dashboard хранится в k3s:
+`monitoring/dashboards/terex/terex-twitch-collector.json` и применяется Terraform.
+Он переопределяет локальную копию Terex; общий dashboard **Logs — All apps**
+также задекларирован в k3s. Обновление только локальных JSON не меняет эти два
+дашборда на стейдже. Остальные Terex dashboards по-прежнему импортируются из
+соседнего checkout Terex, поэтому перед применением обновите оба репозитория.
 
 После первого применения новых настроек Promtail перезапустите его DaemonSet:
 его ConfigMap смонтирован через `subPath` и не обновляет уже работающие Pod.
