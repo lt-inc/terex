@@ -131,5 +131,5 @@ func (a *API) autoCompilation(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"created": out != nil, "compilation": out})
+	writeJSON(w, 200, out)
 }

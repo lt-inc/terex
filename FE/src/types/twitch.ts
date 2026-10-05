@@ -116,3 +116,17 @@ export interface Compilation extends CompilationRequest {
   error?: string;
   created_at: string;
 }
+
+export interface AutoCompilationResult {
+  created: boolean;
+  compilation: Compilation | null;
+  reason?: "created" | "target_account_missing" | "collection_disabled" | "before_scheduled_hour" | "daily_draft_exists" | "insufficient_eligible_sources";
+  message?: string;
+  local_date?: string;
+  timezone?: string;
+  scheduled_at?: string;
+  next_attempt_at?: string;
+  minimum_clips?: number;
+  window_hours?: number;
+  sources?: { total: number; eligible: number; rejected: number; not_ready: number; outside_window: number; already_used: number };
+}

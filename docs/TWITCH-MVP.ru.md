@@ -98,10 +98,23 @@ Basic credentials нужно только по HTTPS вне локальной �
 | GET `/api/imports`, `/api/imports/{id}` | Статус и связанные объекты |
 | PATCH `/api/imports/{id}` | Отклонение/возврат источника |
 | GET/POST `/api/compilations` | Список и создание черновика |
+| POST `/api/compilations/auto` | Подготовка ежедневного черновика с точной причиной отказа |
 | GET/PUT `/api/compilations/{id}` | Просмотр и изменение состава |
 
 JSON-контракты находятся в `proto/twitch`; `AssemblySpec` и GPU ingestion RPC —
 в `proto/workflow`. API календаря, редактора, OAuth и publisher сохраняются.
+
+`POST /api/compilations/auto` сохраняет поля `created` и `compilation` и возвращает
+`reason`, `message`, локальную дату, часовой пояс и время начала подготовки.
+Причины: `target_account_missing`, `collection_disabled`, `before_scheduled_hour`,
+`daily_draft_exists`, `insufficient_eligible_sources`; при успехе — `created`.
+Повторная подготовка возвращает уже созданный ежедневный черновик с `created=false`.
+Автоматически создаётся максимум один черновик за локальные сутки; настройка
+`daily_compilations` ограничивает публикации, а не количество таких черновиков.
+При нехватке источников `sources` показывает число подходящих импортов и причины
+исключения остальных: отклонение, неготовый импорт/рендер, возраст за пределами окна,
+использование в любой прежней версии подборки. Каждый импорт учитывается один раз
+в этом порядке; источники считаются по времени создания Twitch-клипа.
 
 ## Проверки перед реальным выпуском
 

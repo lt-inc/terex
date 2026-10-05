@@ -56,7 +56,7 @@ func (s *Service) scheduleOnce(ctx context.Context) {
 	if reason != "" {
 		if s.logGate(ctx, "scheduler", reason, err) {
 			if e := s.store.SetLastCheck(ctx, time.Now().UTC(), reason); e != nil {
-				s.log.WarnContext(ctx, "collector status could not be saved", "stage", "scheduler")
+				s.log.WarnContext(ctx, "collector status could not be saved", append([]any{"stage", "scheduler"}, errorFields(e)...)...)
 			}
 		}
 		return
@@ -113,7 +113,7 @@ func (s *Service) check(parent context.Context) {
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
 		defer cancel()
 		if err := s.store.SetLastCheck(saveCtx, now, message); err != nil {
-			s.log.WarnContext(ctx, "collector check result could not be saved")
+			s.log.WarnContext(ctx, "collector check result could not be saved", errorFields(err)...)
 		}
 	}()
 	cfg, err := s.terex.Settings(ctx)
@@ -139,8 +139,8 @@ func (s *Service) check(parent context.Context) {
 	}
 	channels, err := s.store.ListChannels(ctx)
 	if err != nil {
-		message = "channel list unavailable"
-		s.log.WarnContext(ctx, message)
+		message = "Channel list unavailable: " + safeErrorMessage(err, "collector database request failed")
+		s.log.WarnContext(ctx, message, errorFields(err)...)
 		return
 	}
 	var candidates []domain.Clip
@@ -159,9 +159,9 @@ func (s *Service) check(parent context.Context) {
 			fields := append([]any{"channel", ch.Login, "channel_id", ch.ID}, errorFields(e)...)
 			s.log.WarnContext(ctx, "collector channel check failed", fields...)
 		} else if e = s.store.UpsertClips(ctx, clips); e != nil {
-			channelError = "clip metadata storage unavailable"
+			channelError = "Clip metadata storage unavailable: " + safeErrorMessage(e, "collector database request failed")
 			message = channelError
-			s.log.WarnContext(ctx, channelError, "channel", ch.Login, "channel_id", ch.ID)
+			s.log.WarnContext(ctx, channelError, append([]any{"channel", ch.Login, "channel_id", ch.ID}, errorFields(e)...)...)
 		} else {
 			candidates = append(candidates, clips...)
 			count := len(Select(clips, cfg, now))
@@ -170,7 +170,7 @@ func (s *Service) check(parent context.Context) {
 			s.log.InfoContext(ctx, "collector channel check finished", "channel", ch.Login, "channel_id", ch.ID, "fetched", len(clips), "eligible", count, "filtered_or_overlap", len(clips)-count)
 		}
 		if e := s.store.ChannelChecked(ctx, ch.ID, now, channelError); e != nil {
-			s.log.WarnContext(ctx, "collector channel check result could not be saved", "channel", ch.Login, "channel_id", ch.ID)
+			s.log.WarnContext(ctx, "collector channel check result could not be saved", append([]any{"channel", ch.Login, "channel_id", ch.ID}, errorFields(e)...)...)
 		}
 	}
 	if channelsChecked == 0 {
@@ -195,8 +195,8 @@ func (s *Service) check(parent context.Context) {
 	selected := Select(candidates, current, now)
 	eligible = len(selected)
 	if reserved, e = s.store.Reserve(ctx, selected, current, now); e != nil {
-		message = "clip reservations unavailable"
-		s.log.WarnContext(ctx, message)
+		message = "Could not queue clip downloads: " + safeErrorMessage(e, "collector database request failed") + ". Unqueued candidates remain discovered; the next check will retry."
+		s.log.ErrorContext(ctx, "collector download reservation failed", append([]any{"stage", "reservation", "selected", len(selected), "reason", message}, errorFields(e)...)...)
 		return
 	}
 	reason := ""
@@ -362,7 +362,7 @@ func (s *Service) process(parent context.Context, task domain.Task, cfg domain.S
 		defer end()
 		retry := time.Now().Add(time.Minute)
 		if err := s.store.Defer(dbCtx, task, retry); err != nil {
-			log.WarnContext(ctx, "collector task deferral could not be saved", "stage", stage)
+			log.WarnContext(ctx, "collector task deferral could not be saved", append([]any{"stage", stage}, errorFields(err)...)...)
 			return
 		}
 		log.InfoContext(ctx, "collector task deferred", "stage", stage, "reason", reason, "retry_at", retry.UTC())
@@ -395,7 +395,7 @@ func (s *Service) process(parent context.Context, task domain.Task, cfg domain.S
 		}
 		span.RecordError(errors.New(f.Message))
 		if err := s.store.Fail(dbCtx, task, f.Kind, f.Message, retry); err != nil {
-			log.WarnContext(ctx, "collector task failure could not be saved", "stage", stage)
+			log.WarnContext(ctx, "collector task failure could not be saved", append([]any{"stage", stage}, errorFields(err)...)...)
 		}
 	}
 	if err := s.guard(ctx, task); err != nil {
@@ -456,7 +456,7 @@ func (s *Service) process(parent context.Context, task domain.Task, cfg domain.S
 		return
 	}
 	if err = s.store.Complete(ctx, task, importID, file.SHA256); err != nil {
-		log.WarnContext(ctx, "collector completion not committed; idempotent import will reconcile on retry", "import_id", importID)
+		log.WarnContext(ctx, "collector completion not committed; idempotent import will reconcile on retry", append([]any{"import_id", importID}, errorFields(err)...)...)
 		return
 	}
 	log.InfoContext(ctx, "collector import completed", "import_id", importID, "duration_ms", time.Since(started).Milliseconds())

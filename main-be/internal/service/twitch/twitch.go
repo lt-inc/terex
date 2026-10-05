@@ -168,7 +168,33 @@ func (s *Service) CreateCompilation(ctx context.Context, r t.CompilationRequest)
 func (s *Service) UpdateCompilation(ctx context.Context, id string, r domain.CompilationUpdate) (domain.Compilation, error) {
 	return s.Repo.UpdateCompilation(ctx, id, r, s.now())
 }
-func (s *Service) AutoCompilation(ctx context.Context) (*domain.Compilation, error) {
-	return s.Repo.AutoCompilation(ctx, s.now())
+func (s *Service) AutoCompilation(ctx context.Context) (domain.AutoCompilationResult, error) {
+	out, err := s.Repo.AutoCompilation(ctx, s.now())
+	if err != nil {
+		return out, err
+	}
+	if out.Compilation != nil {
+		s.preview(ctx, out.Compilation)
+	}
+	switch out.Reason {
+	case "created":
+		out.Message = "Compilation prepared for review. Rendering and approval are still required."
+	case "target_account_missing":
+		out.Message = "No compilation created: select an existing YouTube target account in Twitch settings."
+	case "collection_disabled":
+		out.Message = "No compilation created: Twitch collection is disabled. Enable it in Twitch settings to prepare automatically."
+	case "before_scheduled_hour":
+		out.Message = fmt.Sprintf("No compilation created: automatic preparation starts at %s (%s). Wait until then, change the compilation hour in Twitch settings, or build manually.", out.ScheduledAt.Format("2006-01-02 15:04"), out.Timezone)
+	case "daily_draft_exists":
+		out.Message = fmt.Sprintf("No new compilation created: the automatic draft for %s (%s) already exists. Automatic preparation creates at most one draft per local day. Open the existing draft or build another manually.", out.LocalDate, out.Timezone)
+	case "insufficient_eligible_sources":
+		if counts := out.Sources; counts != nil {
+			out.Message = fmt.Sprintf("No compilation created: %d eligible clips; at least %d are required. Of %d imports: %d rejected, %d not ready, %d outside the last %d hours, %d already used in a compilation. Wait for more ready imports, review failed imports, or adjust the window in Twitch settings.", counts.Eligible, out.MinimumClips, counts.Total, counts.Rejected, counts.NotReady, counts.OutsideWindow, out.WindowHours, counts.AlreadyUsed)
+		}
+	}
+	return out, nil
 }
-func (s *Service) Tick(ctx context.Context) error { _, err := s.AutoCompilation(ctx); return err }
+func (s *Service) Tick(ctx context.Context) error {
+	_, err := s.Repo.AutoCompilation(ctx, s.now())
+	return err
+}
