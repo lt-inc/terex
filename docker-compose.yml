@@ -112,7 +112,7 @@ services:
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-stealth/space-bunny-alpha}
-      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-medium}
       USE_NVENC: ${USE_NVENC:-false}
       CLIP_MIN_SEC: ${CLIP_MIN_SEC:-15}          # highlights: LLM picks the clip length inside [min, max]
       CLIP_MAX_SEC: ${CLIP_MAX_SEC:-180}

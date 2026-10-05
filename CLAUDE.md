@@ -72,7 +72,7 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`. Regenerate g
    - YAMNet audio events (one pass of `gpu-be/tools/yamnet.py`, `YAMNET_CMD`; probability ≥ max(video p90, floor)): `laugh` (laughter/applause/cheering within 0.3 s before … 2 s after the sentence end, floor 0.30), `shout` (shout/yell/scream during the sentence, floor 0.25), `gasp` (gasp 0.3 s before … 1.5 s after the end, floor 0.25), `music` (music/singing under the speech, mean ≥ 0.5; skipped entirely if it covers > 60 % of the video, since then it is background, not a signal). YAMNet also yields a `silence` score; it is parsed but not used as a tag. If YAMNet is unavailable the hints are skipped with a warning.
    - `fast` — words/sec ≥ p90; `pause_before` — gap ≥ 0.7 s and ≥ p90.
 3. **LLM** (OpenRouter, prompt in `gpu-be/internal/repository/llm/llm.go`) gets the numbered sentences with hints and returns clips as `{from, to}` **sentence ids** + title + hashtags. It chooses the length itself (complete thought / setup + payoff) within `CLIP_MIN_SEC`..`CLIP_MAX_SEC` (15..180 s) and at most `MAX_CLIPS`.
-   Reasoning models (e.g. `stealth/space-bunny-alpha`, reasoning is mandatory and defaults to `max`) can think for minutes while OpenRouter streams blank keep-alive lines — set `LLM_REASONING_EFFORT=low` (and `LLM_TIMEOUT` if needed); `LLM_CHUNK_CHARS` can be raised for large-context models.
+   Reasoning models (e.g. `stealth/space-bunny-alpha`, reasoning is mandatory and defaults to `max`) can think for minutes while OpenRouter streams blank keep-alive lines — set `LLM_REASONING_EFFORT=medium` (and `LLM_TIMEOUT` if needed); `LLM_CHUNK_CHARS` can be raised for large-context models.
    Resilience: transient failures (empty/whitespace-only body — OpenRouter keep-alive without a result, invalid/truncated JSON, HTTP 408/429/5xx, provider timeout errors) are retried up to 3 times with 3 s/6 s pauses; permanent ones (401, 400 "model does not support json_object", …) fail at once with the provider's message. A transcript over ~80k prompt characters (~25k tokens) is split into consecutive chunks (one request each, picks interleaved by rank), so a long video is not one giant request.
 4. **ResolvePicks** (`service/candidate/picks.go`) validates the answer: bad ids dropped, length forced into the limits by trimming/extending whole sentences, overlaps dropped (LLM order = quality), timestamps = word bounds + a small pad that never reaches the neighbouring sentence (`laugh` keeps up to 1.5 s of the reaction). No valid clips → the stage fails (`fail_place=candidate`).
 
@@ -118,7 +118,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | `STATE_DIR`, `TMP_DIR` | gpu-be | `/data/state`, `/tmp/terex` |
 | `WHISPER_BIN`, `WHISPER_MODEL` | gpu-be | `whisper`, `base` |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | gpu-be | — , `openai/gpt-4o-mini` |
-| `LLM_REASONING_EFFORT`, `LLM_TIMEOUT`, `LLM_CHUNK_CHARS` | gpu-be | empty (model default), `240s`, `80000` |
+| `LLM_REASONING_EFFORT`, `LLM_TIMEOUT`, `LLM_CHUNK_CHARS` | gpu-be | `medium`, `240s`, `80000` |
 | `WORKERS_PER_MODULE`, `USE_NVENC` | gpu-be | `1`, `false` |
 | `CLIP_MIN_SEC`, `CLIP_MAX_SEC`, `MAX_CLIPS`, `PROMPT_TAGS`, `YAMNET_CMD` | gpu-be | `15`, `180`, `12`, `energy:high,energy:spike,laugh,shout,gasp,music,fast,pause_before`, `python3 /opt/terex/yamnet.py` |
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_FORMAT`, `LOG_LEVEL` | both | service name, empty (off), `text`, `info` |

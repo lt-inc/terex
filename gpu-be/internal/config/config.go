@@ -28,7 +28,7 @@ type Config struct {
 	MaxClips              int      // highlights: max clips per video
 	YamnetCmd             string   // YAMNet script command; empty disables audio-event hints
 	PromptTags            []string // which hints the LLM sees
-	LLMEffort             string   // OpenRouter reasoning effort; empty = default of the model
+	LLMEffort             string   // OpenRouter reasoning effort.
 	LLMTimeout            time.Duration
 	LLMChunkChars         int
 	CoordinatorAddr       string
@@ -61,7 +61,7 @@ func Load() Config {
 		MaxClips:              envInt("MAX_CLIPS", 12),
 		YamnetCmd:             env("YAMNET_CMD", "python3 /opt/terex/yamnet.py"),
 		PromptTags:            splitCSV(env("PROMPT_TAGS", "energy:high,energy:spike,laugh,shout,gasp,music,fast,pause_before")),
-		LLMEffort:             os.Getenv("LLM_REASONING_EFFORT"),
+		LLMEffort:             env("LLM_REASONING_EFFORT", "medium"),
 		LLMTimeout:            envDuration("LLM_TIMEOUT", 240*time.Second),
 		LLMChunkChars:         envInt("LLM_CHUNK_CHARS", 80000),
 		CoordinatorAddr:       env("MAIN_COORDINATOR_ADDR", "main-be:9091"),

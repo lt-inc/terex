@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -86,11 +87,13 @@ func BuildPrompt(sents []domain.Sentence, lim domain.ClipLimits) string {
 }
 
 type rawPick struct {
-	From     *int     `json:"from"`
-	To       *int     `json:"to"`
-	Title    string   `json:"title"`
-	Hashtags []string `json:"hashtags"`
+	From     *int      `json:"from"`
+	To       *int      `json:"to"`
+	Title    *string   `json:"title"`
+	Hashtags *[]string `json:"hashtags"`
 }
+
+var errMissingRequiredFields = errors.New("missing required fields in highlights")
 
 // ParsePicks extracts picks from the model's answer (tolerates ```json fences).
 func ParsePicks(content string) ([]domain.Pick, error) {
@@ -105,17 +108,33 @@ func ParsePicks(content string) ([]domain.Pick, error) {
 		return nil, fmt.Errorf("bad highlights json: %w", err)
 	}
 	out := make([]domain.Pick, 0, len(res.Highlights))
-	for _, h := range res.Highlights {
-		if h.From == nil || h.To == nil {
-			continue
+	for i, h := range res.Highlights {
+		missing := make([]string, 0, 4)
+		if h.From == nil {
+			missing = append(missing, "from")
 		}
-		tags := make([]string, 0, len(h.Hashtags))
-		for _, t := range h.Hashtags {
+		if h.To == nil {
+			missing = append(missing, "to")
+		}
+		if h.Title == nil {
+			missing = append(missing, "title")
+		}
+		if h.Hashtags == nil {
+			missing = append(missing, "hashtags")
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("%w: highlights[%d] missing %s", errMissingRequiredFields, i, strings.Join(missing, ","))
+		}
+		tags := make([]string, 0, len(*h.Hashtags))
+		for _, t := range *h.Hashtags {
 			if t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), "#")); t != "" {
 				tags = append(tags, t)
 			}
 		}
-		out = append(out, domain.Pick{From: *h.From, To: *h.To, Title: strings.TrimSpace(h.Title), Hashtags: tags})
+		if len(tags) == 0 {
+			tags = []string{"#hype", "#viral"}
+		}
+		out = append(out, domain.Pick{From: *h.From, To: *h.To, Title: strings.TrimSpace(*h.Title), Hashtags: tags})
 	}
 	return out, nil
 }
@@ -294,13 +313,29 @@ func (c *Client) Find(ctx context.Context, sents []domain.Sentence, lim domain.C
 	for i, ch := range chunks {
 		prompt := BuildPrompt(ch, chunkLim)
 		slog.InfoContext(ctx, "llm request", "model", c.Model, "reasoning_effort", c.Effort, "timeout", c.HTTP.Timeout, "chunk", i+1, "of", len(chunks), "sentences", len(ch), "prompt_chars", len(prompt))
-		content, cerr := c.complete(ctx, prompt)
-		if cerr != nil {
-			return nil, fmt.Errorf("chunk %d/%d: %w", i+1, len(chunks), cerr)
-		}
-		p, perr := ParsePicks(content)
-		if perr != nil {
-			return nil, fmt.Errorf("chunk %d/%d: %w (answer: %s)", i+1, len(chunks), perr, snippet([]byte(content)))
+		var (
+			p       []domain.Pick
+			content string
+			perr    error
+		)
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			content, err = c.complete(ctx, prompt)
+			if err != nil {
+				return nil, fmt.Errorf("chunk %d/%d: %w", i+1, len(chunks), err)
+			}
+			p, perr = ParsePicks(content)
+			if perr == nil {
+				break
+			}
+			if !errors.Is(perr, errMissingRequiredFields) || attempt == maxAttempts {
+				return nil, fmt.Errorf("chunk %d/%d: %w (answer: %s)", i+1, len(chunks), perr, snippet([]byte(content)))
+			}
+			slog.WarnContext(ctx, "llm answer misses required highlight fields; retrying", "chunk", i+1, "of", len(chunks), "attempt", attempt, "of", maxAttempts, "err", perr)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * c.Backoff):
+			}
 		}
 		lists = append(lists, p)
 	}
