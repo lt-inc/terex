@@ -1,37 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminAccess } from "./lib/admin-access";
+import { accessDetail, accessStatus, adminAccess, requiresBasicChallenge, type AdminAccessConfig } from "./lib/admin-access";
+
+function runtimeConfig(): AdminAccessConfig {
+  const environment = process.env;
+  return {
+    mode: environment["FE_AUTH_MODE"],
+    username: environment["ADMIN_USERNAME"],
+    password: environment["ADMIN_PASSWORD"],
+    publicURL: environment["APP_PUBLIC_URL"],
+  };
+}
 
 export function middleware(request: NextRequest) {
-  const origin = request.headers.get("origin");
-  if (origin && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
-    try {
-      if (new URL(origin).host !== request.headers.get("host")) {
-        return NextResponse.json({ detail: "Cross-origin actions are not allowed." }, { status: 403 });
-      }
-    } catch {
-      return NextResponse.json({ detail: "Invalid request origin." }, { status: 403 });
-    }
-  }
-  const result = adminAccess(
-    request.nextUrl.pathname,
-    request.method,
-    request.headers.get("authorization"),
-    {
-      username: process.env.ADMIN_USERNAME,
-      password: process.env.ADMIN_PASSWORD,
-      production: process.env.NODE_ENV === "production",
-    },
-  );
-  if (result === "allow") return NextResponse.next();
+  const credentials = runtimeConfig();
+  const access = adminAccess(request.nextUrl.pathname, request.method, request.headers, credentials);
+  if (access === "operator" || access === "service" || access === "oauth_callback") return NextResponse.next();
   const isAPI = request.nextUrl.pathname.startsWith("/api/");
-  const message = result === "unconfigured"
-    ? "Administrator access is not configured."
-    : "Administrator authentication required.";
   const response = isAPI
-    ? NextResponse.json({ detail: message }, { status: result === "unconfigured" ? 503 : 401 })
-    : new NextResponse(message, { status: result === "unconfigured" ? 503 : 401 });
+    ? NextResponse.json({ detail: accessDetail(access) }, { status: accessStatus(access, credentials) })
+    : new NextResponse(accessDetail(access), { status: accessStatus(access, credentials) });
   response.headers.set("Cache-Control", "no-store");
-  if (result === "authenticate") response.headers.set("WWW-Authenticate", 'Basic realm="Terex Admin", charset="UTF-8"');
+  if (requiresBasicChallenge(access, credentials)) response.headers.set("WWW-Authenticate", 'Basic realm="Terex Admin", charset="UTF-8"');
   return response;
 }
 

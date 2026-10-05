@@ -5,7 +5,7 @@ on:
     branches: [master]
   workflow_dispatch:
 
-# Bootstrap uses one fixed Job name; do not overlap deployments to this cluster.
+# Serialize application releases. Also keep CI idle during k3s Terraform plan/apply.
 concurrency:
   group: terex-admin-deploy
   cancel-in-progress: false
@@ -38,7 +38,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_BE }}
           tags: |
-            type=sha,prefix=
+            type=sha,format=long,prefix=,priority=1000
             type=raw,value=latest
 
       - uses: docker/build-push-action@v5
@@ -73,7 +73,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_GPU }}
           tags: |
-            type=sha,prefix=
+            type=sha,format=long,prefix=,priority=1000
             type=raw,value=latest
 
       - uses: docker/build-push-action@v5
@@ -106,7 +106,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_FE }}
           tags: |
-            type=sha,prefix=
+            type=sha,format=long,prefix=,priority=1000
             type=raw,value=latest
 
       - uses: docker/build-push-action@v5
@@ -155,96 +155,10 @@ jobs:
     timeout-minutes: 15
     needs: [build-be, build-gpu-be, build-fe, build-twitch-collector]
     steps:
-      - uses: actions/checkout@v4
-      - name: Package DB bootstrap and pin collector image
-        env:
-          COLLECTOR_IMAGE: ${{ env.IMAGE_COLLECTOR }}:${{ needs.build-twitch-collector.outputs.image-tag }}
-        run: python3 scripts/render-twitch-deploy.py --image "$COLLECTOR_IMAGE"
-
-      # Secrets and github-deployer-rbac.yaml are provisioned once by an admin.
-      # The deployment workflow never reads or writes their values.
-      - name: Apply shared DB bootstrap script
+      # Kubernetes structure, including Secrets and DB bootstrap, is managed by
+      # Terraform in lt-inc/k3s. CI only changes images on existing Deployments.
+      - name: Update main API image
         uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: apply -f .twitch-deploy/db-init-configmap.json
-
-      - name: Remove previous DB bootstrap Job
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: delete job terex-collector-db-init -n admin --ignore-not-found --wait=true --timeout=60s
-
-      - name: Provision collector database principal
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: apply -f deploy/k8s/twitch/db-init-job.yaml
-
-      - name: Wait for DB provisioning and restricted-login verification
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: wait --for=condition=complete job/terex-collector-db-init -n admin --timeout=300s
-
-      - name: Connect main-be to collector and operator Secrets
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: patch deployment terex-be -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-be.patch.yaml
-
-      - name: Expose main-be workflow callbacks inside the cluster
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: patch service terex-be -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-be-service.patch.yaml
-
-      - name: Expose media worker RPC inside the cluster
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: apply -f deploy/k8s/twitch/gpu-service.yaml
-
-      - name: Connect panel to operator Secret and public health probe
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: patch deployment terex-fe -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-fe.patch.yaml
-
-      - name: Connect GPU worker to main-be workflow callbacks
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: patch deployment terex-gpu-be -n admin --type=strategic --patch-file=deploy/k8s/twitch/terex-gpu-be.patch.yaml
-
-      - uses: actions-hub/kubectl@master
         env:
           KUBE_HOST: ${{ secrets.KUBE_HOST }}
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
@@ -252,65 +166,7 @@ jobs:
         with:
           args: set image deployment/terex-be terex-be=${{ env.IMAGE_BE }}:${{ needs.build-be.outputs.image-tag }} -n admin
 
-      - uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: rollout restart deployment/terex-be -n admin
-
-      - uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: set image deployment/terex-gpu-be terex-gpu-be=${{ env.IMAGE_GPU }}:${{ needs.build-gpu-be.outputs.image-tag }} -n admin
-
-      - uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: rollout restart deployment/terex-gpu-be -n admin
-
-      - uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: set image deployment/terex-fe terex-fe=${{ env.IMAGE_FE }}:${{ needs.build-fe.outputs.image-tag }} -n admin
-
-      - uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: rollout restart deployment/terex-fe -n admin
-
-      - name: Deploy collector with this build's commit tag
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: apply -f .twitch-deploy/collector.yaml
-
-      - name: Reload collector Secrets on repeated deployments
-        uses: actions-hub/kubectl@master
-        env:
-          KUBE_HOST: ${{ secrets.KUBE_HOST }}
-          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
-          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
-        with:
-          args: rollout restart deployment/terex-twitch-collector -n admin
-
-      - name: Check main-be rollout
+      - name: Check main API rollout
         uses: actions-hub/kubectl@master
         env:
           KUBE_HOST: ${{ secrets.KUBE_HOST }}
@@ -319,7 +175,16 @@ jobs:
         with:
           args: rollout status deployment/terex-be -n admin --timeout=180s
 
-      - name: Check gpu-be rollout
+      - name: Update GPU worker image
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: set image deployment/terex-gpu-be terex-gpu-be=${{ env.IMAGE_GPU }}:${{ needs.build-gpu-be.outputs.image-tag }} -n admin
+
+      - name: Check GPU worker rollout
         uses: actions-hub/kubectl@master
         env:
           KUBE_HOST: ${{ secrets.KUBE_HOST }}
@@ -327,6 +192,15 @@ jobs:
           KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
         with:
           args: rollout status deployment/terex-gpu-be -n admin --timeout=180s
+
+      - name: Update panel image
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: set image deployment/terex-fe terex-fe=${{ env.IMAGE_FE }}:${{ needs.build-fe.outputs.image-tag }} -n admin
 
       - name: Check panel rollout
         uses: actions-hub/kubectl@master
@@ -337,7 +211,16 @@ jobs:
         with:
           args: rollout status deployment/terex-fe -n admin --timeout=180s
 
-      - name: Check collector rollout
+      - name: Update Twitch collector image
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: set image deployment/terex-twitch-collector terex-twitch-collector=${{ env.IMAGE_COLLECTOR }}:${{ needs.build-twitch-collector.outputs.image-tag }} -n admin
+
+      - name: Check Twitch collector rollout
         uses: actions-hub/kubectl@master
         env:
           KUBE_HOST: ${{ secrets.KUBE_HOST }}

@@ -13,6 +13,16 @@ and `COLLECTOR_SERVICE_TOKEN` authenticates the proxy to that service. The colle
 uses `TEREX_SERVICE_TOKEN` to read settings and reserve/complete imports. Never
 expose service tokens to browser JavaScript. Use HTTPS for the public operator UI.
 
+In staging, Traefik performs the human-facing Basic Auth. The FE receives its
+authenticated-user marker from that middleware, then uses `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` only as a server-to-server Basic credential when it calls main-be.
+main-be keeps this check so direct ClusterIP and port-forward traffic cannot bypass
+the API boundary. `TEREX_SERVICE_TOKEN` remains a separate, narrow collector token;
+it must never become an operator credential. Local Compose uses `FE_AUTH_MODE=basic`
+and keeps the browser Basic prompt. The OAuth callback is the one public exception:
+only `GET /api/accounts/oauth/callback` bypasses operator authentication, and its
+single-use, short-lived state remains mandatory.
+
 Settings are stored in `twitch_project_settings`, default to disabled and require
 one selected YouTube account before enabling. The HTTP API uses operator Basic
 authentication; the narrow Bearer token cannot approve drafts, change settings,

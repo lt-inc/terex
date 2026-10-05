@@ -21,6 +21,7 @@ func TestOperatorAuthCapabilities(t *testing.T) {
 		{"GET", "/api/accounts/list", "Bearer service-test", "", 403},
 		{"GET", "/api/jobs", "", "", 401},
 		{"GET", "/api/accounts/oauth/callback", "", "", 204},
+		{"POST", "/api/accounts/oauth/callback", "", "", 401},
 		{"POST", "/api/jobs", "basic", "https://attacker.invalid", 403},
 		{"GET", "/api/jobs", "basic", "", 204},
 	} {

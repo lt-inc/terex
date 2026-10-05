@@ -19,15 +19,16 @@ const access = moduleFromSource("lib/admin-access.ts");
 const twitch = moduleFromSource("lib/twitch.ts");
 const source = moduleFromSource("lib/job-source.ts");
 const basic = (username, password) => `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
-const config = { production: true, username: "admin", password: "secret:colon" };
+const headers = (values = {}) => new Headers(values);
+const config = { mode: "basic", username: "admin", password: "secret:colon", publicURL: "http://localhost:3000" };
 
-test("production and partially configured administrator access fail closed", () => {
-  assert.equal(access.adminAccess("/admin/twitch", "GET", null, { production: true }), "unconfigured");
-  assert.equal(access.adminAccess("/api/jobs", "POST", null, { production: false, username: "admin" }), "unconfigured");
-  assert.equal(access.adminAccess("/admin/twitch", "GET", null, { production: false }), "allow");
-  assert.equal(access.adminAccess("/", "GET", null, config), "authenticate");
-  assert.equal(access.adminAccess("/api/compilations", "POST", basic("admin", "wrong"), config), "authenticate");
-  assert.equal(access.adminAccess("/api/compilations", "POST", basic("admin", "secret:colon"), config), "allow");
+test("basic mode and malformed frontend configuration fail closed", () => {
+  assert.equal(access.adminAccess("/admin/twitch", "GET", headers(), { mode: "basic" }), "unconfigured");
+  assert.equal(access.adminAccess("/api/jobs", "POST", headers(), { mode: "basic", username: "admin" }), "unconfigured");
+  assert.equal(access.adminAccess("/api/jobs", "GET", headers(), { mode: "unknown", username: "admin", password: "secret" }), "unconfigured");
+  assert.equal(access.adminAccess("/", "GET", headers(), config), "authenticate");
+  assert.equal(access.adminAccess("/api/compilations", "POST", headers({ authorization: basic("admin", "wrong") }), config), "authenticate");
+  assert.equal(access.adminAccess("/api/compilations", "POST", headers({ authorization: basic("admin", "secret:colon") }), config), "operator");
 });
 test("Basic parsing supports UTF-8 and colon passwords, rejecting malformed credentials", () => {
   assert.deepEqual(access.basicCredentials(basic("оператор", "пароль:ещё")), ["оператор", "пароль:ещё"]);
@@ -38,15 +39,23 @@ test("Basic parsing supports UTF-8 and colon passwords, rejecting malformed cred
 });
 test("service Bearer only passes through ingestion and settings reads for backend verification", () => {
   const accepted = [["/api/twitch/settings", "GET"], ["/api/imports", "GET"], ["/api/imports", "POST"], ["/api/imports/source-id/complete", "POST"]];
-  for (const [route, method] of accepted) assert.equal(access.adminAccess(route, method, "Bearer service", config), "allow");
+  for (const [route, method] of accepted) assert.equal(access.adminAccess(route, method, headers({ authorization: "Bearer service" }), config), "service");
   const denied = [["/admin/twitch", "GET"], ["/api/twitch/settings", "PUT"], ["/api/imports/id", "PATCH"], ["/api/clips/id/approve", "POST"], ["/api/publications/id/publish-now", "POST"], ["/api/compilations", "POST"], ["/api/imports/a/b/complete", "POST"]];
-  for (const [route, method] of denied) assert.equal(access.adminAccess(route, method, "Bearer service", config), "authenticate");
-  assert.equal(access.adminAccess("/api/imports", "POST", "Bearer ", config), "authenticate");
+  for (const [route, method] of denied) assert.equal(access.adminAccess(route, method, headers({ authorization: "Bearer service" }), config), "authenticate");
+  assert.equal(access.adminAccess("/api/imports", "POST", headers({ authorization: "Bearer " }), config), "authenticate");
+});
+test("Traefik mode requires its marker and keeps origin validation explicit", () => {
+  const traefik = { mode: "traefik", username: "internal", password: "secret", publicURL: "https://admin.example.test" };
+  assert.equal(access.adminAccess("/admin/twitch", "GET", headers(), traefik), "authenticate");
+  assert.equal(access.adminAccess("/admin/twitch", "GET", headers({ "x-terex-authenticated-user": "operator" }), traefik), "operator");
+  assert.equal(access.adminAccess("/api/imports", "POST", headers({ "x-terex-authenticated-user": "operator", authorization: "Bearer external" }), traefik), "operator");
+  assert.equal(access.adminAccess("/api/jobs", "POST", headers({ "x-terex-authenticated-user": "operator", host: "admin.example.test", origin: "https://attacker.example.test" }), traefik), "forbidden");
+  assert.equal(access.adminAccess("/api/jobs", "GET", headers({ "x-terex-authenticated-user": "operator" }), { ...traefik, publicURL: undefined }), "unconfigured");
 });
 test("only the exact GET OAuth callback bypasses administrator authentication", () => {
-  assert.equal(access.adminAccess("/api/accounts/oauth/callback", "GET", null, config), "allow");
-  assert.equal(access.adminAccess("/api/accounts/oauth/callback", "POST", null, config), "authenticate");
-  assert.equal(access.adminAccess("/api/accounts/oauth/callback/extra", "GET", null, config), "authenticate");
+  assert.equal(access.adminAccess("/api/accounts/oauth/callback", "GET", headers(), config), "oauth_callback");
+  assert.equal(access.adminAccess("/api/accounts/oauth/callback", "POST", headers(), config), "authenticate");
+  assert.equal(access.adminAccess("/api/accounts/oauth/callback/extra", "GET", headers(), config), "authenticate");
 });
 test("Twitch defaults stay disabled and contradictory budgets or windows are rejected", () => {
   const defaults = twitch.DEFAULT_TWITCH_SETTINGS;
