@@ -125,7 +125,8 @@ Collector использует общий `proto/telemetry`, как main-be и G
 `monitoring/dashboards/terex/terex-twitch-collector.json` и применяется Terraform.
 Он переопределяет локальную копию Terex; общий dashboard **Logs — All apps**
 также задекларирован в k3s. Обновление только локальных JSON не меняет эти два
-дашборда на стейдже.
+дашборда на стейдже. Остальные Terex dashboards по-прежнему импортируются из
+соседнего checkout Terex, поэтому перед применением обновите оба репозитория.
 
 После первого применения новых настроек Promtail перезапустите его DaemonSet:
 его ConfigMap смонтирован через `subPath` и не обновляет уже работающие Pod.
