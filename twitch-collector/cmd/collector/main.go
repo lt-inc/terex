@@ -10,6 +10,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"terex/proto/telemetry"
 	"terex/twitch-collector/internal/repository/helix"
 	"terex/twitch-collector/internal/repository/media"
 	"terex/twitch-collector/internal/repository/postgres"
@@ -25,9 +26,19 @@ func env(key, fallback string) string {
 	return fallback
 }
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	shutdownTelemetry, err := telemetry.Setup(ctx, "terex-twitch-collector")
+	if err != nil {
+		slog.Error("collector telemetry initialization failed")
+		os.Exit(1)
+	}
+	defer func() {
+		flush, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		_ = shutdownTelemetry(flush)
+	}()
+	logger := slog.Default().With("service", "twitch-collector")
 	token := os.Getenv("COLLECTOR_SERVICE_TOKEN")
 	backendToken := os.Getenv("TEREX_SERVICE_TOKEN")
 	dsn := os.Getenv("DATABASE_URL")
@@ -61,9 +72,10 @@ func main() {
 		defer end()
 		_ = server.Shutdown(stop)
 	}()
-	logger.Info("Twitch collector started")
+	logger.Info("Twitch collector started", "http", server.Addr, "credentials_ready", os.Getenv("TWITCH_CLIENT_ID") != "" && os.Getenv("TWITCH_CLIENT_SECRET") != "", "scheduler_tick_seconds", 60, "worker_tick_seconds", 5)
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("collector HTTP server failed")
 		os.Exit(1)
 	}
+	logger.Info("Twitch collector stopped")
 }

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"terex/proto/twitch"
 	"terex/twitch-collector/internal/domain"
 )
@@ -40,13 +42,14 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Content-Type", "application/json")
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return &domain.Failure{Kind: "network", Message: "Terex request unavailable", Retryable: true}
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return &domain.Failure{Kind: "import", Message: fmt.Sprintf("Terex request failed (HTTP %d)", res.StatusCode), Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
+		return &domain.Failure{Kind: "import", Message: fmt.Sprintf("Terex request failed (HTTP %d)", res.StatusCode), HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
 	}
 	if out == nil {
 		return nil
@@ -67,6 +70,9 @@ func (c *Client) Settings(ctx context.Context) (domain.Settings, error) {
 	err := c.request(ctx, "GET", "/api/twitch/settings", nil, &s)
 	if err == nil {
 		err = s.Validate()
+		if err != nil {
+			err = &domain.Failure{Kind: "configuration", Message: err.Error()}
+		}
 	}
 	return s, err
 }
@@ -131,7 +137,7 @@ func (c *Client) Import(ctx context.Context, clip domain.Clip, file domain.Downl
 	io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 	res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", &domain.Failure{Kind: "upload", Message: fmt.Sprintf("source upload failed (HTTP %d)", res.StatusCode), Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
+		return "", &domain.Failure{Kind: "upload", Message: fmt.Sprintf("source upload failed (HTTP %d)", res.StatusCode), HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
 	}
 	if err = guard(ctx); err != nil {
 		return "", err

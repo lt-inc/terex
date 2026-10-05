@@ -26,9 +26,9 @@ scrape_configs:
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
         target_label: app
     pipeline_stages:
-      # main-be / gpu-be: slog text (logfmt): time=... level=INFO msg="..." trace_id=...
+      # Go services: slog text (logfmt): time=... level=INFO msg="..." trace_id=...
       - match:
-          selector: '{service=~"main-be|gpu-be"}'
+          selector: '{service=~"main-be|gpu-be|twitch-collector"}'
           stages:
             - logfmt:
                 mapping:

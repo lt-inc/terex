@@ -81,7 +81,7 @@
             "type": "loki",
             "uid": "loki-ds"
           },
-          "expr": "sum(count_over_time({service=~\"main-be|gpu-be\"} | level=\"ERROR\" [1h]))",
+          "expr": "sum(count_over_time({service=~\"main-be|gpu-be|twitch-collector\"} | level=\"ERROR\" [1h]))",
           "instant": true,
           "queryType": "instant",
           "refId": "A"
@@ -140,7 +140,7 @@
             "type": "loki",
             "uid": "loki-ds"
           },
-          "expr": "sum(count_over_time({service=~\"main-be|gpu-be\"} | level=\"WARN\" [1h]))",
+          "expr": "sum(count_over_time({service=~\"main-be|gpu-be|twitch-collector\"} | level=\"WARN\" [1h]))",
           "instant": true,
           "queryType": "instant",
           "refId": "A"
@@ -350,7 +350,7 @@
             "type": "loki",
             "uid": "loki-ds"
           },
-          "expr": "sum by (level) (count_over_time({service=~\"main-be|gpu-be\"} | level=~\"INFO|WARN|ERROR\" [$__interval]))",
+          "expr": "sum by (level) (count_over_time({service=~\"main-be|gpu-be|twitch-collector\"} | level=~\"INFO|WARN|ERROR\" [$__interval]))",
           "legendFormat": "{{level}}",
           "refId": "A"
         }
@@ -445,7 +445,7 @@
             "type": "loki",
             "uid": "loki-ds"
           },
-          "expr": "sum by (service) (count_over_time({service=~\"main-be|gpu-be\"} | level=\"ERROR\" [$__interval]))",
+          "expr": "sum by (service) (count_over_time({service=~\"main-be|gpu-be|twitch-collector\"} | level=\"ERROR\" [$__interval]))",
           "legendFormat": "{{service}}",
           "refId": "A"
         }
@@ -487,7 +487,7 @@
         "sortOrder": "Descending",
         "wrapLogMessage": true
       },
-      "title": "ERROR — main-be + gpu-be",
+      "title": "ERROR — main-be + gpu-be + twitch-collector",
       "type": "logs",
       "targets": [
         {
@@ -495,7 +495,7 @@
             "type": "loki",
             "uid": "loki-ds"
           },
-          "expr": "{service=~\"main-be|gpu-be\"} | level=\"ERROR\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
+          "expr": "{service=~\"main-be|gpu-be|twitch-collector\"} | level=\"ERROR\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
           "refId": "A"
         }
       ],
@@ -602,7 +602,7 @@
         "sortOrder": "Descending",
         "wrapLogMessage": true
       },
-      "title": "WARN — main-be + gpu-be",
+      "title": "WARN — main-be + gpu-be + twitch-collector",
       "type": "logs",
       "targets": [
         {
@@ -610,7 +610,7 @@
             "type": "loki",
             "uid": "loki-ds"
           },
-          "expr": "{service=~\"main-be|gpu-be\"} | level=\"WARN\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
+          "expr": "{service=~\"main-be|gpu-be|twitch-collector\"} | level=\"WARN\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .method }}  {{.method}} {{.path}}{{ end }}{{ if .job_id }}  job_id={{.job_id}}{{ end }}{{ if .stage }}  stage={{.stage}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .fail_place }}  fail_place={{.fail_place}}{{ end }}{{ if .op }}  op={{.op}}{{ end }}{{ if .took }}  took={{.took}}{{ end }}{{ if .url }}  url={{.url}}{{ end }}{{ if .model }}  model={{.model}}{{ end }}{{ if .segments }}  segments={{.segments}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .clips }}  clips={{.clips}}{{ end }}{{ if .clip_id }}  clip_id={{.clip_id}}{{ end }}{{ if .account_id }}  account_id={{.account_id}}{{ end }}{{ if .publications_scheduled }}  publications_scheduled={{.publications_scheduled}}{{ end }}{{ if .slice_mode }}  slice_mode={{.slice_mode}}{{ end }}{{ if .approve_mode }}  approve_mode={{.approve_mode}}{{ end }}{{ if .sub_jobs }}  sub_jobs={{.sub_jobs}}{{ end }}{{ if .queue }}  queue={{.queue}}{{ end }}{{ if .endpoint }}  endpoint={{.endpoint}}{{ end }}{{ if .http }}  http={{.http}}{{ end }}{{ if .grpc }}  grpc={{.grpc}}{{ end }}{{ if .error }}  error={{.error}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .sentences }}  sentences={{.sentences}}{{ end }}{{ if .picks }}  picks={{.picks}}{{ end }}{{ if .dropped }}  dropped={{.dropped}}{{ end }}{{ if .energy_high }}  energy_high={{.energy_high}}{{ end }}{{ if .laugh }}  laugh={{.laugh}}{{ end }}{{ if .fast }}  fast={{.fast}}{{ end }}{{ if .pause_before }}  pause_before={{.pause_before}}{{ end }}{{ if .windows }}  windows={{.windows}}{{ end }}{{ if .energy_spike }}  energy_spike={{.energy_spike}}{{ end }}{{ if .shout }}  shout={{.shout}}{{ end }}{{ if .gasp }}  gasp={{.gasp}}{{ end }}{{ if .music }}  music={{.music}}{{ end }}{{ if .chunk }}  chunk={{.chunk}}{{ end }}{{ if .chunks }}  chunks={{.chunks}}{{ end }}{{ if .of }}  of={{.of}}{{ end }}{{ if .attempt }}  attempt={{.attempt}}{{ end }}{{ if .prompt_chars }}  prompt_chars={{.prompt_chars}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}`",
           "refId": "A"
         }
       ]
