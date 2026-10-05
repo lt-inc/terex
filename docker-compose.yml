@@ -64,6 +64,8 @@ services:
       dockerfile: docker/Dockerfile
     environment:
       BACKEND_URL: http://main-be:8000
+      FE_AUTH_MODE: ${FE_AUTH_MODE:-basic}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:3000}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     ports: ["127.0.0.1:3000:3000"]

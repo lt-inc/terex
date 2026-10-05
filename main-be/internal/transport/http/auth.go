@@ -29,7 +29,7 @@ func collectorRoute(r *http.Request) bool {
 }
 func (a *OperatorAuth) Protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/accounts/oauth/callback" {
+		if r.URL.Path == "/api/accounts/oauth/callback" && r.Method == http.MethodGet {
 			next.ServeHTTP(w, r)
 			return
 		}
