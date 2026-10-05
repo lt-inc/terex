@@ -43,5 +43,7 @@ func (c *Client) Probe(ctx context.Context, in string) (domain.MediaProbe, error
 	return p, nil
 }
 func (c *Client) VerifyIntegrity(ctx context.Context, in string) error {
-	return c.run(ctx, "integrity", "-xerror", "-i", in, "-map", "0:v:0", "-map", "0:a?", "-f", "null", "-")
+	args := append([]string{"-xerror"}, c.hwaccel()...)
+	args = append(args, "-i", in, "-map", "0:v:0", "-map", "0:a?", "-f", "null", "-")
+	return c.run(ctx, "integrity", args...)
 }
