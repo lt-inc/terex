@@ -25,6 +25,32 @@ type CompilationUpdate struct {
 	ExpectedVersion int `json:"expected_version"`
 	twitch.CompilationRequest
 }
+
+// AutoCompilationResult preserves the HTTP created/compilation fields while
+// explaining the first unmet requirement. Sources is absent until evaluated.
+type AutoCompilationResult struct {
+	Created       bool                     `json:"created"`
+	Compilation   *Compilation             `json:"compilation"`
+	Reason        string                   `json:"reason"`
+	Message       string                   `json:"message"`
+	LocalDate     string                   `json:"local_date"`
+	Timezone      string                   `json:"timezone"`
+	ScheduledAt   time.Time                `json:"scheduled_at"`
+	NextAttemptAt *time.Time               `json:"next_attempt_at,omitempty"`
+	MinimumClips  int                      `json:"minimum_clips"`
+	WindowHours   int                      `json:"window_hours"`
+	Sources       *CompilationSourceCounts `json:"sources,omitempty"`
+}
+
+// Each import is counted once, in rejection, readiness, age, reuse order.
+type CompilationSourceCounts struct {
+	Total         int `json:"total"`
+	Eligible      int `json:"eligible"`
+	Rejected      int `json:"rejected"`
+	NotReady      int `json:"not_ready"`
+	OutsideWindow int `json:"outside_window"`
+	AlreadyUsed   int `json:"already_used"`
+}
 type TwitchRepo interface {
 	TwitchSettings(context.Context) (twitch.Settings, error)
 	SaveTwitchSettings(context.Context, twitch.Settings) error
@@ -39,5 +65,5 @@ type TwitchRepo interface {
 	GetCompilation(context.Context, string) (Compilation, error)
 	ListCompilations(context.Context) ([]Compilation, error)
 	UpdateCompilation(context.Context, string, CompilationUpdate, time.Time) (Compilation, error)
-	AutoCompilation(context.Context, time.Time) (*Compilation, error)
+	AutoCompilation(context.Context, time.Time) (AutoCompilationResult, error)
 }

@@ -225,6 +225,7 @@ export default function TwitchPage() {
 
       <section className={panel} aria-labelledby="candidates-title">
         <h2 id="candidates-title" className="mb-3 font-semibold">Recent discovered clips</h2>
+        {!!clips.length && <p className="mb-3 text-xs text-slate-400">Discovered means the clip was found but has not entered the download queue. Check the last check message above if eligible clips stay discovered; daily quotas and duplicate source checks also apply.</p>}
         {!clips.length && <p className="text-sm text-slate-500">No clips discovered yet.</p>}
         <div className="grid gap-3 lg:grid-cols-2">{clips.map((clip) => <div key={clip.id} className="min-w-0 rounded-lg border border-slate-700 p-3">
           <a href={clip.url} target="_blank" rel="noopener noreferrer" className="break-words text-sm text-indigo-400">{clip.title || clip.id}</a>

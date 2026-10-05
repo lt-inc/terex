@@ -150,7 +150,7 @@ func TestTwitchCompilationPinsSourcesReordersImmutablyAndRejectsDependency(t *te
 		t.Fatal("rejected dependency accepted", err)
 	}
 	auto, err := s.AutoCompilation(ctx, now.Add(24*time.Hour))
-	if err != nil || auto != nil {
+	if err != nil || auto.Created || auto.Compilation != nil {
 		t.Fatal(auto, err)
 	}
 }
@@ -224,18 +224,70 @@ func TestTwitchAutoCompilationCreatesAtMostOneDailyDraft(t *testing.T) {
 	loc, _ := time.LoadLocation(settings.Timezone)
 	now := time.Now().In(loc)
 	now = time.Date(now.Year(), now.Month(), now.Day(), 21, 0, 0, 0, loc)
+	settings.Enabled = false
+	if err := s.SaveTwitchSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := s.AutoCompilation(ctx, now)
+	if err != nil || disabled.Created || disabled.Reason != "collection_disabled" || disabled.Sources != nil {
+		t.Fatal(disabled, err)
+	}
+	accountID := settings.TargetAccountID
+	settings.TargetAccountID = 0
+	if err := s.SaveTwitchSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := s.AutoCompilation(ctx, now)
+	if err != nil || missing.Reason != "target_account_missing" {
+		t.Fatal(missing, err)
+	}
+	settings.Enabled, settings.TargetAccountID = true, accountID
+	if err := s.SaveTwitchSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	early, err := s.AutoCompilation(ctx, now.Add(-time.Minute))
+	if err != nil || early.Reason != "before_scheduled_hour" || early.NextAttemptAt == nil || !early.NextAttemptAt.Equal(now) {
+		t.Fatal(early, err)
+	}
+	empty, err := s.AutoCompilation(ctx, now)
+	if err != nil || empty.Reason != "insufficient_eligible_sources" || empty.Sources == nil || empty.Sources.Total != 0 {
+		t.Fatal(empty, err)
+	}
+	usedItems := []twitch.CompilationItemRequest{}
 	for _, slug := range []string{"one", "two", "three"} {
+		im := readyImport(t, s, slug, now)
+		usedItems = append(usedItems, twitch.CompilationItemRequest{ClipID: im.ClipID, RevisionID: im.RevisionID})
+	}
+	if _, err = s.CreateCompilation(ctx, twitch.CompilationRequest{Title: "Manual draft", Items: usedItems}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"fresh-one", "fresh-two"} {
 		readyImport(t, s, slug, now)
 	}
+	rejected := readyImport(t, s, "rejected", now)
+	if err = s.RejectTwitchImport(ctx, rejected.ImportID, true); err != nil {
+		t.Fatal(err)
+	}
+	unready := readyImport(t, s, "unready", now)
+	if _, err = s.pool.Exec(ctx, `UPDATE clip_revisions SET render_state='pending' WHERE id=$1`, unready.RevisionID); err != nil {
+		t.Fatal(err)
+	}
+	readyImport(t, s, "old", now.Add(-time.Duration(settings.WindowHours+2)*time.Hour))
+	insufficient, err := s.AutoCompilation(ctx, now)
+	wantCounts := domain.CompilationSourceCounts{Total: 8, Eligible: 2, Rejected: 1, NotReady: 1, OutsideWindow: 1, AlreadyUsed: 3}
+	if err != nil || insufficient.Created || insufficient.Reason != "insufficient_eligible_sources" || insufficient.Sources == nil || *insufficient.Sources != wantCounts {
+		t.Fatal(insufficient, err)
+	}
+	readyImport(t, s, "fresh-three", now)
 	first, err := s.AutoCompilation(ctx, now)
-	if err != nil || first == nil {
+	if err != nil || !first.Created || first.Reason != "created" || first.Compilation == nil || first.Sources.Eligible != 3 || len(first.Compilation.Items) != 3 {
 		t.Fatal(first, err)
 	}
 	second, err := s.AutoCompilation(ctx, now.Add(time.Minute))
-	if err != nil || second != nil {
+	if err != nil || second.Created || second.Reason != "daily_draft_exists" || second.Compilation == nil || second.Compilation.ClipID != first.Compilation.ClipID || second.NextAttemptAt == nil || !second.NextAttemptAt.Equal(now.AddDate(0, 0, 1)) {
 		t.Fatal(second, err)
 	}
-	if first.ApprovedAt != nil || first.State != "pending" || len(pubs(t, s)) != 0 {
+	if first.Compilation.ApprovedAt != nil || first.Compilation.State != "pending" || len(pubs(t, s)) != 0 {
 		t.Fatal(first)
 	}
 }

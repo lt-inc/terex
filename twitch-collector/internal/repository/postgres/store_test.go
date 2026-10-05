@@ -64,6 +64,13 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 		t.Fatal("failed check replaced last successful timestamp", checked, err)
 	}
 	clips := []domain.Clip{{ID: "a1", ChannelID: a.ID, BroadcasterID: "1", BroadcasterName: "a", CreatedAt: now.Add(-2 * time.Hour), Duration: 20, ViewCount: 500}, {ID: "b1", ChannelID: b.ID, BroadcasterID: "2", BroadcasterName: "b", CreatedAt: now.Add(-2 * time.Hour), Duration: 20, ViewCount: 400}, {ID: "a2", ChannelID: a.ID, BroadcasterID: "1", BroadcasterName: "a", CreatedAt: now.Add(-2 * time.Hour), Duration: 20, ViewCount: 300}, {ID: "b2", ChannelID: b.ID, BroadcasterID: "2", BroadcasterName: "b", CreatedAt: now.Add(-2 * time.Hour), Duration: 20, ViewCount: 200}}
+	// Real Twitch clips commonly have fractional VOD offsets. The overlap query
+	// must prepare successfully and preserve deduplication before queuing a file.
+	for i := range clips {
+		offset := 10.25 + float64(i)*40
+		clips[i].VideoID = "vod-" + clips[i].BroadcasterID
+		clips[i].VODOffset = &offset
+	}
 	if err = s.UpsertClips(ctx, clips); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +97,18 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 	wg.Wait()
 	if total != 2 {
 		t.Fatalf("reserved %d", total)
+	}
+	overlap := clips[0]
+	overlap.ID = "a-overlap"
+	offset := *overlap.VODOffset + 5.5
+	overlap.VODOffset = &offset
+	if err = s.UpsertClips(ctx, []domain.Clip{overlap}); err != nil {
+		t.Fatal(err)
+	}
+	looseQuotas := settings
+	looseQuotas.DailyDownloads, looseQuotas.PerChannelDailyDownloads = 10, 10
+	if n, e := s.Reserve(ctx, []domain.Clip{overlap}, looseQuotas, now); e != nil || n != 0 {
+		t.Fatal("overlapping VOD source was queued", n, e)
 	}
 	task, err := s.Claim(ctx, 30*time.Second)
 	if err != nil || task == nil || task.Attempt != 1 {

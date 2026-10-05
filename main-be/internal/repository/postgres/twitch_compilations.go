@@ -249,58 +249,124 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 	}
 	return out, tx.Commit(ctx)
 }
-func (s *Store) AutoCompilation(ctx context.Context, now time.Time) (*domain.Compilation, error) {
+
+// Classify each import once so the diagnostic counts use the same eligibility
+// rules as automatic selection, including sources used by older revisions.
+const autoCompilationSources = `WITH sources AS (
+ SELECT c.clip_id,c.latest_revision_id,(i.request->'source'->>'view_count')::int AS view_count,i.created_at,
+ CASE
+  WHEN i.rejected OR c.approval='rejected' THEN 'rejected'
+  WHEN i.state<>'ready' OR c.clip_id IS NULL OR r.render_state IS DISTINCT FROM 'ready' THEN 'not_ready'
+  WHEN ((i.request->'source'->>'created_at')::timestamptz >= $1) IS NOT TRUE THEN 'outside_window'
+  WHEN EXISTS(SELECT 1 FROM twitch_compilation_items t WHERE t.source_clip_id=c.clip_id) THEN 'already_used'
+  ELSE 'eligible'
+ END AS eligibility
+ FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id LEFT JOIN clip_revisions r ON r.id=c.latest_revision_id
+) `
+
+func (s *Store) AutoCompilation(ctx context.Context, now time.Time) (domain.AutoCompilationResult, error) {
+	result := domain.AutoCompilationResult{}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
-		return nil, err
+		return result, err
 	}
 	settings, err := readTwitchSettings(ctx, tx)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	if !settings.Enabled || settings.TargetAccountID <= 0 {
-		return nil, nil
-	}
-	loc, _ := time.LoadLocation(settings.Timezone)
-	local := now.In(loc)
-	if local.Hour() < settings.CompilationHour {
-		return nil, nil
-	}
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_compilations WHERE local_date=$1::date AND timezone=$2)`, local.Format("2006-01-02"), settings.Timezone).Scan(&exists); err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, nil
-	}
-	rows, err := tx.Query(ctx, `SELECT c.clip_id,c.latest_revision_id FROM twitch_imports i JOIN clips c ON c.clip_id=i.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id WHERE i.state='ready' AND NOT i.rejected AND c.approval<>'rejected' AND r.render_state='ready' AND (i.request->'source'->>'created_at')::timestamptz>=$1 AND NOT EXISTS(SELECT 1 FROM twitch_compilation_items t WHERE t.source_clip_id=c.clip_id) ORDER BY (i.request->'source'->>'view_count')::int DESC,i.created_at LIMIT $2`, now.Add(-time.Duration(settings.WindowHours)*time.Hour), settings.CompilationMaxClips)
+	loc, err := time.LoadLocation(settings.Timezone)
 	if err != nil {
-		return nil, err
+		return result, err
+	}
+	local := now.In(loc)
+	result.LocalDate, result.Timezone = local.Format("2006-01-02"), settings.Timezone
+	result.MinimumClips, result.WindowHours = settings.CompilationMinClips, settings.WindowHours
+	result.ScheduledAt = time.Date(local.Year(), local.Month(), local.Day(), settings.CompilationHour, 0, 0, 0, loc)
+	if settings.TargetAccountID <= 0 {
+		result.Reason = "target_account_missing"
+		return result, nil
+	}
+	if !settings.Enabled {
+		result.Reason = "collection_disabled"
+		return result, nil
+	}
+	var targetExists bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM accounts WHERE id=$1 AND platform='youtube')`, settings.TargetAccountID).Scan(&targetExists); err != nil {
+		return result, err
+	}
+	if !targetExists {
+		result.Reason = "target_account_missing"
+		return result, nil
+	}
+	if local.Hour() < settings.CompilationHour {
+		result.Reason = "before_scheduled_hour"
+		result.NextAttemptAt = &result.ScheduledAt
+		return result, nil
+	}
+	var existingID string
+	err = tx.QueryRow(ctx, `SELECT clip_id FROM twitch_compilations WHERE local_date=$1::date AND timezone=$2`, result.LocalDate, settings.Timezone).Scan(&existingID)
+	if err != nil && err != pgx.ErrNoRows {
+		return result, err
+	}
+	if err == nil {
+		existing, err := compilationByID(ctx, tx, existingID)
+		if err != nil {
+			return result, err
+		}
+		result.Reason, result.Compilation = "daily_draft_exists", &existing
+		next := result.ScheduledAt.AddDate(0, 0, 1)
+		result.NextAttemptAt = &next
+		return result, nil
+	}
+	cutoff := now.Add(-time.Duration(settings.WindowHours) * time.Hour)
+	result.Sources = &domain.CompilationSourceCounts{}
+	counts := result.Sources
+	err = tx.QueryRow(ctx, autoCompilationSources+`SELECT count(*),
+ count(*) FILTER(WHERE eligibility='eligible'), count(*) FILTER(WHERE eligibility='rejected'),
+ count(*) FILTER(WHERE eligibility='not_ready'), count(*) FILTER(WHERE eligibility='outside_window'),
+ count(*) FILTER(WHERE eligibility='already_used') FROM sources`, cutoff).Scan(&counts.Total, &counts.Eligible, &counts.Rejected, &counts.NotReady, &counts.OutsideWindow, &counts.AlreadyUsed)
+	if err != nil {
+		return result, err
+	}
+	if counts.Eligible < settings.CompilationMinClips {
+		result.Reason = "insufficient_eligible_sources"
+		return result, nil
+	}
+	rows, err := tx.Query(ctx, autoCompilationSources+`SELECT clip_id,latest_revision_id FROM sources WHERE eligibility='eligible' ORDER BY view_count DESC,created_at LIMIT $2`, cutoff, settings.CompilationMaxClips)
+	if err != nil {
+		return result, err
 	}
 	req := twitch.CompilationRequest{Title: "Twitch clips · " + local.Format("2006-01-02"), Items: []twitch.CompilationItemRequest{}}
 	for rows.Next() {
 		var v twitch.CompilationItemRequest
 		if err = rows.Scan(&v.ClipID, &v.RevisionID); err != nil {
 			rows.Close()
-			return nil, err
+			return result, err
 		}
 		req.Items = append(req.Items, v)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	if len(req.Items) < settings.CompilationMinClips {
-		return nil, nil
+		result.Reason = "insufficient_eligible_sources"
+		// Render completion/rejection can change while the rows are selected.
+		counts.Eligible = len(req.Items)
+		return result, nil
 	}
 	out, err := createCompilationTx(ctx, tx, req, &now, now)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	return &out, tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return result, err
+	}
+	result.Created, result.Compilation, result.Reason = true, &out, "created"
+	return result, nil
 }

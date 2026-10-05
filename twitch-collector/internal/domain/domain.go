@@ -87,6 +87,16 @@ type Failure struct {
 
 func (e *Failure) Error() string { return e.Message }
 
+// StorageError identifies the failed operation without including connection
+// strings or query values. Unwrap preserves PostgreSQL diagnostics for logging.
+type StorageError struct {
+	Operation string
+	Err       error
+}
+
+func (e *StorageError) Error() string { return "collector storage operation failed: " + e.Operation }
+func (e *StorageError) Unwrap() error { return e.Err }
+
 type Store interface {
 	Migrate(context.Context) error
 	ListChannels(context.Context) ([]Channel, error)

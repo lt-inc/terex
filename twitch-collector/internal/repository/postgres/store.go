@@ -203,7 +203,13 @@ func (s *Store) ListClips(ctx context.Context, limit int, state string) ([]domai
 	return out, rows.Err()
 }
 
-func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domain.Settings, now time.Time) (int, error) {
+func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domain.Settings, now time.Time) (added int, err error) {
+	operation := "begin download reservation"
+	defer func() {
+		if err != nil {
+			err = &domain.StorageError{Operation: operation, Err: err}
+		}
+	}()
 	scfg := settings
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -211,9 +217,11 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 	}
 	defer tx.Rollback(ctx)
 	// Serializes calendar-day quotas across checks and collector replicas.
+	operation = "lock daily download quotas"
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(846923102)"); err != nil {
 		return 0, err
 	}
+	operation = "resolve daily download timezone"
 	loc, err := time.LoadLocation(scfg.Timezone)
 	if err != nil {
 		return 0, err
@@ -221,16 +229,17 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 	local := now.In(loc)
 	since := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	var total int
+	operation = "count today's download reservations"
 	if err = tx.QueryRow(ctx, "SELECT count(*) FROM twitch_collector.clips WHERE reserved_at >= $1", since).Scan(&total); err != nil {
 		return 0, err
 	}
-	added := 0
 	for _, c := range clips {
 		if total >= scfg.DailyDownloads {
 			break
 		}
 		var count int
 		var active bool
+		operation = "check channel availability"
 		if err = tx.QueryRow(ctx, "SELECT NOT paused AND NOT archived FROM twitch_collector.channels WHERE id=$1 FOR UPDATE", c.ChannelID).Scan(&active); errors.Is(err, pgx.ErrNoRows) {
 			continue
 		} else if err != nil {
@@ -239,6 +248,7 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 		if !active {
 			continue
 		}
+		operation = "count today's channel reservations"
 		if err = tx.QueryRow(ctx, "SELECT count(*) FROM twitch_collector.clips WHERE channel_id=$1 AND reserved_at >= $2", c.ChannelID, since).Scan(&count); err != nil {
 			return 0, err
 		}
@@ -247,8 +257,9 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 		}
 		var overlap bool
 		if c.VideoID != "" && c.VODOffset != nil {
+			operation = "check VOD interval overlap"
 			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_collector.clips WHERE video_id=$1 AND vod_offset IS NOT NULL AND duration>0
- AND reserved_at IS NOT NULL AND clip_id<>$4 AND LEAST(vod_offset+duration,$2+$3)-GREATEST(vod_offset,$2)>0)`, c.VideoID, *c.VODOffset, c.Duration, c.ID).Scan(&overlap)
+ AND reserved_at IS NOT NULL AND clip_id<>$4 AND LEAST(vod_offset+duration,$2::double precision+$3::double precision)-GREATEST(vod_offset,$2::double precision)>0)`, c.VideoID, *c.VODOffset, c.Duration, c.ID).Scan(&overlap)
 			if err != nil {
 				return 0, err
 			}
@@ -256,6 +267,7 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 				continue
 			}
 		}
+		operation = "queue discovered clip"
 		tag, e := tx.Exec(ctx, `UPDATE twitch_collector.clips SET state='queued',reserved_at=$2,last_error='' WHERE clip_id=$1 AND state='discovered' AND reserved_at IS NULL`, c.ID, now)
 		if e != nil {
 			return 0, e
@@ -263,12 +275,14 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 		if tag.RowsAffected() == 0 {
 			continue
 		}
+		operation = "create download task"
 		if _, e = tx.Exec(ctx, "INSERT INTO twitch_collector.download_tasks(clip_id,run_at) VALUES($1,$2) ON CONFLICT DO NOTHING", c.ID, now); e != nil {
 			return 0, e
 		}
 		total++
 		added++
 	}
+	operation = "commit download reservations"
 	if err = tx.Commit(ctx); err != nil {
 		return 0, err
 	}

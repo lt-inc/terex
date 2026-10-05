@@ -14,7 +14,7 @@ import type {
   PublicationTarget,
 } from "@/types";
 import { formatInZone } from "./datetime";
-import type { Compilation, CompilationRequest, ImportedClip, TwitchSettings, TwitchChannel, TwitchClip, TwitchCollectorStatus } from "@/types/twitch";
+import type { AutoCompilationResult, Compilation, CompilationRequest, ImportedClip, TwitchSettings, TwitchChannel, TwitchClip, TwitchCollectorStatus } from "@/types/twitch";
 
 export class ApiError extends Error {
   constructor(
@@ -287,4 +287,4 @@ export const fetchCompilation = (id: string) => request<Compilation>(`/compilati
 export const createCompilation = (spec: CompilationRequest) => request<Compilation>("/compilations", json("POST", spec));
 export const saveCompilation = (id: string, version: number, spec: CompilationRequest) =>
   request<Compilation>(`/compilations/${encodeURIComponent(id)}`, json("PUT", { expected_version: version, ...spec }));
-export const triggerAutoCompilation = () => request<{ created: boolean; compilation: Compilation | null }>("/compilations/auto", json("POST", {}));
+export const triggerAutoCompilation = () => request<AutoCompilationResult>("/compilations/auto", json("POST", {}));

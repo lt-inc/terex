@@ -58,20 +58,30 @@ func (s *Service) logGate(ctx context.Context, component, reason string, err err
 	return true
 }
 
-// Provider adapters return fixed diagnostics and HTTP status codes. Unknown
-// errors can contain DSNs, signed URLs or command output and are not printed.
+// Provider adapters return fixed diagnostics and HTTP status codes. PostgreSQL's
+// primary message describes the failed query; Detail and query values are omitted.
+// Unknown errors can contain DSNs or signed URLs and are not printed.
 func safeErrorMessage(err error, fallback string) string {
 	var failure *domain.Failure
 	if errors.As(err, &failure) {
 		return failure.Message
 	}
+	var storageError *domain.StorageError
+	prefix := ""
+	if errors.As(err, &storageError) {
+		prefix = storageError.Operation + ": "
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) {
+		return prefix + "PostgreSQL " + pgError.Code + ": " + pgError.Message
+	}
 	if errors.Is(err, context.Canceled) {
-		return "operation canceled"
+		return prefix + "operation canceled"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "operation timed out"
+		return prefix + "operation timed out"
 	}
-	return fallback
+	return prefix + fallback
 }
 
 func sanitizedError(err error) error {
@@ -82,9 +92,14 @@ func sanitizedError(err error) error {
 }
 
 func errorFields(err error) []any {
+	var storageError *domain.StorageError
+	fields := []any{}
+	if errors.As(err, &storageError) {
+		fields = append(fields, "operation", storageError.Operation)
+	}
 	var failure *domain.Failure
 	if errors.As(err, &failure) {
-		fields := []any{"error_kind", failure.Kind, "err", failure.Message}
+		fields = append(fields, "error_kind", failure.Kind, "err", failure.Message)
 		if failure.HTTPStatus != 0 {
 			fields = append(fields, "http_status", failure.HTTPStatus)
 		}
@@ -92,7 +107,7 @@ func errorFields(err error) []any {
 	}
 	var pgError *pgconn.PgError
 	if errors.As(err, &pgError) {
-		return []any{"error_kind", "database", "sql_state", pgError.Code}
+		return append(fields, "error_kind", "database", "sql_state", pgError.Code, "err", safeErrorMessage(err, "database request failed"))
 	}
-	return []any{"error_kind", "internal", "err", safeErrorMessage(err, "operation unavailable")}
+	return append(fields, "error_kind", "internal", "err", safeErrorMessage(err, "operation unavailable"))
 }
