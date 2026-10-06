@@ -210,7 +210,8 @@ func inspect(data []byte, expected float64) (*domain.Download, error) {
 		return invalid()
 	}
 	var duration float64
-	if _, err := fmt.Sscan(probe.Format.Duration, &duration); err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 5 || duration > 60 {
+	const durationBoundarySlackSec = 0.25
+	if _, err := fmt.Sscan(probe.Format.Duration, &duration); err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 5-durationBoundarySlackSec || duration > 60+durationBoundarySlackSec {
 		return invalid()
 	}
 	result := &domain.Download{Duration: duration}
