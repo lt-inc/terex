@@ -1,5 +1,14 @@
 # CLAUDE.md — Terex (VE-service)
 
+## Staging first
+
+LT-Inc staging is the primary target. Keep stage manifests, service settings and
+observability in the k3s repository aligned with application changes; local
+Compose support is secondary. The staging Twitch collector and all-app logs
+dashboards are owned by `k3s/monitoring/dashboards/`, not the local Grafana JSONs
+in this repository. Use an explicit LT-Inc kubeconfig for live verification;
+if access is unavailable, prepare the changes and report the deployment limit.
+
 ## Overview
 
 Terex is the video-engine service of LT-Inc: it monitors YouTube channels, downloads new videos, transcribes them, finds highlights, renders vertical clips (highlights mode or full video by intervals) and publishes them to our own channels (by-approve or auto-approve). The admin panel (FE) manages channels, jobs, accounts, banners, backgrounds and clip approval.
