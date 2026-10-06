@@ -26,12 +26,19 @@ func TestBuildPromptHasLimitsHintsAndIDs(t *testing.T) {
 }
 
 func TestParsePicks(t *testing.T) {
-	got, err := ParsePicks("```json\n{\"highlights\":[{\"from\":3,\"to\":9,\"title\":\" Joke \",\"hashtags\":[\"#fun\",\" life \",\"\"]},{\"to\":2}]}\n```")
+	got, err := ParsePicks("```json\n{\"highlights\":[{\"from\":3,\"to\":9,\"title\":\" Joke \",\"hashtags\":[\"#fun\",\" life \",\"\"]}]}\n```")
 	if err != nil || len(got) != 1 {
 		t.Fatalf("got %+v err=%v", got, err)
 	}
 	if got[0].From != 3 || got[0].To != 9 || got[0].Title != "Joke" || len(got[0].Hashtags) != 2 || got[0].Hashtags[0] != "fun" {
 		t.Fatalf("bad pick %+v", got[0])
+	}
+	got, err = ParsePicks(`{"highlights":[{"from":1,"to":2,"title":"x","hashtags":[]}]}`)
+	if err != nil || len(got) != 1 || len(got[0].Hashtags) != 2 || got[0].Hashtags[0] != "#hype" || got[0].Hashtags[1] != "#viral" {
+		t.Fatalf("fallback hashtags failed: %+v err=%v", got, err)
+	}
+	if _, err := ParsePicks(`{"highlights":[{"from":1,"to":2,"title":"x"}]}`); err == nil || !strings.Contains(err.Error(), "missing hashtags") {
+		t.Fatalf("missing required fields must error, got: %v", err)
 	}
 	if _, err := ParsePicks("not json"); err == nil {
 		t.Fatal("expected error")
@@ -210,5 +217,23 @@ func TestChunkCharsIsConfigurable(t *testing.T) {
 	c.ChunkChars = 5000
 	if _, err := c.Find(context.Background(), sents, testLim); err != nil || calls < 3 {
 		t.Fatalf("small chunks expected, err=%v calls=%d", err, calls)
+	}
+}
+
+func TestMissingRequiredFieldsIsRetried(t *testing.T) {
+	var calls int32
+	c, srv := newTestClient(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			bad := `{"highlights":[{"from":1,"to":4,"title":"T"}]}`
+			resp, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": bad}}}})
+			w.Write(resp)
+			return
+		}
+		w.Write([]byte(okBody))
+	})
+	defer srv.Close()
+	got, err := c.Find(context.Background(), oneSentence, testLim)
+	if err != nil || len(got) != 1 || calls != 2 {
+		t.Fatalf("missing fields should trigger retry: got=%+v err=%v calls=%d", got, err, calls)
 	}
 }
