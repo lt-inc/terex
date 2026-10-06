@@ -46,7 +46,16 @@ func main() {
 		logger.Error("DATABASE_URL and both service tokens are required")
 		os.Exit(1)
 	}
-	initCtx, end := context.WithTimeout(ctx, 30*time.Second)
+	startupTimeout := 30 * time.Second
+	if raw := os.Getenv("DB_STARTUP_TIMEOUT"); raw != "" {
+		startupTimeout, err = time.ParseDuration(raw)
+		if err != nil || startupTimeout <= 0 {
+			logger.Error("DB_STARTUP_TIMEOUT must be a positive duration")
+			os.Exit(1)
+		}
+	}
+	initCtx, end := context.WithTimeout(ctx, startupTimeout)
+	defer end()
 	store, err := postgres.New(initCtx, dsn)
 	if err != nil {
 		logger.Error("collector database unavailable")

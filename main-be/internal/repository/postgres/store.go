@@ -14,12 +14,13 @@ import (
 
 	"terex/main-be/internal/domain"
 	"terex/main-be/migrations"
+	"terex/proto/pgxutil"
 )
 
 type Store struct{ pool *pgxpool.Pool }
 
 func New(ctx context.Context, dsn string) (*Store, error) {
-	cfg, err := pgxpool.ParseConfig(dsn)
+	cfg, err := pgxutil.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +29,7 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := pool.Ping(ctx); err != nil {
+	if err := pgxutil.WaitPing(ctx, pool.Ping); err != nil {
 		pool.Close()
 		return nil, err
 	}
@@ -39,21 +40,33 @@ func (s *Store) Close() { s.pool.Close() }
 
 // Migrate applies embedded goose migrations.
 func Migrate(dsn string) error {
-	cfg, err := pgx.ParseConfig(dsn)
+	return MigrateContext(context.Background(), dsn)
+}
+
+// MigrateContext waits for availability, then runs migrations exactly once.
+func MigrateContext(ctx context.Context, dsn string) error {
+	ctx, cancel := pgxutil.StartupContext(ctx)
+	defer cancel()
+	cfg, err := pgxutil.ParseConfig(dsn)
 	if err != nil {
 		return err
 	}
-	db := stdlib.OpenDB(*cfg)
+	db := stdlib.OpenDB(*cfg.ConnConfig)
 	defer db.Close()
-	return migrateDB(db)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := pgxutil.WaitPing(ctx, db.PingContext); err != nil {
+		return err
+	}
+	return migrateDBContext(ctx, db)
 }
 
-func migrateDB(db *sql.DB) error {
+func migrateDBContext(ctx context.Context, db *sql.DB) error {
 	goose.SetBaseFS(migrations.FS)
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	return goose.Up(db, ".")
+	return goose.UpContext(ctx, db, ".")
 }
 
 // mapErr turns pgx.ErrNoRows into domain.ErrNotFound.
