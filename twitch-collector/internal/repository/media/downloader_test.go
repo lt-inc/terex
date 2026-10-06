@@ -73,4 +73,10 @@ func TestFixedDiagnosticsAndPermanentErrors(t *testing.T) {
 	if _, err := inspect([]byte(validProbe), 30); err == nil {
 		t.Fatal("duration mismatch accepted")
 	}
+	if _, err := inspect([]byte(`{"streams":[{"codec_type":"video","width":1920,"height":1080},{"codec_type":"audio"}],"format":{"duration":"60.04"}}`), 60); err != nil {
+		t.Fatalf("near-60s clip rejected: %v", err)
+	}
+	if _, err := inspect([]byte(`{"streams":[{"codec_type":"video","width":1920,"height":1080},{"codec_type":"audio"}],"format":{"duration":"60.30"}}`), 60); err == nil {
+		t.Fatal("oversized clip accepted")
+	}
 }
