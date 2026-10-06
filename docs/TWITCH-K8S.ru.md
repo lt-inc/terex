@@ -7,6 +7,8 @@ Service, ConfigMap, InfisicalSecret, подготовку БД, ingress и пр�
 GitHub Actions только обновляет images существующих Deployment и ждёт rollout.
 
 Короткая инструкция для оператора: [как включить collector и смотреть логи](TWITCH-COLLECTOR.ru.md).
+Новые потоки и порядок перехода с миграцией `004_twitch_flows`:
+[Twitch → YouTube](TWITCH-FLOWS.ru.md).
 
 Инструкции по первому запуску и переходу с прежнего CI-развёртывания:
 [runbook k3s](https://github.com/lt-inc/k3s/blob/master/docs/terex-twitch-rollout.md).
@@ -91,11 +93,11 @@ backend по одноразовому OAuth state. Остальные запро
 из k3s, даже если тег приложения остался прежним.
 
 Проверьте один вход в панель, состояние collector и наличие Twitch credentials.
-Затем добавьте сначала два канала, выберите YouTube-аккаунт, сохраните настройки
-и включите сбор. «Проверить сейчас» запускает discovery; подходящий клип проходит
+Затем создайте ручной поток с подтверждённым YouTube-каналом и двумя Twitch-источниками,
+сохраните настройки и включите сбор. «Проверить сейчас» запускает discovery; подходящий клип проходит
 download → import → render и появляется как готовый черновик с preview.
-Пустая выборка сама по себе не означает ошибку. Публикация требует просмотра
-и одобрения конкретной версии.
+Пустая выборка сама по себе не означает ошибку. По умолчанию публикация требует
+просмотра и одобрения конкретной версии; автоматический режим включается отдельно в потоке.
 
 Подготовка БД — отдельный версионный Job k3s без TTL. Обычный выпуск приложения
 его не пересоздаёт. При изменении скрипта или явной повторной инициализации
@@ -121,8 +123,8 @@ Collector использует общий `proto/telemetry`, как main-be и G
 В k3s `terex-twitch-collector-config` задаёт `LOG_LEVEL=info`, `LOG_FORMAT=text`
 и отправку traces в Tempo. Логи stdout собираются Promtail в Loki с
 `service="twitch-collector"`; dashboard **Terex Twitch Collector** находится
-в папке **Terex**. JSON dashboard хранится здесь и импортируется Terraform из
-соседнего checkout Terex — перед применением обновите оба репозитория.
+в папке **Terex**. Стейджевые JSON dashboard и их подключение Terraform находятся
+в `k3s/monitoring/dashboards/`; локальные dashboard Terex — отдельные.
 
 После первого применения новых настроек Promtail перезапустите его DaemonSet:
 его ConfigMap смонтирован через `subPath` и не обновляет уже работающие Pod.

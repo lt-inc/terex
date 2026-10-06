@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"terex/gpu-be/internal/domain"
 	"terex/proto/workflow"
 	"time"
@@ -126,7 +125,9 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	if err = s.Media.VerifyIntegrity(ctx, file); err != nil {
 		return nil, invalidMedia(ctx, "corrupt video", err)
 	}
-	ref := domain.ObjectRef{Bucket: Bucket, Object: strings.Join([]string{"verified", q.ImportID, hash + ".mp4"}, "/")}
+	// Only fully verified bytes reach this content-addressed object. Concurrent
+	// aliases publish identical bytes to the same key; staging URLs cannot write it.
+	ref := domain.ObjectRef{Bucket: Bucket, Object: "verified/sha256/" + hash + ".mp4"}
 	if err = s.Store.Upload(ctx, ref, file); err != nil {
 		return nil, unavailable(ctx, "store verified media", err)
 	}

@@ -32,6 +32,9 @@ export interface TwitchSource {
   duration_sec: number;
   video_id?: string;
   vod_offset?: number | null;
+  language?: string;
+  game_id?: string;
+  thumbnail_url?: string;
 }
 
 export interface TwitchChannel {
@@ -86,27 +89,114 @@ export interface ImportedClip {
   clip_id?: string;
   revision_id?: number;
   rejected: boolean;
+  excluded?: boolean;
   created_at: string;
   error?: string;
   duration_sec?: number;
   size_bytes?: number;
   width?: number;
   height?: number;
+  flow_id?: string;
+  media_id?: string;
+  media_state?: string;
+}
+
+export interface TwitchFlow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  auto_publish: boolean;
+  account_id: number;
+  youtube_channel_id: string;
+  version: number;
+  source_mode: "channels" | "category";
+  broadcaster_ids: string[];
+  channel_inputs?: string[];
+  excluded_source_ids?: string[];
+  category_id?: string;
+  category_name?: string;
+  language?: string;
+  poll_interval_minutes: number;
+  window_hours: number;
+  min_views: number;
+  min_age_minutes: number;
+  min_duration_sec: number;
+  max_duration_sec: number;
+  shorts_enabled: boolean;
+  compilations_enabled: boolean;
+  compilation_min_duration_sec: number;
+  compilation_max_duration_sec: number;
+  compilation_min_clips: number;
+  compilation_max_clips: number;
+  compilation_hour: number;
+  balance_by_time: boolean;
+  shorts_slots: string[];
+  compilation_slots: string[];
+  timezone: string;
+  daily_shorts: number;
+  daily_compilations: number;
+  legacy_length?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  work_started_at?: string;
+  last_checked_at?: string;
+  last_error?: string;
+  block_reason?: string;
+  found_clips?: number;
+  ready_outputs?: number;
+  next_publication_at?: string;
+}
+
+export interface TwitchFlowClip {
+  source: TwitchSource;
+  source_state: string;
+  reason?: {
+    code: string;
+    message: string;
+    next_attempt_at?: string;
+    started_at?: string;
+    attempt?: number;
+    actions?: string[];
+  };
+  import_id: string;
+  source_clip_id?: string;
+  media_id?: string;
+  excluded?: boolean;
+  rejected?: boolean;
+  outputs?: {
+    clip_id: string;
+    revision_id: number;
+    format: "short" | "compilation" | "shorts";
+    render_state: string;
+    approval: string;
+    publication_state?: string;
+    publish_at?: string;
+    error?: string;
+  }[];
+}
+export interface TwitchFlowClipPage {
+  items: TwitchFlowClip[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface CompilationItem {
   clip_id: string;
   revision_id: number;
+  source_id?: string;
   start_sec: number;
   end_sec: number;
 }
 
 export interface CompilationRequest {
   title: string;
+  flow_id?: string;
   items: CompilationItem[];
 }
 
 export interface Compilation extends CompilationRequest {
+  flow_config?: TwitchFlow;
   clip_id: string;
   revision_id: number;
   version: number;
@@ -115,12 +205,19 @@ export interface Compilation extends CompilationRequest {
   preview_url?: string;
   error?: string;
   created_at: string;
+  duration_sec?: number;
 }
 
 export interface AutoCompilationResult {
   created: boolean;
   compilation: Compilation | null;
-  reason?: "created" | "target_account_missing" | "collection_disabled" | "before_scheduled_hour" | "daily_draft_exists" | "insufficient_eligible_sources";
+  reason?:
+    | "created"
+    | "target_account_missing"
+    | "collection_disabled"
+    | "before_scheduled_hour"
+    | "daily_draft_exists"
+    | "insufficient_eligible_sources";
   message?: string;
   local_date?: string;
   timezone?: string;
@@ -128,5 +225,15 @@ export interface AutoCompilationResult {
   next_attempt_at?: string;
   minimum_clips?: number;
   window_hours?: number;
-  sources?: { total: number; eligible: number; rejected: number; not_ready: number; outside_window: number; already_used: number };
+  sources?: {
+    total: number;
+    eligible: number;
+    rejected: number;
+    not_ready: number;
+    outside_window: number;
+    already_used: number;
+  };
+  ready_duration_sec?: number;
+  minimum_duration_sec?: number;
+  missing_duration_sec?: number;
 }

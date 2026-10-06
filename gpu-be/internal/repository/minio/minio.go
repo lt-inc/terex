@@ -59,13 +59,19 @@ func (s *Store) DownloadLimited(ctx context.Context, ref domain.ObjectRef, dest 
 	return f.Sync()
 }
 
-func New(endpoint, publicEndpoint, access, secret string, ssl bool) (*Store, error) {
+// Public TLS is independent of the internal MinIO connection. Older callers
+// retain their original single-SSL behavior when no public override is supplied.
+func New(endpoint, publicEndpoint, access, secret string, ssl bool, publicSSL ...bool) (*Store, error) {
 	creds := credentials.NewStaticV4(access, secret, "")
 	in, err := mc.New(endpoint, &mc.Options{Creds: creds, Secure: ssl, Region: "us-east-1"})
 	if err != nil {
 		return nil, err
 	}
-	pub, err := mc.New(publicEndpoint, &mc.Options{Creds: creds, Secure: ssl, Region: "us-east-1"})
+	securePublic := ssl
+	if len(publicSSL) > 0 {
+		securePublic = publicSSL[0]
+	}
+	pub, err := mc.New(publicEndpoint, &mc.Options{Creds: creds, Secure: securePublic, Region: "us-east-1"})
 	if err != nil {
 		return nil, err
 	}

@@ -44,12 +44,51 @@ type Clip struct {
 	LastError       string    `json:"last_error,omitempty"`
 	ImportID        string    `json:"import_id,omitempty"`
 	SHA256          string    `json:"sha256,omitempty"`
+	GameID          string    `json:"game_id,omitempty"`
+	Language        string    `json:"language,omitempty"`
+	ThumbnailURL    string    `json:"thumbnail_url,omitempty"`
+	FlowID          string    `json:"flow_id,omitempty"`
+	FlowVersion     int       `json:"flow_version,omitempty"`
 }
 
 type Task struct {
-	Clip    Clip
-	Token   string
-	Attempt int
+	Clip        Clip
+	Token       string
+	Attempt     int
+	FlowID      string
+	FlowVersion int
+	Reservation twitch.Import
+}
+
+type ClipStatus struct {
+	ClipID        string     `json:"clip_id"`
+	State         string     `json:"state"`
+	Reason        string     `json:"reason,omitempty"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	Attempt       int        `json:"attempt"`
+}
+
+// Flow interfaces keep the v1 adapter available during a rolling deployment.
+type FlowTerex interface {
+	CollectorConfig(context.Context) (twitch.CollectorConfig, error)
+	Observe(context.Context, twitch.ObservationRequest) ([]twitch.Import, error)
+	ReserveImport(context.Context, Task) (twitch.Import, error)
+	UploadImport(context.Context, twitch.Import, Download, func(context.Context) error) error
+}
+type FlowStore interface {
+	SyncFlows(context.Context, []twitch.Flow) error
+	LegacyBroadcasterIDs(context.Context) ([]string, error)
+	ObserveFlow(context.Context, twitch.Flow, []Clip) error
+	SharedReady(context.Context, []twitch.Import) error
+	SaveReservation(context.Context, Task, twitch.Import) error
+	HasActiveConsumer(context.Context, string) (bool, error)
+	PinActiveConsumer(context.Context, Task) (Task, error)
+}
+type FlowTwitch interface {
+	ResolveBroadcaster(context.Context, string) (Channel, error)
+	GetFlowClips(context.Context, twitch.Flow, Channel, time.Time, time.Time, int, map[string]bool) ([]Clip, error)
+	Categories(context.Context, string) ([]twitch.Category, error)
 }
 
 type Status struct {

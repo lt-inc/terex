@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -21,12 +22,16 @@ import (
 const stage = "renderer"
 
 type Service struct {
-	Store  domain.ObjectStore
-	Media  domain.Media
-	Broker domain.Broker
-	State  domain.JobState
-	Rep    *reporter.Reporter
-	TmpDir string
+	Store               domain.ObjectStore
+	Media               domain.Media
+	Broker              domain.Broker
+	State               domain.JobState
+	Rep                 *reporter.Reporter
+	TmpDir              string
+	AssemblyTmpDir      string
+	AssemblyBudgetBytes int64
+	assemblyOnce        sync.Once
+	assemblyPermit      chan struct{}
 }
 
 func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err error) {

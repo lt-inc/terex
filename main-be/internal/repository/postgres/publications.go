@@ -90,6 +90,9 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	if err != nil {
 		return err
 	}
+	if err = manualPublication(ctx, tx, id); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE publication_id=$1 AND status='active'`, id); err != nil {
 		return err
 	}
@@ -179,6 +182,11 @@ func (s *Store) ActPublication(ctx context.Context, id int64, action string, ver
 	if _, err = tx.Exec(ctx, `UPDATE publications SET status=$2,cancel_requested=$3,publish_at=$4,version=version+1,next_attempt_at=$5,error=NULL,legacy_status=CASE WHEN $6 IN ('approve','retry') THEN NULL ELSE legacy_status END WHERE id=$1`, id, state, cancel, at, now, action); err != nil {
 		return err
 	}
+	if p.StartedAt == nil {
+		if err = manualPublication(ctx, tx, id); err != nil {
+			return err
+		}
+	}
 	if p.StartedAt == nil || action == "cancel" {
 		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE publication_id=$1 AND status='active'`, id); err != nil {
 			return err
@@ -263,6 +271,11 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	for _, d := range ds {
+		if allowed, e := flowPublicationAllowed(ctx, tx, d.id); e != nil {
+			return e
+		} else if !allowed {
+			continue
+		}
 		if ok, e := twitchRuntimeCapacity(ctx, tx, d.id, now); e != nil {
 			return e
 		} else if !ok {
@@ -318,6 +331,13 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		}
 	}
 	return tx.Commit(ctx)
+}
+func manualPublication(ctx context.Context, tx pgx.Tx, id int64) error {
+	if _, err := tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=(SELECT clip_id FROM publications WHERE id=$1)`, id); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE publications SET auto_flow_id=NULL,auto_hold=FALSE WHERE id=$1 AND started_at IS NULL`, id)
+	return err
 }
 func (s *Store) PendingOutbox(ctx context.Context, now time.Time, limit int) ([]domain.OutboxRecord, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id,kind,payload FROM publication_outbox WHERE delivered_at IS NULL AND next_delivery_at<=$1 ORDER BY created_at LIMIT $2`, now, limit)

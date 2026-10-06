@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -23,13 +24,14 @@ type Service struct {
 	lastStarted time.Time
 	active      map[string]context.CancelCauseFunc
 	gateLogs    map[string]gateLog
+	flowStarted map[string]time.Time
 }
 
 func New(store domain.Store, twitch domain.Twitch, terex domain.Terex, downloader domain.Downloader, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{store: store, twitch: twitch, terex: terex, downloader: downloader, log: logger, active: map[string]context.CancelCauseFunc{}, gateLogs: map[string]gateLog{}, ctx: context.Background()}
+	return &Service{store: store, twitch: twitch, terex: terex, downloader: downloader, log: logger, active: map[string]context.CancelCauseFunc{}, gateLogs: map[string]gateLog{}, flowStarted: map[string]time.Time{}, ctx: context.Background()}
 }
 func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
@@ -51,6 +53,10 @@ func (s *Service) schedule(ctx context.Context) {
 	}
 }
 func (s *Service) scheduleOnce(ctx context.Context) {
+	if _, ok := s.terex.(domain.FlowTerex); ok {
+		s.scheduleFlows(ctx)
+		return
+	}
 	cfg, err := s.terex.Settings(ctx)
 	reason := settingsBlockReason(cfg, err, s.twitch.Ready())
 	if reason != "" {
@@ -72,6 +78,9 @@ func (s *Service) scheduleOnce(ctx context.Context) {
 	}
 }
 func (s *Service) Check() error {
+	if _, ok := s.terex.(domain.FlowTerex); ok {
+		return s.CheckFlow("")
+	}
 	if !s.twitch.Ready() {
 		s.logGate(s.ctx, "check", "Twitch application credentials are not configured", nil)
 		return errors.New("Twitch application credentials are not configured")
@@ -248,6 +257,23 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 	out.Running = s.checking
 	s.mu.Unlock()
 	out.CredentialsReady = s.twitch.Ready()
+	if api, ok := s.terex.(domain.FlowTerex); ok {
+		cfg, e := api.CollectorConfig(ctx)
+		out.BlockReason = flowBlockReason(cfg, e, out.CredentialsReady)
+		out.Paused = e != nil || !cfg.Settings.Enabled
+		if e != nil {
+			out.LastError = out.BlockReason
+		}
+		if out.BlockReason == "" {
+			pending, e := s.terex.PendingCount(ctx)
+			if e != nil {
+				out.BlockReason = "Не удалось проверить очередь Terex"
+			} else if pending >= cfg.Settings.BacklogLimit {
+				out.BlockReason = fmt.Sprintf("Ожидают обработки %d источников; предел %d", pending, cfg.Settings.BacklogLimit)
+			}
+		}
+		return out, nil
+	}
 	cfg, e := s.terex.Settings(ctx)
 	out.Paused = e != nil || !cfg.Enabled
 	out.BlockReason = settingsBlockReason(cfg, e, out.CredentialsReady)
@@ -271,6 +297,10 @@ func (s *Service) worker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if api, ok := s.terex.(domain.FlowTerex); ok {
+				s.flowWorkerOnce(ctx, api)
+				continue
+			}
 			cfg, err := s.terex.Settings(ctx)
 			if reason := settingsBlockReason(cfg, err, s.twitch.Ready()); reason != "" {
 				s.logGate(ctx, "worker", reason, err)

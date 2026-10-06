@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,9 @@ import (
 )
 
 type assembler interface {
-	Assemble(context.Context, []domain.AssemblySegment, string, int) error
+	NormalizeAssemblySegment(context.Context, domain.AssemblySegment, string) error
+	AssemblyTransition(context.Context, string, string) error
+	ConcatAssembly(context.Context, []string, string) error
 	Duration(context.Context, string) (float64, error)
 }
 
@@ -30,28 +33,43 @@ func (s *Service) MaterializeAssembly(ctx context.Context, w workflow.RenderWork
 	if w.Source.Original.Bucket != "" && w.Source.Original.Object != "" {
 		return w, nil
 	}
-	if a.SchemaVersion != 1 || a.Profile != "landscape_1080p30" || a.BumperDurationFrames != 30 || len(a.Items) < 3 || len(a.Items) > 10 || w.Output.Bucket != domain.BucketClips || w.Output.Object == "" {
+	maxItems := 10
+	if a.SchemaVersion == 2 {
+		maxItems = 60
+	}
+	if (a.SchemaVersion != 1 && a.SchemaVersion != 2) || a.Profile != "landscape_1080p30" || a.BumperDurationFrames != 30 || len(a.Items) < 3 || len(a.Items) > maxItems || w.Output.Bucket != domain.BucketClips || w.Output.Object == "" {
 		return w, fmt.Errorf("invalid assembly specification")
 	}
 	m, ok := s.Media.(assembler)
 	if !ok {
 		return w, fmt.Errorf("media worker does not support assemblies")
 	}
-	if err := os.MkdirAll(s.TmpDir, 0o755); err != nil {
+	tmp := s.revisionTmp(ctx)
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return w, err
 	}
-	dir, err := os.MkdirTemp(s.TmpDir, "assembly-")
+	dir, err := os.MkdirTemp(tmp, "assembly-")
 	if err != nil {
 		return w, err
 	}
 	defer os.RemoveAll(dir)
-	segments := make([]domain.AssemblySegment, 0, len(a.Items))
+	files := make([]string, 0, 2*len(a.Items)-1)
 	for i, item := range a.Items {
-		if item.Original.Bucket != "imports" || !strings.HasPrefix(item.Original.Object, "verified/") || len(item.SHA256) != 64 || item.SourceClipID == "" || item.SourceRevisionID <= 0 {
+		if item.Original.Bucket != "imports" || !strings.HasPrefix(item.Original.Object, "verified/") || len(item.SHA256) != 64 ||
+			(a.SchemaVersion == 1 && (item.SourceClipID == "" || item.SourceRevisionID <= 0)) ||
+			(a.SchemaVersion == 2 && (item.MediaID == "" || item.TwitchSourceID == "")) {
 			return w, fmt.Errorf("invalid pinned assembly source")
 		}
 		file := filepath.Join(dir, fmt.Sprintf("source-%02d.mp4", i))
-		if err = s.Store.Download(ctx, item.Original, file); err != nil {
+		slog.InfoContext(ctx, "compilation source download", "stage", "download", "clip_id", w.ClipID, "revision_id", w.RevisionID, "media_id", item.MediaID, "source_id", item.TwitchSourceID, "ordinal", i)
+		if limited, ok := s.Store.(interface {
+			DownloadLimited(context.Context, domain.ObjectRef, string, int64) error
+		}); ok {
+			err = limited.DownloadLimited(ctx, item.Original, file, 512<<20)
+		} else {
+			err = s.Store.Download(ctx, item.Original, file)
+		}
+		if err != nil {
 			return w, err
 		}
 		f, e := os.Open(file)
@@ -67,10 +85,35 @@ func (s *Service) MaterializeAssembly(ctx context.Context, w workflow.RenderWork
 		if hex.EncodeToString(h.Sum(nil)) != item.SHA256 {
 			return w, fmt.Errorf("assembly source checksum mismatch")
 		}
-		segments = append(segments, domain.AssemblySegment{File: file, StartSec: item.StartSec, EndSec: item.EndSec, NextChannel: item.BroadcasterLogin})
+		if err = CheckAssemblyBudget(ctx); err != nil {
+			return w, err
+		}
+		normalized := filepath.Join(dir, fmt.Sprintf("clip-%02d.mp4", i))
+		if err = m.NormalizeAssemblySegment(ctx, domain.AssemblySegment{File: file, StartSec: item.StartSec, EndSec: item.EndSec, NextChannel: item.BroadcasterLogin}, normalized); err != nil {
+			return w, err
+		}
+		if err = os.Remove(file); err != nil {
+			return w, err
+		}
+		files = append(files, normalized)
+		slog.InfoContext(ctx, "compilation source normalized", "stage", "normalize", "clip_id", w.ClipID, "media_id", item.MediaID, "source_id", item.TwitchSourceID, "ordinal", i)
+		if i < len(a.Items)-1 {
+			card := filepath.Join(dir, fmt.Sprintf("card-%02d.mp4", i))
+			if err = m.AssemblyTransition(ctx, a.Items[i+1].BroadcasterLogin, card); err != nil {
+				return w, err
+			}
+			files = append(files, card)
+		}
+		if err = CheckAssemblyBudget(ctx); err != nil {
+			return w, err
+		}
 	}
 	output := filepath.Join(dir, "original.mp4")
-	if err = m.Assemble(ctx, segments, output, a.BumperDurationFrames); err != nil {
+	slog.InfoContext(ctx, "compilation concatenation", "stage", "assemble", "clip_id", w.ClipID, "revision_id", w.RevisionID, "items", len(a.Items))
+	if err = m.ConcatAssembly(ctx, files, output); err != nil {
+		return w, err
+	}
+	if err = CheckAssemblyBudget(ctx); err != nil {
 		return w, err
 	}
 	dur, err := m.Duration(ctx, output)

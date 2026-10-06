@@ -8,6 +8,8 @@ import (
 )
 
 type Compilation struct {
+	FlowID     string                          `json:"flow_id,omitempty"`
+	FlowConfig *twitch.Flow                    `json:"flow_config,omitempty"`
 	ClipID     string                          `json:"clip_id"`
 	RevisionID int64                           `json:"revision_id"`
 	Version    int                             `json:"version"`
@@ -29,17 +31,20 @@ type CompilationUpdate struct {
 // AutoCompilationResult preserves the HTTP created/compilation fields while
 // explaining the first unmet requirement. Sources is absent until evaluated.
 type AutoCompilationResult struct {
-	Created       bool                     `json:"created"`
-	Compilation   *Compilation             `json:"compilation"`
-	Reason        string                   `json:"reason"`
-	Message       string                   `json:"message"`
-	LocalDate     string                   `json:"local_date"`
-	Timezone      string                   `json:"timezone"`
-	ScheduledAt   time.Time                `json:"scheduled_at"`
-	NextAttemptAt *time.Time               `json:"next_attempt_at,omitempty"`
-	MinimumClips  int                      `json:"minimum_clips"`
-	WindowHours   int                      `json:"window_hours"`
-	Sources       *CompilationSourceCounts `json:"sources,omitempty"`
+	Created            bool                     `json:"created"`
+	Compilation        *Compilation             `json:"compilation"`
+	Reason             string                   `json:"reason"`
+	Message            string                   `json:"message"`
+	LocalDate          string                   `json:"local_date"`
+	Timezone           string                   `json:"timezone"`
+	ScheduledAt        time.Time                `json:"scheduled_at"`
+	NextAttemptAt      *time.Time               `json:"next_attempt_at,omitempty"`
+	MinimumClips       int                      `json:"minimum_clips"`
+	WindowHours        int                      `json:"window_hours"`
+	MinimumDurationSec float64                  `json:"minimum_duration_sec"`
+	ReadyDurationSec   float64                  `json:"ready_duration_sec"`
+	MissingDurationSec float64                  `json:"missing_duration_sec"`
+	Sources            *CompilationSourceCounts `json:"sources,omitempty"`
 }
 
 // Each import is counted once, in rejection, readiness, age, reuse order.
@@ -50,6 +55,7 @@ type CompilationSourceCounts struct {
 	NotReady      int `json:"not_ready"`
 	OutsideWindow int `json:"outside_window"`
 	AlreadyUsed   int `json:"already_used"`
+	Filtered      int `json:"filtered"`
 }
 type TwitchRepo interface {
 	TwitchSettings(context.Context) (twitch.Settings, error)

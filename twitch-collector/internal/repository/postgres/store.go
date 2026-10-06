@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -54,6 +55,21 @@ CREATE INDEX IF NOT EXISTS download_ready ON twitch_collector.download_tasks(run
 CREATE TABLE IF NOT EXISTS twitch_collector.state(id integer PRIMARY KEY CHECK(id=1),last_check_at timestamptz,last_error text NOT NULL DEFAULT '');
 INSERT INTO twitch_collector.state(id) VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO twitch_collector.schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
+ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS game_id text NOT NULL DEFAULT '';
+ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS language text NOT NULL DEFAULT '';
+ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS thumbnail_url text NOT NULL DEFAULT '';
+ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS error_kind text NOT NULL DEFAULT '';
+ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS flow_id text NOT NULL DEFAULT '';
+ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS flow_version integer NOT NULL DEFAULT 0;
+ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS reservation jsonb;
+ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS started_at timestamptz;
+CREATE TABLE IF NOT EXISTS twitch_collector.flows(id text PRIMARY KEY,enabled boolean NOT NULL,config jsonb NOT NULL);
+CREATE TABLE IF NOT EXISTS twitch_collector.consumers(clip_id text NOT NULL REFERENCES twitch_collector.clips(clip_id),flow_id text NOT NULL REFERENCES twitch_collector.flows(id),flow_version integer NOT NULL,eligible boolean NOT NULL DEFAULT true,PRIMARY KEY(clip_id,flow_id));
+ALTER TABLE twitch_collector.consumers ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
+ALTER TABLE twitch_collector.state ADD COLUMN IF NOT EXISTS next_flow_index integer NOT NULL DEFAULT 0;
+ALTER TABLE twitch_collector.state ADD COLUMN IF NOT EXISTS legacy_broadcaster_ids text[];
+UPDATE twitch_collector.state SET legacy_broadcaster_ids=COALESCE((SELECT array_agg(broadcaster_id ORDER BY broadcaster_id) FROM twitch_collector.channels WHERE NOT archived),ARRAY[]::text[]) WHERE legacy_broadcaster_ids IS NULL;
+INSERT INTO twitch_collector.schema_version(version) VALUES(2) ON CONFLICT DO NOTHING;
 `
 
 func (s *Store) Migrate(ctx context.Context) error {
@@ -127,17 +143,6 @@ func (s *Store) CreateChannel(ctx context.Context, c domain.Channel) (domain.Cha
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(846923103)"); err != nil {
 		return domain.Channel{}, err
 	}
-	var exists bool
-	var count int
-	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM twitch_collector.channels WHERE broadcaster_id=$1 AND NOT archived)", c.BroadcasterID).Scan(&exists); err != nil {
-		return domain.Channel{}, err
-	}
-	if err = tx.QueryRow(ctx, "SELECT count(*) FROM twitch_collector.channels WHERE NOT archived").Scan(&count); err != nil {
-		return domain.Channel{}, err
-	}
-	if !exists && count >= 10 {
-		return domain.Channel{}, fmt.Errorf("maximum 10 active channels: %w", domain.ErrConflict)
-	}
 	result, err := scanChannel(tx.QueryRow(ctx, `INSERT INTO twitch_collector.channels(id,broadcaster_id,login,display_name)
  VALUES($1,$2,$3,$4) ON CONFLICT(broadcaster_id) DO UPDATE SET login=excluded.login,display_name=excluded.display_name,archived=false
  RETURNING `+channelColumns, newID(), c.BroadcasterID, c.Login, c.DisplayName))
@@ -166,9 +171,9 @@ func (s *Store) UpsertClips(ctx context.Context, clips []domain.Clip) error {
 	}
 	defer tx.Rollback(ctx)
 	for _, c := range clips {
-		_, err = tx.Exec(ctx, `INSERT INTO twitch_collector.clips(clip_id,channel_id,broadcaster_id,broadcaster_name,title,view_count,created_at,duration,video_id,vod_offset)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(clip_id) DO UPDATE SET view_count=excluded.view_count,title=excluded.title,
- video_id=excluded.video_id,vod_offset=excluded.vod_offset,observed_at=now()`, c.ID, c.ChannelID, c.BroadcasterID, c.BroadcasterName, c.Title, c.ViewCount, c.CreatedAt, c.Duration, c.VideoID, c.VODOffset)
+		_, err = tx.Exec(ctx, `INSERT INTO twitch_collector.clips(clip_id,channel_id,broadcaster_id,broadcaster_name,title,view_count,created_at,duration,video_id,vod_offset,game_id,language,thumbnail_url)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(clip_id) DO UPDATE SET view_count=excluded.view_count,title=excluded.title,
+ video_id=excluded.video_id,vod_offset=excluded.vod_offset,game_id=excluded.game_id,language=excluded.language,thumbnail_url=excluded.thumbnail_url,observed_at=now()`, c.ID, c.ChannelID, c.BroadcasterID, c.BroadcasterName, c.Title, c.ViewCount, c.CreatedAt, c.Duration, c.VideoID, c.VODOffset, c.GameID, c.Language, c.ThumbnailURL)
 		if err != nil {
 			return err
 		}
@@ -176,10 +181,10 @@ func (s *Store) UpsertClips(ctx context.Context, clips []domain.Clip) error {
 	return tx.Commit(ctx)
 }
 
-const clipColumns = `c.clip_id,c.channel_id,c.broadcaster_id,c.broadcaster_name,c.title,c.view_count,c.created_at,c.duration,c.video_id,c.vod_offset,c.state,c.last_error,c.import_id,c.sha256`
+const clipColumns = `c.clip_id,c.channel_id,c.broadcaster_id,c.broadcaster_name,c.title,c.view_count,c.created_at,c.duration,c.video_id,c.vod_offset,c.state,c.last_error,c.import_id,c.sha256,c.game_id,c.language,c.thumbnail_url`
 
 func scanClip(row pgx.Row) (c domain.Clip, err error) {
-	err = row.Scan(&c.ID, &c.ChannelID, &c.BroadcasterID, &c.BroadcasterName, &c.Title, &c.ViewCount, &c.CreatedAt, &c.Duration, &c.VideoID, &c.VODOffset, &c.State, &c.LastError, &c.ImportID, &c.SHA256)
+	err = row.Scan(&c.ID, &c.ChannelID, &c.BroadcasterID, &c.BroadcasterName, &c.Title, &c.ViewCount, &c.CreatedAt, &c.Duration, &c.VideoID, &c.VODOffset, &c.State, &c.LastError, &c.ImportID, &c.SHA256, &c.GameID, &c.Language, &c.ThumbnailURL)
 	c.URL = "https://clips.twitch.tv/" + c.ID
 	return c, translate(err)
 }
@@ -237,6 +242,15 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 		if total >= scfg.DailyDownloads {
 			break
 		}
+		if c.FlowID != "" {
+			var eligible bool
+			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_collector.consumers co JOIN twitch_collector.flows f ON f.id=co.flow_id WHERE co.clip_id=$1 AND co.flow_id=$2 AND co.eligible AND NOT co.excluded AND f.enabled)`, c.ID, c.FlowID).Scan(&eligible); err != nil {
+				return 0, err
+			}
+			if !eligible {
+				continue
+			}
+		}
 		var count int
 		var active bool
 		operation = "check channel availability"
@@ -276,7 +290,7 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 			continue
 		}
 		operation = "create download task"
-		if _, e = tx.Exec(ctx, "INSERT INTO twitch_collector.download_tasks(clip_id,run_at) VALUES($1,$2) ON CONFLICT DO NOTHING", c.ID, now); e != nil {
+		if _, e = tx.Exec(ctx, "INSERT INTO twitch_collector.download_tasks(clip_id,run_at,flow_id,flow_version) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING", c.ID, now, c.FlowID, c.FlowVersion); e != nil {
 			return 0, e
 		}
 		total++
@@ -303,15 +317,19 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (*domain.Task, e
 	token := newID()
 	var id string
 	var attempt int
+	var flowID string
+	var flowVersion int
+	var reservation []byte
 	err = tx.QueryRow(ctx, `WITH candidate AS (
  SELECT t.clip_id FROM twitch_collector.download_tasks t JOIN twitch_collector.clips c ON c.clip_id=t.clip_id
  JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE NOT ch.paused AND NOT ch.archived AND t.attempts<3
+ AND (t.flow_id='' OR EXISTS(SELECT 1 FROM twitch_collector.consumers co JOIN twitch_collector.flows f ON f.id=co.flow_id WHERE co.clip_id=t.clip_id AND co.eligible AND NOT co.excluded AND f.enabled))
  AND ((t.state='queued' AND t.run_at<=now()) OR (t.state='leased' AND t.lease_expires_at<=now()))
  ORDER BY t.run_at,t.clip_id FOR UPDATE OF t SKIP LOCKED LIMIT 1)
  UPDATE twitch_collector.download_tasks t SET state='leased',attempts=attempts+1,lease_token=$1,
- lease_expires_at=now()+$2*interval '1 second',updated_at=now() FROM candidate WHERE t.clip_id=candidate.clip_id RETURNING t.clip_id,t.attempts`, token, lease.Seconds()).Scan(&id, &attempt)
+ lease_expires_at=now()+$2*interval '1 second',updated_at=now(),started_at=now() FROM candidate WHERE t.clip_id=candidate.clip_id RETURNING t.clip_id,t.attempts,t.flow_id,t.flow_version,t.reservation`, token, lease.Seconds()).Scan(&id, &attempt, &flowID, &flowVersion, &reservation)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, tx.Commit(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -326,7 +344,13 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (*domain.Task, e
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &domain.Task{Clip: c, Token: token, Attempt: attempt}, nil
+	task := &domain.Task{Clip: c, Token: token, Attempt: attempt, FlowID: flowID, FlowVersion: flowVersion}
+	if len(reservation) > 0 {
+		if err = json.Unmarshal(reservation, &task.Reservation); err != nil {
+			return nil, err
+		}
+	}
+	return task, nil
 }
 
 const validLease = `t.clip_id=$1 AND t.state='leased' AND t.lease_token=$2 AND t.lease_expires_at>now()`
@@ -392,12 +416,15 @@ func (s *Store) Fail(ctx context.Context, t domain.Task, kind, message string, r
 	if tag.RowsAffected() != 1 {
 		return domain.ErrLeaseLost
 	}
-	if _, err = tx.Exec(ctx, "UPDATE twitch_collector.clips SET state=$2,last_error=$3 WHERE clip_id=$1", t.Clip.ID, state, message); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE twitch_collector.clips SET state=$2,last_error=$3,error_kind=$4 WHERE clip_id=$1", t.Clip.ID, state, message, kind); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
 }
 func (s *Store) Defer(ctx context.Context, t domain.Task, when time.Time) error {
+	return s.DeferWithReason(ctx, t, when, "")
+}
+func (s *Store) DeferWithReason(ctx context.Context, t domain.Task, when time.Time, message string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -410,7 +437,7 @@ func (s *Store) Defer(ctx context.Context, t domain.Task, when time.Time) error 
 	if tag.RowsAffected() != 1 {
 		return domain.ErrLeaseLost
 	}
-	if _, err = tx.Exec(ctx, "UPDATE twitch_collector.clips SET state='queued' WHERE clip_id=$1", t.Clip.ID); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE twitch_collector.clips SET state='queued',last_error=$2,error_kind=CASE WHEN $2='' THEN '' ELSE 'quota' END WHERE clip_id=$1", t.Clip.ID, message); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -427,7 +454,7 @@ func (s *Store) SetLastCheck(ctx context.Context, at time.Time, message string) 
 func (s *Store) Status(ctx context.Context) (domain.Status, error) {
 	var out domain.Status
 	err := s.pool.QueryRow(ctx, `SELECT st.last_check_at,st.last_error,(SELECT count(*) FROM twitch_collector.channels WHERE NOT archived),
- (SELECT count(*) FROM twitch_collector.clips WHERE state='queued'),(SELECT count(*) FROM twitch_collector.clips WHERE state='downloading'),
+ (SELECT count(*) FROM twitch_collector.clips WHERE state='queued'),(SELECT count(*) FROM twitch_collector.clips WHERE state IN('downloading','importing','verifying')),
  (SELECT count(*) FROM twitch_collector.clips WHERE state='imported'),(SELECT count(*) FROM twitch_collector.clips WHERE state='failed') FROM twitch_collector.state st WHERE id=1`).Scan(&out.LastCheckAt, &out.LastError, &out.Channels, &out.Queued, &out.Downloading, &out.Imported, &out.Failed)
 	return out, err
 }

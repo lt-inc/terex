@@ -8,8 +8,8 @@ func TestDefaultSettingsAndValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Enabled = true
-	if s.Validate() == nil {
-		t.Fatal("enabled collector without target")
+	if err:=s.Validate();err!=nil {
+		t.Fatal("shared collector settings do not choose flow destinations",err)
 	}
 	s.TargetAccountID = 1
 	if err := s.Validate(); err != nil {

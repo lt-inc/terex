@@ -45,6 +45,10 @@ func (s *Store) SaveTwitchSettings(ctx context.Context, v twitch.Settings) error
 	if err = lockTwitch(ctx, tx); err != nil {
 		return err
 	}
+	previous, err := readTwitchSettings(ctx, tx)
+	if err != nil {
+		return err
+	}
 	if v.TargetAccountID > 0 {
 		var platform string
 		if err = tx.QueryRow(ctx, `SELECT platform FROM accounts WHERE id=$1`, v.TargetAccountID).Scan(&platform); err != nil {
@@ -57,6 +61,9 @@ func (s *Store) SaveTwitchSettings(ctx context.Context, v twitch.Settings) error
 	if _, err = tx.Exec(ctx, `UPDATE twitch_project_settings SET settings=$1,updated_at=now() WHERE id=1`, mustJSON(v)); err != nil {
 		return err
 	}
+	if err = syncLegacyFlow(ctx, tx, previous, v); err != nil {
+		return err
+	}
 	// Do not silently leave already-approved plans above a newly reduced cap.
 	if err = enforceTwitchCaps(ctx, tx); err != nil {
 		return err
@@ -64,12 +71,12 @@ func (s *Store) SaveTwitchSettings(ctx context.Context, v twitch.Settings) error
 	return tx.Commit(ctx)
 }
 
-const importCols = `i.id,i.request,i.state,i.original,i.verified,i.upload_expires_at,COALESCE(i.job_id,''),COALESCE(i.clip_id,''),i.rejected,i.created_at,COALESCE(i.error,''),COALESCE(c.latest_revision_id,0)`
+const importCols = `i.id,i.request,i.state,i.original,i.verified,i.upload_expires_at,COALESCE(i.job_id,''),COALESCE(i.clip_id,''),i.rejected,i.created_at,COALESCE(i.error,''),COALESCE(c.latest_revision_id,0),COALESCE(i.media_id,''),i.media_state,i.upload_generation`
 
 func scanImport(row pgx.Row) (twitch.Import, error) {
 	var o twitch.Import
 	var req, original, verified []byte
-	err := row.Scan(&o.ImportID, &req, &o.State, &original, &verified, &o.UploadExpiresAt, &o.JobID, &o.ClipID, &o.Rejected, &o.CreatedAt, &o.Error, &o.RevisionID)
+	err := row.Scan(&o.ImportID, &req, &o.State, &original, &verified, &o.UploadExpiresAt, &o.JobID, &o.ClipID, &o.Rejected, &o.CreatedAt, &o.Error, &o.RevisionID, &o.MediaID, &o.MediaState, &o.UploadGeneration)
 	if err != nil {
 		return o, mapErr(err)
 	}
@@ -85,6 +92,10 @@ func scanImport(row pgx.Row) (twitch.Import, error) {
 		return o, err
 	}
 	o.Source, o.AccountID = r.Source, r.AccountID
+	o.FlowID, o.ReservationID = r.FlowID, r.ReservationID
+	if o.UploadGeneration > 0 {
+		o.UploadImportID = fmt.Sprintf("%s-g%d", o.ImportID, o.UploadGeneration)
+	}
 	o.SHA256, o.DurationSec, o.SizeBytes, o.Width, o.Height = v.SHA256, v.DurationSec, v.SizeBytes, v.Width, v.Height
 	return o, nil
 }
@@ -96,9 +107,35 @@ func importByID(ctx context.Context, q interface {
 func (s *Store) GetTwitchImport(ctx context.Context, id string) (twitch.Import, error) {
 	return importByID(ctx, s.pool, id)
 }
+
+// Queue pressure is per physical source, not per observation or output. Ready
+// media waits only while an active flow has an undecided output or still needs
+// that media for a compilation. Approved/used sources release their place.
+const currentFlowSourceEligible = `
+ COALESCE((i.request->'source'->>'view_count')::bigint,0)>=COALESCE((f.config->>'min_views')::bigint,0)
+ AND (i.request->'source'->>'duration_sec')::numeric BETWEEN (f.config->>'min_duration_sec')::numeric AND (f.config->>'max_duration_sec')::numeric
+ AND (i.request->'source'->>'created_at')::timestamptz BETWEEN now()-make_interval(hours=>(f.config->>'window_hours')::int) AND now()-make_interval(mins=>COALESCE((f.config->>'min_age_minutes')::int,0))
+ AND(COALESCE(f.config->>'language','')='' OR f.config->>'language'=i.request->'source'->>'language')
+ AND(CASE WHEN f.config->>'source_mode'='category' THEN f.config->>'category_id'=i.request->'source'->>'game_id'
+ ELSE COALESCE(f.config->'broadcaster_ids','[]'::jsonb) ? (i.request->'source'->>'broadcaster_id') OR (COALESCE((f.config->>'legacy_length')::boolean,false) AND COALESCE(jsonb_array_length(f.config->'broadcaster_ids'),0)=0) END)`
+
+const pendingTwitchSource = `NOT i.rejected AND i.state NOT IN('discovered','failed') AND (
+ (i.media_state<>'ready' AND (NOT EXISTS(SELECT 1 FROM twitch_flow_sources fs WHERE fs.import_id=i.id)
+ OR EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id
+ WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id
+ AND(fs.reserved_at IS NOT NULL OR (` + currentFlowSourceEligible + `)))))
+ OR EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id
+ WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id
+ AND(EXISTS(SELECT 1 FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id WHERE o.flow_id=f.id AND c.approval='pending'
+ AND(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=c.latest_revision_id AND ci.source_id=i.id)))
+ OR(i.media_state='ready' AND COALESCE((f.config->>'compilations_enabled')::boolean,false) AND (` + currentFlowSourceEligible + `)
+ AND NOT EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=f.youtube_channel_id AND u.format='compilation' AND u.media_id=i.media_id))))
+ OR(i.clip_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM twitch_outputs o WHERE o.clip_id=i.clip_id) AND EXISTS(SELECT 1 FROM clips c WHERE c.clip_id=i.clip_id AND c.approval='pending')))`
+
 func (s *Store) ListTwitchImports(ctx context.Context, pending bool, state string) ([]twitch.Import, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+importCols+` FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id
- WHERE ($1=FALSE OR (NOT i.rejected AND i.state<>'failed' AND (c.clip_id IS NULL OR c.approval='pending'))) AND ($2='' OR i.state=$2)
+	rows, err := s.pool.Query(ctx, `WITH pending_sources AS(SELECT i.id,row_number()OVER(PARTITION BY COALESCE(i.media_id,i.id)ORDER BY i.created_at DESC,i.id)position FROM twitch_imports i WHERE `+pendingTwitchSource+`)
+ SELECT `+importCols+` FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id
+ WHERE ($1=FALSE OR i.id IN(SELECT id FROM pending_sources WHERE position=1)) AND ($2='' OR i.state=$2)
  ORDER BY i.created_at DESC LIMIT 1000`, pending, state)
 	if err != nil {
 		return nil, err
@@ -123,12 +160,15 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	if err = lockTwitch(ctx, tx); err != nil {
 		return twitch.Import{}, err
 	}
-	existing, err := scanImport(tx.QueryRow(ctx, `SELECT `+importCols+` FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id WHERE i.idempotency_key=$1 OR i.twitch_clip_id=$2 ORDER BY (i.idempotency_key=$1) DESC LIMIT 1`, r.IdempotencyKey, r.Source.ClipID))
+	existing, err := scanImport(tx.QueryRow(ctx, `SELECT `+importCols+` FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id WHERE EXISTS(SELECT 1 FROM twitch_import_keys k WHERE k.idempotency_key=$1 AND k.import_id=i.id) OR i.twitch_clip_id=$2 ORDER BY EXISTS(SELECT 1 FROM twitch_import_keys k WHERE k.idempotency_key=$1 AND k.import_id=i.id) DESC LIMIT 1`, r.IdempotencyKey, r.Source.ClipID))
 	if err == nil {
 		if existing.Source.ClipID != r.Source.ClipID {
 			return twitch.Import{}, fmt.Errorf("%w: idempotency key belongs to another clip", domain.ErrConflict)
 		}
-		return existing, nil
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_import_keys(idempotency_key,import_id)VALUES($1,$2)ON CONFLICT DO NOTHING`, r.IdempotencyKey, existing.ImportID); err != nil {
+			return existing, err
+		}
+		return existing, tx.Commit(ctx)
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		return twitch.Import{}, err
@@ -147,7 +187,7 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 		return twitch.Import{}, fmt.Errorf("%w: use the configured target account", domain.ErrInvalid)
 	}
 	var backlog, total, channel int
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id WHERE NOT i.rejected AND i.state<>'failed' AND (c.clip_id IS NULL OR c.approval='pending')`).Scan(&backlog); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(i.media_id,i.id)) FROM twitch_imports i WHERE `+pendingTwitchSource).Scan(&backlog); err != nil {
 		return twitch.Import{}, err
 	}
 	if backlog >= settings.BacklogLimit {
@@ -155,7 +195,7 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	}
 	loc, _ := time.LoadLocation(settings.Timezone)
 	date := now.In(loc).Format("2006-01-02")
-	if err = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE request->'source'->>'broadcaster_id'=$3) FROM twitch_imports WHERE (created_at AT TIME ZONE $1)::date=$2::date`, settings.Timezone, date, r.Source.BroadcasterID).Scan(&total, &channel); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT import_id),count(DISTINCT import_id) FILTER(WHERE broadcaster_id=$3) FROM twitch_download_reservations WHERE (created_at AT TIME ZONE $1)::date=$2::date`, settings.Timezone, date, r.Source.BroadcasterID).Scan(&total, &channel); err != nil {
 		return twitch.Import{}, err
 	}
 	if total >= settings.DailyDownloads || channel >= settings.PerChannelDailyDownloads {
@@ -163,6 +203,12 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	}
 	id := uuid.NewString()
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_imports(id,idempotency_key,twitch_clip_id,request,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$5)`, id, r.IdempotencyKey, r.Source.ClipID, mustJSON(r), now); err != nil {
+		return twitch.Import{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_download_reservations(import_id,generation,broadcaster_id,created_at)VALUES($1,0,$2,$3)`, id, r.Source.BroadcasterID, now); err != nil {
+		return twitch.Import{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_import_keys(idempotency_key,import_id)VALUES($1,$2)`, r.IdempotencyKey, id); err != nil {
 		return twitch.Import{}, err
 	}
 	out, err := importByID(ctx, tx, id)
@@ -222,6 +268,13 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 	if v.DurationSec < settings.MinDurationSec || v.DurationSec > settings.MaxDurationSec+0.05 {
 		return out, fmt.Errorf("%w: verified clip duration is outside configured range", domain.ErrInvalid)
 	}
+	var used bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses u JOIN accounts a ON a.remote_account_id=u.youtube_channel_id WHERE a.id=$1 AND u.format='short' AND u.media_id=$2)`, out.AccountID, v.SHA256).Scan(&used); err != nil {
+		return out, err
+	}
+	if used {
+		return out, fmt.Errorf("%w: исходник уже использован в Short этого канала", domain.ErrConflict)
+	}
 	jobID, clipID := uuid.NewString(), "twitch-"+id
 	manifest := workflow.SourceManifest{Original: v.Original, DurationSec: v.DurationSec, Options: msg.JobOptions{Vertical: true, Shape: "rectangle"}, Cues: []workflow.Cue{}}
 	title := out.Source.Title
@@ -243,6 +296,24 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 		return out, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_imports SET state='rendering',original=$2,verified=$3,job_id=$4,clip_id=$5,updated_at=$6,error=NULL WHERE id=$1`, id, mustJSON(v.Original), mustJSON(v), jobID, clipID, now); err != nil {
+		return out, err
+	}
+	if err = storeVerifiedMedia(ctx, tx, id, v, now); err != nil {
+		return out, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_download_reservations(import_id,generation,broadcaster_id,created_at)VALUES($1,0,$2,$3) ON CONFLICT DO NOTHING`, id, out.Source.BroadcasterID, out.CreatedAt); err != nil {
+		return out, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_flow_sources(id,flow_id,import_id,config,flow_version,created_at)SELECT $1,'default',$2,config,version,$3 FROM twitch_flows WHERE id='default' ON CONFLICT(flow_id,import_id)DO NOTHING`, uuid.NewString(), id, now); err != nil {
+		return out, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,source_id,account_id,youtube_channel_id,format,config,initial_revision_id,created_at)SELECT $1,'default',$2,$3,COALESCE(a.remote_account_id,''),'short',f.config,$4,$5 FROM twitch_flows f JOIN accounts a ON a.id=$3 WHERE f.id='default' ON CONFLICT DO NOTHING`, clipID, id, out.AccountID, rid, now); err != nil {
+		return out, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_source_uses(youtube_channel_id,format,media_id,clip_id)SELECT COALESCE(remote_account_id,''),'short',$2,$3 FROM accounts WHERE id=$1 AND COALESCE(remote_account_id,'')<>'' ON CONFLICT DO NOTHING`, out.AccountID, v.SHA256, clipID); err != nil {
+		return out, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET work_started_at=COALESCE(work_started_at,$1)WHERE id='default'`, now); err != nil {
 		return out, err
 	}
 	out, err = importByID(ctx, tx, id)
@@ -306,6 +377,11 @@ func (s *Store) RejectTwitchImport(ctx context.Context, id string, rejected bool
 		}
 	} else if !rejected && clip != "" {
 		if _, err = tx.Exec(ctx, `UPDATE clips SET approval='pending' WHERE clip_id=$1`, clip); err != nil {
+			return err
+		}
+	}
+	if rejected {
+		if err = rejectFlowDependencies(ctx, tx, id); err != nil {
 			return err
 		}
 	}

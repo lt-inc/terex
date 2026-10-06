@@ -35,7 +35,7 @@ var broadcasterID = regexp.MustCompile(`^[0-9]{1,32}$`)
 var broadcasterLogin = regexp.MustCompile(`^[A-Za-z0-9_]{1,25}$`)
 
 func ValidateImport(r t.ImportRequest, now time.Time) error {
-	if r.SchemaVersion != 1 || r.IdempotencyKey == "" || len(r.IdempotencyKey) > 250 {
+	if (r.SchemaVersion != 1 && r.SchemaVersion != 2) || r.IdempotencyKey == "" || len(r.IdempotencyKey) > 250 || (r.SchemaVersion == 2 && (r.FlowID == "" || r.FlowVersion < 1)) {
 		return fmt.Errorf("%w: schema_version=1 and a bounded idempotency_key are required", domain.ErrInvalid)
 	}
 	src := r.Source
@@ -77,11 +77,21 @@ func (s *Service) Reserve(ctx context.Context, r t.ImportRequest) (t.Import, err
 	if err := ValidateImport(r, s.now()); err != nil {
 		return t.Import{}, err
 	}
-	out, err := s.Repo.ReserveTwitchImport(ctx, r, s.now())
+	var out t.Import
+	var err error
+	if r.SchemaVersion == 2 {
+		var repo domain.TwitchFlowRepo
+		repo, err = s.flows()
+		if err == nil {
+			out, err = repo.ReserveFlowImport(ctx, r, s.now())
+		}
+	} else {
+		out, err = s.Repo.ReserveTwitchImport(ctx, r, s.now())
+	}
 	if err != nil {
 		return out, err
 	}
-	if out.ClipID != "" || out.Rejected {
+	if out.ClipID != "" || out.Rejected || out.MediaState == "ready" {
 		return out, nil
 	}
 	if s.Gateway == nil {
@@ -89,11 +99,21 @@ func (s *Service) Reserve(ctx context.Context, r t.ImportRequest) (t.Import, err
 	}
 	timeout, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	upload, err := s.Gateway.ReserveUpload(timeout, &workflow.ReserveUploadRequest{ImportID: out.ImportID, Ref: out.Original})
+	uploadID := out.ImportID
+	if out.UploadImportID != "" {
+		uploadID = out.UploadImportID
+	}
+	upload, err := s.Gateway.ReserveUpload(timeout, &workflow.ReserveUploadRequest{ImportID: uploadID, Ref: out.Original})
 	if err != nil {
 		return out, err
 	}
-	if err = s.Repo.SetTwitchUpload(ctx, out.ImportID, upload.Ref, upload.ExpiresAt); err != nil {
+	if out.UploadGeneration > 0 {
+		repo, _ := s.flows()
+		err = repo.SetFlowUpload(ctx, out.ImportID, out.UploadGeneration, upload.Ref, upload.ExpiresAt)
+	} else {
+		err = s.Repo.SetTwitchUpload(ctx, out.ImportID, upload.Ref, upload.ExpiresAt)
+	}
+	if err != nil {
 		return out, err
 	}
 	out.Original, out.UploadURL, out.UploadExpiresAt = upload.Ref, upload.UploadURL, &upload.ExpiresAt
@@ -104,7 +124,10 @@ func (s *Service) Complete(ctx context.Context, id string, r t.ImportCompleteReq
 	if err != nil {
 		return out, err
 	}
-	if out.ClipID != "" {
+	if out.UploadGeneration > 0 && r.UploadGeneration != out.UploadGeneration {
+		return out, fmt.Errorf("%w: upload generation changed", domain.ErrConflict)
+	}
+	if out.ClipID != "" || out.MediaState == "ready" {
 		return out, nil
 	}
 	if out.Rejected {
@@ -122,14 +145,29 @@ func (s *Service) Complete(ctx context.Context, id string, r t.ImportCompleteReq
 	}
 	timeout, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	media, err := s.Gateway.VerifyUpload(timeout, &workflow.VerifyUploadRequest{ImportID: id, Ref: out.Original, ExpectedSHA256: strings.ToLower(r.SHA256), ExpectedSizeBytes: r.SizeBytes, ExpectedDurationSec: out.Source.DurationSec})
+	uploadID := id
+	if out.UploadImportID != "" {
+		uploadID = out.UploadImportID
+	}
+	media, err := s.Gateway.VerifyUpload(timeout, &workflow.VerifyUploadRequest{ImportID: uploadID, Ref: out.Original, ExpectedSHA256: strings.ToLower(r.SHA256), ExpectedSizeBytes: r.SizeBytes, ExpectedDurationSec: out.Source.DurationSec})
 	if err != nil {
 		if code := status.Code(err); code == codes.InvalidArgument || code == codes.DataLoss {
-			_ = s.Repo.FailTwitchImport(ctx, id, "Media verification failed; check the file and retry")
+			if out.UploadGeneration == 0 {
+				_ = s.Repo.FailTwitchImport(ctx, id, "Media verification failed; check the file and retry")
+			}
 			return out, fmt.Errorf("%w: media verification failed", domain.ErrInvalid)
 		}
-		_ = s.Repo.FailTwitchImport(ctx, id, "Media verification is temporarily unavailable; retry this import")
+		if out.UploadGeneration == 0 {
+			_ = s.Repo.FailTwitchImport(ctx, id, "Media verification is temporarily unavailable; retry this import")
+		}
 		return out, fmt.Errorf("media verification is temporarily unavailable: %w", err)
+	}
+	if out.UploadGeneration > 0 {
+		repo, e := s.flows()
+		if e != nil {
+			return out, e
+		}
+		return repo.FinishFlowImport(ctx, id, out.UploadGeneration, media, s.now())
 	}
 	return s.Repo.FinishTwitchImport(ctx, id, media, s.now())
 }
@@ -152,14 +190,10 @@ func (s *Service) preview(ctx context.Context, c *domain.Compilation) {
 }
 func (s *Service) Compilations(ctx context.Context) ([]domain.Compilation, error) {
 	out, err := s.Repo.ListCompilations(ctx)
-	for i := range out {
-		s.preview(ctx, &out[i])
-	}
 	return out, err
 }
 func (s *Service) Compilation(ctx context.Context, id string) (domain.Compilation, error) {
 	out, err := s.Repo.GetCompilation(ctx, id)
-	s.preview(ctx, &out)
 	return out, err
 }
 func (s *Service) CreateCompilation(ctx context.Context, r t.CompilationRequest) (domain.Compilation, error) {
@@ -172,9 +206,6 @@ func (s *Service) AutoCompilation(ctx context.Context) (domain.AutoCompilationRe
 	out, err := s.Repo.AutoCompilation(ctx, s.now())
 	if err != nil {
 		return out, err
-	}
-	if out.Compilation != nil {
-		s.preview(ctx, out.Compilation)
 	}
 	switch out.Reason {
 	case "created":
@@ -195,6 +226,9 @@ func (s *Service) AutoCompilation(ctx context.Context) (domain.AutoCompilationRe
 	return out, nil
 }
 func (s *Service) Tick(ctx context.Context) error {
+	if repo, ok := s.Repo.(domain.TwitchFlowRepo); ok {
+		return repo.TickTwitchFlows(ctx, s.now())
+	}
 	_, err := s.Repo.AutoCompilation(ctx, s.now())
 	return err
 }

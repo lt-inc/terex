@@ -90,6 +90,11 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		if p.Version != version || p.Status != "queued" {
 			return out, nil
 		}
+		if allowed, e := flowPublicationAllowed(ctx, tx, pid); e != nil {
+			return nil, e
+		} else if !allowed && !p.CancelRequested {
+			return out, nil
+		}
 		if p.StartedAt == nil {
 			if allowed, e := twitchRuntimeCapacity(ctx, tx, pid, now); e != nil {
 				return nil, e

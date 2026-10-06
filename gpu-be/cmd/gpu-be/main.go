@@ -74,7 +74,7 @@ func run() error {
 	}
 	defer state.Close()
 
-	store, err := minio.New(cfg.S3Endpoint, cfg.S3PublicEndpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3UseSSL)
+	store, err := minio.New(cfg.S3Endpoint, cfg.S3PublicEndpoint, cfg.S3AccessKey, cfg.S3SecretKey, cfg.S3UseSSL, cfg.S3PublicUseSSL)
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,10 @@ func run() error {
 	defer coordConn.Close()
 	coord := workflow.NewCoordinatorClient(coordConn)
 	workerID, _ := os.Hostname()
-	rendererSvc := &renderer.Service{Store: store, Media: media, Broker: br, State: state, Rep: rep, TmpDir: cfg.TmpDir}
+	rendererSvc := &renderer.Service{Store: store, Media: media, Broker: br, State: state, Rep: rep, TmpDir: cfg.TmpDir, AssemblyTmpDir: cfg.AssemblyTmpDir, AssemblyBudgetBytes: cfg.AssemblyBudgetBytes}
+	if err := rendererSvc.PrepareAssemblyScratch(); err != nil {
+		return err
+	}
 
 	svcs := tamqp.Services{
 		Preproc: &preproc.Service{Store: store, Dl: ytdlp.New(), Media: media, Broker: br, Rep: rep, TmpDir: cfg.TmpDir},

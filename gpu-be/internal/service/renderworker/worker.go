@@ -2,7 +2,9 @@ package renderworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"terex/gpu-be/internal/service/renderer"
@@ -47,10 +49,26 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 			}
 		}
 	}()
-	work, err := w.Renderer.MaterializeAssembly(ctx, *l.Render)
+	renderCtx := ctx
+	if l.Render.Source.Assembly != nil {
+		var release func()
+		renderCtx, release, err = w.Renderer.BeginAssembly(ctx)
+		if err == nil {
+			defer release()
+		} else {
+			renderCtx = ctx
+		}
+	}
+	work := *l.Render
+	if err == nil {
+		work, err = w.Renderer.MaterializeAssembly(renderCtx, work)
+	}
 	var media workflow.ObjectRef
 	if err == nil {
-		media, err = w.Renderer.RenderRevision(ctx, work)
+		media, err = w.Renderer.RenderRevision(renderCtx, work)
+	}
+	if budgetErr := renderer.CheckAssemblyBudget(renderCtx); budgetErr != nil {
+		err = budgetErr
 	}
 	if ctx.Err() != nil {
 		cancel()
@@ -68,7 +86,12 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 			err = fmt.Errorf("render lease expired before completion")
 		}
 	} else {
-		_, err = w.Coordinator.Fail(ctx, &workflow.FailRequest{LeaseRequest: q, State: "failed", Code: "render_failed", Message: err.Error(), Retryable: false})
+		code := "render_failed"
+		if errors.Is(err, renderer.ErrAssemblyBudget) {
+			code = "assembly_budget_exceeded"
+		}
+		slog.ErrorContext(ctx, "revision render failed", "stage", "render", "reason", code, "clip_id", work.ClipID, "revision_id", work.RevisionID, "err", err)
+		_, err = w.Coordinator.Fail(ctx, &workflow.FailRequest{LeaseRequest: q, State: "failed", Code: code, Message: err.Error(), Retryable: false})
 	}
 	cancel()
 	<-done
