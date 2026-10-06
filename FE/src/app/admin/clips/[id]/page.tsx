@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Toggle from "@/components/ui/Toggle";
@@ -14,6 +14,9 @@ import {
 } from "@/lib/api";
 import { validateEditor } from "@/lib/validation";
 import type { ClipEditor, SubtitleCue } from "@/types";
+import PreviewModal, {
+  type PreviewTarget,
+} from "@/components/media/PreviewModal";
 const input =
   "bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 w-full min-w-0";
 const button =
@@ -37,7 +40,7 @@ export default function ClipEditorPage() {
     kind: "approve" | "restore" | "reload" | "leave";
     url?: string;
   } | null>(null);
-  const video = useRef<HTMLVideoElement>(null);
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const [saved, setSaved] = useState<ClipEditor | null>(null),
     [draft, setDraft] = useState<ClipEditor | null>(null),
     [tags, setTags] = useState(""),
@@ -181,10 +184,14 @@ export default function ClipEditorPage() {
     }
   }
   function seek(value: number) {
-    if (video.current) {
-      video.current.currentTime = value;
-      setCurrent(value);
-    }
+    setCurrent(value);
+    setPreview({
+      clipID: id,
+      revisionID: saved?.revision_id,
+      kind: "source",
+      title: draft?.title || id,
+      initialTime: value,
+    });
   }
   async function restore() {
     if (!saved || !restoreID || dirty) return;
@@ -322,19 +329,13 @@ export default function ClipEditorPage() {
           <h2 className="text-sm font-semibold text-slate-300">
             Source and boundaries
           </h2>
-          {draft.source_url ? (
-            <video
-              ref={video}
-              src={draft.source_url}
-              className="w-full max-h-80 bg-black rounded-lg"
-              controls
-              preload="metadata"
-              onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
-              onLoadedMetadata={(e) => {
-                if (!draft.source_duration_sec)
-                  change("source_duration_sec", e.currentTarget.duration);
-              }}
-            />
+          {draft.source_available !== false ? (
+            <button
+              className={`${button} min-h-32`}
+              onClick={() => seek(current)}
+            >
+              ▶ Смотреть исходник и выбрать границы
+            </button>
           ) : (
             <p className="text-amber-400 text-sm">
               Source unavailable. Reload when storage is available.
@@ -353,11 +354,7 @@ export default function ClipEditorPage() {
               >
                 {key === "start_sec" ? "Start" : "End"} (seconds)
                 <input
-                  disabled={
-                    draft.source_available === false ||
-                    !draft.source_url ||
-                    busy
-                  }
+                  disabled={draft.source_available === false || busy}
                   className={input}
                   type="number"
                   min={0}
@@ -368,11 +365,7 @@ export default function ClipEditorPage() {
                 <div className="flex gap-2">
                   <button
                     className="text-indigo-400"
-                    disabled={
-                      draft.source_available === false ||
-                      !draft.source_url ||
-                      busy
-                    }
+                    disabled={draft.source_available === false || busy}
                     onClick={() => change(key, Math.round(current * 100) / 100)}
                   >
                     Use playhead
@@ -388,11 +381,7 @@ export default function ClipEditorPage() {
                   <input
                     aria-label={`${key} slider`}
                     type="range"
-                    disabled={
-                      draft.source_available === false ||
-                      !draft.source_url ||
-                      busy
-                    }
+                    disabled={draft.source_available === false || busy}
                     min={0}
                     max={draft.source_duration_sec}
                     step={0.1}
@@ -437,14 +426,20 @@ export default function ClipEditorPage() {
               </button>
             </div>
           )}
-          {saved?.rendered_preview_url ? (
-            <video
-              key={saved.rendered_preview_url}
-              src={saved.rendered_preview_url}
-              className="w-full max-h-96 bg-black rounded-lg"
-              controls
-              preload="metadata"
-            />
+          {saved?.render_state === "ready" ? (
+            <button
+              className={`${button} min-h-24`}
+              onClick={() =>
+                setPreview({
+                  clipID: id,
+                  revisionID: saved.revision_id,
+                  kind: "rendered",
+                  title: saved.title || id,
+                })
+              }
+            >
+              ▶ Смотреть готовую версию
+            </button>
           ) : (
             <p className="text-sm text-slate-500">
               {saved?.render_state === "failed"
@@ -502,9 +497,7 @@ export default function ClipEditorPage() {
             />
           </label>
           <Toggle
-            disabled={
-              draft.source_available === false || !draft.source_url || busy
-            }
+            disabled={draft.source_available === false || busy}
             label="Burn subtitles into this revision"
             checked={draft.subtitles_enabled}
             onChange={(v) => change("subtitles_enabled", v)}
@@ -515,9 +508,7 @@ export default function ClipEditorPage() {
             </h2>
             <button
               className="text-indigo-400 text-xs"
-              disabled={
-                draft.source_available === false || !draft.source_url || busy
-              }
+              disabled={draft.source_available === false || busy}
               onClick={() => {
                 const start = Math.min(
                   draft.end_sec - 0.1,
@@ -546,11 +537,7 @@ export default function ClipEditorPage() {
                 <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-2 items-center">
                   <input
                     aria-label="Cue start seconds"
-                    disabled={
-                      draft.source_available === false ||
-                      !draft.source_url ||
-                      busy
-                    }
+                    disabled={draft.source_available === false || busy}
                     className={input}
                     type="number"
                     min={0}
@@ -562,11 +549,7 @@ export default function ClipEditorPage() {
                   />
                   <input
                     aria-label="Cue end seconds"
-                    disabled={
-                      draft.source_available === false ||
-                      !draft.source_url ||
-                      busy
-                    }
+                    disabled={draft.source_available === false || busy}
                     className={input}
                     type="number"
                     min={0}
@@ -584,11 +567,7 @@ export default function ClipEditorPage() {
                   </button>
                   <button
                     aria-label="Remove cue"
-                    disabled={
-                      draft.source_available === false ||
-                      !draft.source_url ||
-                      busy
-                    }
+                    disabled={draft.source_available === false || busy}
                     className="text-red-400"
                     onClick={() =>
                       change(
@@ -602,11 +581,7 @@ export default function ClipEditorPage() {
                 </div>
                 <textarea
                   aria-label="Subtitle text"
-                  disabled={
-                    draft.source_available === false ||
-                    !draft.source_url ||
-                    busy
-                  }
+                  disabled={draft.source_available === false || busy}
                   className={input}
                   rows={2}
                   value={c.text}
@@ -622,6 +597,19 @@ export default function ClipEditorPage() {
           </div>
         </section>
       </div>
+      <PreviewModal
+        target={preview}
+        onClose={() => setPreview(null)}
+        onTimeUpdate={preview?.kind === "source" ? setCurrent : undefined}
+        onDuration={
+          preview?.kind === "source"
+            ? (duration) => {
+                if (!draft.source_duration_sec)
+                  change("source_duration_sec", duration);
+              }
+            : undefined
+        }
+      />
       {confirmation && (
         <ConfirmAction
           title={

@@ -112,8 +112,12 @@ func TestVerifiedObjectCannotBeOverwrittenByUploadURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Original == u.Ref || !strings.HasPrefix(v.Original.Object, "verified/import-1/") || len(v.SHA256) != 64 {
+	if v.Original == u.Ref || v.Original.Object != "verified/sha256/"+v.SHA256+".mp4" || len(v.SHA256) != 64 {
 		t.Fatalf("mutable result: %+v", v)
+	}
+	alias, err := s.VerifyUpload(context.Background(), &workflow.VerifyUploadRequest{ImportID: "import-2-generation-3", Ref: staging("import-2-generation-3"), ExpectedSHA256: v.SHA256})
+	if err != nil || alias.Original != v.Original || alias.SHA256 != v.SHA256 {
+		t.Fatalf("identical aliases must share one verified object: %+v, %v", alias, err)
 	}
 	_, err = s.ReserveUpload(context.Background(), &workflow.ReserveUploadRequest{ImportID: "import-1", Ref: v.Original})
 	if err == nil {

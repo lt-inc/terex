@@ -37,9 +37,6 @@ func DefaultSettings() Settings {
 		CompilationHour: 21, BacklogLimit: 40, Timezone: "Asia/Tomsk"}
 }
 func (s Settings) Validate() error {
-	if s.Enabled && s.TargetAccountID <= 0 {
-		return fmt.Errorf("select a target YouTube account before enabling")
-	}
 	if s.PollIntervalMinutes < 1 || s.PollIntervalMinutes > 10080 || s.WindowHours < 1 || s.WindowHours > 720 || s.First < 1 || s.First > 100 || s.MinViews < 0 || s.MinAgeMinutes < 0 || s.MinAgeMinutes >= s.WindowHours*60 {
 		return fmt.Errorf("invalid discovery limits")
 	}
@@ -71,44 +68,127 @@ type Source struct {
 	DurationSec      float64   `json:"duration_sec"`
 	VideoID          string    `json:"video_id,omitempty"`
 	VODOffset        *float64  `json:"vod_offset,omitempty"`
+	GameID           string    `json:"game_id,omitempty"`
+	Language         string    `json:"language,omitempty"`
+	ThumbnailURL     string    `json:"thumbnail_url,omitempty"`
 }
+
+// Flow pins one publication destination. Discovery is shared; output decisions
+// and scheduling belong to the flow rather than to the physical media file.
+type Flow struct {
+	ID                        string     `json:"id"`
+	Name                      string     `json:"name"`
+	Enabled                   bool       `json:"enabled"`
+	AutoPublish               bool       `json:"auto_publish"`
+	AccountID                 int64      `json:"account_id"`
+	YouTubeChannelID          string     `json:"youtube_channel_id"`
+	Version                   int        `json:"version"`
+	SourceMode                string     `json:"source_mode"`
+	BroadcasterIDs            []string   `json:"broadcaster_ids"`
+	ChannelInputs             []string   `json:"channel_inputs,omitempty"`
+	ExcludedSourceIDs         []string   `json:"excluded_source_ids,omitempty"`
+	CategoryID                string     `json:"category_id,omitempty"`
+	CategoryName              string     `json:"category_name,omitempty"`
+	Language                  string     `json:"language,omitempty"`
+	PollIntervalMinutes       int        `json:"poll_interval_minutes"`
+	WindowHours               int        `json:"window_hours"`
+	MinViews                  int        `json:"min_views"`
+	MinAgeMinutes             int        `json:"min_age_minutes"`
+	MinDurationSec            float64    `json:"min_duration_sec"`
+	MaxDurationSec            float64    `json:"max_duration_sec"`
+	ShortsEnabled             bool       `json:"shorts_enabled"`
+	CompilationsEnabled       bool       `json:"compilations_enabled"`
+	CompilationMinDurationSec float64    `json:"compilation_min_duration_sec"`
+	CompilationMaxDurationSec float64    `json:"compilation_max_duration_sec"`
+	CompilationMinClips       int        `json:"compilation_min_clips"`
+	CompilationMaxClips       int        `json:"compilation_max_clips"`
+	CompilationHour           int        `json:"compilation_hour"`
+	BalanceByTime             bool       `json:"balance_by_time"`
+	ShortsSlots               []string   `json:"shorts_slots"`
+	CompilationSlots          []string   `json:"compilation_slots"`
+	Timezone                  string     `json:"timezone"`
+	DailyShorts               int        `json:"daily_shorts"`
+	DailyCompilations         int        `json:"daily_compilations"`
+	LegacyLength              bool       `json:"legacy_length,omitempty"`
+	CreatedAt                 time.Time  `json:"created_at"`
+	UpdatedAt                 time.Time  `json:"updated_at"`
+	AutoEnabledAt             *time.Time `json:"auto_enabled_at,omitempty"`
+	WorkStartedAt             *time.Time `json:"work_started_at,omitempty"`
+	LastCheckedAt             *time.Time `json:"last_checked_at,omitempty"`
+	BlockReason               string     `json:"block_reason,omitempty"`
+	FoundClips                int        `json:"found_clips"`
+	ReadyOutputs              int        `json:"ready_outputs"`
+	NextPublicationAt         *time.Time `json:"next_publication_at,omitempty"`
+}
+
+type CollectorConfig struct {
+	Settings         Settings `json:"settings"`
+	Flows            []Flow   `json:"flows"`
+	BlockedSourceIDs []string `json:"blocked_source_ids,omitempty"`
+}
+
+type ObservationRequest struct {
+	FlowID      string   `json:"flow_id"`
+	FlowVersion int      `json:"flow_version"`
+	Sources     []Source `json:"sources"`
+}
+
+type Category struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type ImportRequest struct {
-	SchemaVersion  int    `json:"schema_version"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Source         Source `json:"source"`
-	AccountID      int64  `json:"account_id,omitempty"`
+	SchemaVersion    int    `json:"schema_version"`
+	IdempotencyKey   string `json:"idempotency_key"`
+	Source           Source `json:"source"`
+	AccountID        int64  `json:"account_id,omitempty"`
+	FlowID           string `json:"flow_id,omitempty"`
+	FlowVersion      int    `json:"flow_version,omitempty"`
+	ReservationID    string `json:"reservation_id,omitempty"`
+	UploadGeneration int64  `json:"upload_generation,omitempty"`
 }
 type ImportCompleteRequest struct {
-	SHA256    string `json:"sha256"`
-	SizeBytes int64  `json:"size_bytes"`
+	SHA256           string `json:"sha256"`
+	SizeBytes        int64  `json:"size_bytes"`
+	UploadGeneration int64  `json:"upload_generation,omitempty"`
 }
 type Import struct {
-	ImportID        string        `json:"import_id"`
-	Source          Source        `json:"source"`
-	State           string        `json:"state"`
-	AccountID       int64         `json:"account_id"`
-	JobID           string        `json:"job_id,omitempty"`
-	ClipID          string        `json:"clip_id,omitempty"`
-	RevisionID      int64         `json:"revision_id,omitempty"`
-	UploadURL       string        `json:"upload_url,omitempty"`
-	UploadExpiresAt *time.Time    `json:"upload_expires_at,omitempty"`
-	Original        msg.ObjectRef `json:"original,omitempty"`
-	SHA256          string        `json:"sha256,omitempty"`
-	DurationSec     float64       `json:"duration_sec,omitempty"`
-	SizeBytes       int64         `json:"size_bytes,omitempty"`
-	Width           int           `json:"width,omitempty"`
-	Height          int           `json:"height,omitempty"`
-	Rejected        bool          `json:"rejected"`
-	CreatedAt       time.Time     `json:"created_at"`
-	Error           string        `json:"error,omitempty"`
+	ImportID         string        `json:"import_id"`
+	Source           Source        `json:"source"`
+	State            string        `json:"state"`
+	AccountID        int64         `json:"account_id"`
+	JobID            string        `json:"job_id,omitempty"`
+	ClipID           string        `json:"clip_id,omitempty"`
+	RevisionID       int64         `json:"revision_id,omitempty"`
+	UploadURL        string        `json:"upload_url,omitempty"`
+	UploadExpiresAt  *time.Time    `json:"upload_expires_at,omitempty"`
+	Original         msg.ObjectRef `json:"original,omitempty"`
+	SHA256           string        `json:"sha256,omitempty"`
+	DurationSec      float64       `json:"duration_sec,omitempty"`
+	SizeBytes        int64         `json:"size_bytes,omitempty"`
+	Width            int           `json:"width,omitempty"`
+	Height           int           `json:"height,omitempty"`
+	Rejected         bool          `json:"rejected"`
+	Excluded         bool          `json:"excluded"`
+	CreatedAt        time.Time     `json:"created_at"`
+	Error            string        `json:"error,omitempty"`
+	FlowID           string        `json:"flow_id,omitempty"`
+	ReservationID    string        `json:"reservation_id,omitempty"`
+	MediaID          string        `json:"media_id,omitempty"`
+	MediaState       string        `json:"media_state,omitempty"`
+	UploadGeneration int64         `json:"upload_generation,omitempty"`
+	UploadImportID   string        `json:"upload_import_id,omitempty"`
 }
 type CompilationItemRequest struct {
 	ClipID     string  `json:"clip_id"`
 	RevisionID int64   `json:"revision_id"`
 	StartSec   float64 `json:"start_sec"`
 	EndSec     float64 `json:"end_sec"`
+	SourceID   string  `json:"source_id,omitempty"`
 }
 type CompilationRequest struct {
-	Title string                   `json:"title"`
-	Items []CompilationItemRequest `json:"items"`
+	Title  string                   `json:"title"`
+	Items  []CompilationItemRequest `json:"items"`
+	FlowID string                   `json:"flow_id,omitempty"`
 }

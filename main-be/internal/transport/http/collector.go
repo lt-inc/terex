@@ -16,6 +16,7 @@ type CollectorProxy struct {
 }
 
 var collectorChannelPath = regexp.MustCompile(`^channels/[A-Za-z0-9_-]{1,100}$`)
+var collectorFlowCheckPath = regexp.MustCompile(`^flows/[A-Za-z0-9_-]{1,100}/check$`)
 
 func (p *CollectorProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p == nil || p.URL == "" || p.Token == "" {
@@ -23,7 +24,7 @@ func (p *CollectorProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	suffix := strings.TrimPrefix(r.URL.Path, "/api/twitch/")
-	if suffix != "channels" && suffix != "clips" && suffix != "check" && suffix != "status" && !collectorChannelPath.MatchString(suffix) {
+	if suffix != "channels" && suffix != "clips" && suffix != "check" && suffix != "status" && suffix != "categories" && !collectorChannelPath.MatchString(suffix) && !collectorFlowCheckPath.MatchString(suffix) {
 		http.NotFound(w, r)
 		return
 	}

@@ -76,10 +76,11 @@ func (s *Service) RenderRevision(ctx context.Context, w workflow.RenderWork) (do
 			return domain.ObjectRef{}, fmt.Errorf("invalid subtitle cue bounds")
 		}
 	}
-	if err := os.MkdirAll(s.TmpDir, 0o755); err != nil {
+	tmp := s.revisionTmp(ctx)
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return domain.ObjectRef{}, err
 	}
-	dir, err := os.MkdirTemp(s.TmpDir, "revision-")
+	dir, err := os.MkdirTemp(tmp, "revision-")
 	if err != nil {
 		return domain.ObjectRef{}, err
 	}

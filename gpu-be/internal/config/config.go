@@ -15,8 +15,11 @@ type Config struct {
 	S3AccessKey           string
 	S3SecretKey           string
 	S3UseSSL              bool
+	S3PublicUseSSL        bool
 	StateDir              string
 	TmpDir                string
+	AssemblyTmpDir        string
+	AssemblyBudgetBytes   int64
 	WhisperBin            string
 	WhisperModel          string
 	OpenRouterKey         string
@@ -48,8 +51,11 @@ func Load() Config {
 		S3AccessKey:           env("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:           env("S3_SECRET_KEY", "minioadmin"),
 		S3UseSSL:              env("S3_USE_SSL", "false") == "true",
+		S3PublicUseSSL:        env("S3_PUBLIC_USE_SSL", env("S3_USE_SSL", "false")) == "true",
 		StateDir:              env("STATE_DIR", "/data/state"),
 		TmpDir:                env("TMP_DIR", "/tmp/terex"),
+		AssemblyTmpDir:        env("ASSEMBLY_TMP_DIR", "/tmp/terex-assembly"),
+		AssemblyBudgetBytes:   envInt64("ASSEMBLY_BUDGET_BYTES", 8<<30),
 		WhisperBin:            env("WHISPER_BIN", "whisper"),
 		WhisperModel:          env("WHISPER_MODEL", "base"),
 		OpenRouterKey:         os.Getenv("OPENROUTER_API_KEY"),
@@ -106,6 +112,13 @@ func splitCSV(v string) []string {
 
 func envInt(k string, def int) int {
 	if v, err := strconv.Atoi(os.Getenv(k)); err == nil {
+		return v
+	}
+	return def
+}
+
+func envInt64(k string, def int64) int64 {
+	if v, err := strconv.ParseInt(os.Getenv(k), 10, 64); err == nil && v > 0 {
 		return v
 	}
 	return def

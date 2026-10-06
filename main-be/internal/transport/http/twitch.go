@@ -52,6 +52,15 @@ func (a *API) completeImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, out)
 }
 func (a *API) listImports(w http.ResponseWriter, r *http.Request) {
+	if flow := r.URL.Query().Get("flow_id"); flow != "" {
+		out, e := a.Twitch.FlowImports(r.Context(), flow)
+		if e != nil {
+			fail(w, e)
+			return
+		}
+		writeJSON(w, 200, out)
+		return
+	}
 	out, err := a.Twitch.Imports(r.Context(), r.URL.Query().Get("pending") == "true", r.URL.Query().Get("state"))
 	if err != nil {
 		fail(w, err)
@@ -91,6 +100,15 @@ func (a *API) compilations(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if flow := r.URL.Query().Get("flow_id"); flow != "" {
+		filtered := out[:0]
+		for _, c := range out {
+			if c.FlowID == flow {
+				filtered = append(filtered, c)
+			}
+		}
+		out = filtered
+	}
 	writeJSON(w, 200, out)
 }
 func (a *API) createCompilation(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +144,15 @@ func (a *API) updateCompilation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, out)
 }
 func (a *API) autoCompilation(w http.ResponseWriter, r *http.Request) {
+	if flow := r.URL.Query().Get("flow_id"); flow != "" {
+		out, e := a.Twitch.AutoFlowCompilation(r.Context(), flow)
+		if e != nil {
+			fail(w, e)
+			return
+		}
+		writeJSON(w, 200, out)
+		return
+	}
 	out, err := a.Twitch.AutoCompilation(r.Context())
 	if err != nil {
 		fail(w, err)

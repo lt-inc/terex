@@ -14,7 +14,18 @@ import type {
   PublicationTarget,
 } from "@/types";
 import { formatInZone } from "./datetime";
-import type { AutoCompilationResult, Compilation, CompilationRequest, ImportedClip, TwitchSettings, TwitchChannel, TwitchClip, TwitchCollectorStatus } from "@/types/twitch";
+import type {
+  AutoCompilationResult,
+  Compilation,
+  CompilationRequest,
+  ImportedClip,
+  TwitchSettings,
+  TwitchChannel,
+  TwitchClip,
+  TwitchCollectorStatus,
+  TwitchFlow,
+  TwitchFlowClipPage,
+} from "@/types/twitch";
 
 export class ApiError extends Error {
   constructor(
@@ -166,6 +177,21 @@ export async function deleteChannel(id: number) {
 }
 export const fetchClips = (approval = "") =>
   request<Clip[]>(`/clips?approval=${encodeURIComponent(approval)}`);
+export const fetchClipPreview = (
+  id: string,
+  kind: "source" | "rendered",
+  revisionID?: number,
+) => {
+  const query = new URLSearchParams({ kind });
+  if (revisionID) query.set("revision_id", String(revisionID));
+  return request<{
+    url: string;
+    expires_at: string;
+    clip_id: string;
+    revision_id: number;
+    kind: string;
+  }>(`/clips/${encodeURIComponent(id)}/preview?${query}`);
+};
 export async function approveClip(id: string, version?: number) {
   await request(
     `/clips/${encodeURIComponent(id)}/approve`,
@@ -271,20 +297,121 @@ export const saveSubJobTargets = (
     json("PUT", { expected_version: version, targets }),
   );
 
-export const fetchTwitchSettings = () => request<TwitchSettings>("/twitch/settings");
-export const saveTwitchSettings = (settings: TwitchSettings) => request<TwitchSettings>("/twitch/settings", json("PUT", settings));
-export const fetchTwitchChannels = () => request<TwitchChannel[]>("/twitch/channels");
-export const createTwitchChannel = (input: string) => request<TwitchChannel>("/twitch/channels", json("POST", { input }));
-export const updateTwitchChannel = (id: string, paused: boolean) => request<TwitchChannel>(`/twitch/channels/${encodeURIComponent(id)}`, json("PATCH", { paused }));
-export const archiveTwitchChannel = (id: string) => request<TwitchChannel>(`/twitch/channels/${encodeURIComponent(id)}`, { method: "DELETE" });
-export const fetchTwitchClips = () => request<TwitchClip[]>("/twitch/clips?limit=100");
-export const fetchTwitchStatus = () => request<TwitchCollectorStatus>("/twitch/status");
-export const checkTwitchNow = () => request<{ accepted: boolean }>("/twitch/check", json("POST", {}));
-export const fetchImports = (state = "") => request<ImportedClip[]>(`/imports${state ? `?state=${encodeURIComponent(state)}` : ""}`);
-export const rejectImport = (id: string) => request<ImportedClip>(`/imports/${encodeURIComponent(id)}`, json("PATCH", { rejected: true }));
-export const fetchCompilations = () => request<Compilation[]>("/compilations");
-export const fetchCompilation = (id: string) => request<Compilation>(`/compilations/${encodeURIComponent(id)}`);
-export const createCompilation = (spec: CompilationRequest) => request<Compilation>("/compilations", json("POST", spec));
-export const saveCompilation = (id: string, version: number, spec: CompilationRequest) =>
-  request<Compilation>(`/compilations/${encodeURIComponent(id)}`, json("PUT", { expected_version: version, ...spec }));
-export const triggerAutoCompilation = () => request<AutoCompilationResult>("/compilations/auto", json("POST", {}));
+export const fetchTwitchSettings = () =>
+  request<TwitchSettings>("/twitch/settings");
+export const saveTwitchSettings = (settings: TwitchSettings) =>
+  request<TwitchSettings>("/twitch/settings", json("PUT", settings));
+export const fetchTwitchChannels = () =>
+  request<TwitchChannel[]>("/twitch/channels");
+export const createTwitchChannel = (input: string) =>
+  request<TwitchChannel>("/twitch/channels", json("POST", { input }));
+export const updateTwitchChannel = (id: string, paused: boolean) =>
+  request<TwitchChannel>(
+    `/twitch/channels/${encodeURIComponent(id)}`,
+    json("PATCH", { paused }),
+  );
+export const archiveTwitchChannel = (id: string) =>
+  request<TwitchChannel>(`/twitch/channels/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+export const fetchTwitchClips = () =>
+  request<TwitchClip[]>("/twitch/clips?limit=100");
+export const fetchTwitchStatus = () =>
+  request<TwitchCollectorStatus>("/twitch/status");
+export const checkTwitchNow = () =>
+  request<{ accepted: boolean }>("/twitch/check", json("POST", {}));
+export const fetchImports = (state = "", flowID = "") => {
+  const query = new URLSearchParams();
+  if (state) query.set("state", state);
+  if (flowID) query.set("flow_id", flowID);
+  return request<ImportedClip[]>(`/imports${query.size ? `?${query}` : ""}`);
+};
+export const rejectImport = (id: string) =>
+  request<ImportedClip>(
+    `/imports/${encodeURIComponent(id)}`,
+    json("PATCH", { rejected: true }),
+  );
+export const fetchCompilations = (flowID = "") =>
+  request<Compilation[]>(
+    `/compilations${flowID ? `?flow_id=${encodeURIComponent(flowID)}` : ""}`,
+  );
+export const fetchCompilation = (id: string) =>
+  request<Compilation>(`/compilations/${encodeURIComponent(id)}`);
+export const createCompilation = (spec: CompilationRequest) =>
+  request<Compilation>("/compilations", json("POST", spec));
+export const saveCompilation = (
+  id: string,
+  version: number,
+  spec: CompilationRequest,
+) =>
+  request<Compilation>(
+    `/compilations/${encodeURIComponent(id)}`,
+    json("PUT", { expected_version: version, ...spec }),
+  );
+export const triggerAutoCompilation = (flowID = "") =>
+  request<AutoCompilationResult>(
+    `/compilations/auto${flowID ? `?flow_id=${encodeURIComponent(flowID)}` : ""}`,
+    json("POST", {}),
+  );
+function normalizeFlow(flow: TwitchFlow): TwitchFlow {
+  return {
+    ...flow,
+    broadcaster_ids: flow.broadcaster_ids || [],
+    channel_inputs: flow.channel_inputs || [],
+    shorts_slots: flow.shorts_slots || [],
+    compilation_slots: flow.compilation_slots || [],
+  };
+}
+export const fetchTwitchFlows = () =>
+  request<TwitchFlow[] | null>("/twitch/flows").then((flows) =>
+    (flows || []).map(normalizeFlow),
+  );
+export const fetchTwitchFlow = (id: string) =>
+  request<TwitchFlow>(`/twitch/flows/${encodeURIComponent(id)}`).then(
+    normalizeFlow,
+  );
+export const createTwitchFlow = (flow: TwitchFlow) =>
+  request<TwitchFlow>("/twitch/flows", json("POST", flow));
+export const saveTwitchFlow = (flow: TwitchFlow) =>
+  request<TwitchFlow>(
+    `/twitch/flows/${encodeURIComponent(flow.id)}`,
+    json("PUT", flow),
+  );
+export const checkTwitchFlow = (id: string) =>
+  request<{ accepted: boolean }>(
+    `/twitch/flows/${encodeURIComponent(id)}/check`,
+    json("POST", {}),
+  );
+export const fetchTwitchCategories = (q: string) =>
+  request<
+    { id: string; name: string }[] | { items: { id: string; name: string }[] }
+  >(`/twitch/categories?q=${encodeURIComponent(q)}`).then((data) =>
+    Array.isArray(data) ? data : data.items || [],
+  );
+export const fetchTwitchFlowClips = (
+  id: string,
+  filters: Record<string, string>,
+) =>
+  request<TwitchFlowClipPage>(
+    `/twitch/flows/${encodeURIComponent(id)}/clips?${new URLSearchParams({ limit: "50", ...filters })}`,
+  ).then((page) => ({ ...page, items: page.items || [] }));
+export const actTwitchFlowClip = (
+  flowID: string,
+  sourceID: string,
+  action: "retry" | "exclude",
+  excluded = true,
+) =>
+  request(
+    `/twitch/flows/${encodeURIComponent(flowID)}/clips/${encodeURIComponent(sourceID)}/${action}`,
+    json("POST", action === "exclude" ? { excluded } : {}),
+  );
+export const fetchTwitchSourcePreview = (sourceID: string, flowID: string) =>
+  request<{
+    url: string;
+    expires_at: string;
+    clip_id: string;
+    revision_id: number;
+    kind: string;
+  }>(
+    `/twitch/sources/${encodeURIComponent(sourceID)}/preview?flow_id=${encodeURIComponent(flowID)}`,
+  );

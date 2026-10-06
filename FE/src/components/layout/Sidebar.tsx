@@ -61,16 +61,17 @@ const ADMIN_GROUPS = [
   {
     key: "twitch",
     label: "Twitch",
-    links: [{ href: "/admin/twitch", label: "Sources & settings" }],
-  },
-  {
-    key: "compilations",
-    label: "Compilations",
-    links: [{ href: "/admin/compilations", label: "Build & review" }],
+    links: [
+      { href: "/admin/twitch", label: "Потоки" },
+      { href: "/admin/twitch/clips", label: "Клипы и состояния" },
+      { href: "/admin/compilations", label: "Подборки" },
+      { href: "/admin/twitch/settings", label: "Настройки сервиса" },
+    ],
   },
 ];
 
-const activePath = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
+const activePath = (pathname: string, href: string) =>
+  pathname === href || pathname.startsWith(`${href}/`);
 
 function ChevronIcon({ open }: { open: boolean }) {
   return (
@@ -148,8 +149,8 @@ export default function Sidebar() {
             <ul className="mt-1">
               {ADMIN_GROUPS.map((group) => {
                 const isOpen = groupOpen[group.key] ?? false;
-                const isGroupActive = group.links.some(
-                  (l) => activePath(pathname, l.href),
+                const isGroupActive = group.links.some((l) =>
+                  activePath(pathname, l.href),
                 );
                 return (
                   <li key={group.key}>
@@ -174,7 +175,9 @@ export default function Sidebar() {
                           <li key={href}>
                             <Link
                               href={href}
-                              aria-current={activePath(pathname, href) ? "page" : undefined}
+                              aria-current={
+                                activePath(pathname, href) ? "page" : undefined
+                              }
                               className={`flex items-center gap-2 px-8 py-1.5 text-sm rounded-md mx-2 transition-colors ${
                                 activePath(pathname, href)
                                   ? "bg-indigo-600 text-white"

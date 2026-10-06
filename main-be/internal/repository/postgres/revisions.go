@@ -98,7 +98,7 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, r.ID, u.StartSec, u.EndSec, u.Title, u.Hashtags); err != nil {
 		return domain.Revision{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal) SELECT $1,source_revision_id,source_clip_id,ordinal FROM twitch_compilation_items WHERE compilation_revision_id=$2`, r.ID, prev.ID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal,source_id,media_id) SELECT $1,source_revision_id,source_clip_id,ordinal,source_id,media_id FROM twitch_compilation_items WHERE compilation_revision_id=$2`, r.ID, prev.ID); err != nil {
 		return domain.Revision{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL,updated_at=now() WHERE publication_id IN (SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, clipID); err != nil {
@@ -135,6 +135,16 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
 	if err = lockTwitch(ctx, tx); err != nil {
 		return err
 	}
+	if err = approveRevisionTx(ctx, tx, clipID, version, now, nil, ""); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// Manual approval and automatic slot admission use the same validation and
+// publication creation inside one serialized transaction.
+func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version int, now time.Time, publishAt *time.Time, autoFlow string) error {
+	var err error
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
 		return mapErr(err)
@@ -151,6 +161,11 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
 	}
 	if err = requireTwitchSources(ctx, tx, clipID, rid); err != nil {
 		return err
+	}
+	if publishAt != nil {
+		if _, err = tx.Exec(ctx, `UPDATE sub_job_targets t SET start_at=$2 FROM sub_jobs sj,clips c WHERE t.sub_job_id=sj.sub_job_id AND sj.job_id=c.job_id AND c.clip_id=$1`, clipID, *publishAt); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET approved_at=COALESCE(approved_at,$2) WHERE id=$1`, rid, now); err != nil {
 		return err
@@ -173,7 +188,15 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
 	if err = enforceTwitchCaps(ctx, tx); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if autoFlow != "" {
+		_, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=$2,auto_hold=FALSE WHERE clip_id=$1 AND started_at IS NULL`, clipID, autoFlow)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=NULL,auto_hold=FALSE WHERE clip_id=$1 AND started_at IS NULL`, clipID)
+		if err == nil {
+			_, err = tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=$1`, clipID)
+		}
+	}
+	return err
 }
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
@@ -252,12 +275,21 @@ func (s *Store) ReplaceTargets(ctx context.Context, id string, version int, targ
 		return mapErr(err)
 	}
 	if kind == "twitch" || kind == "twitch_compilation" {
-		settings, e := readTwitchSettings(ctx, tx)
-		if e != nil {
+		var pinned int64
+		if e := tx.QueryRow(ctx, `SELECT o.account_id FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN sub_jobs sj ON sj.job_id=c.job_id WHERE sj.sub_job_id=$1 LIMIT 1`, id).Scan(&pinned); e == nil {
+			if len(targets) != 1 || targets[0].AccountID != pinned {
+				return fmt.Errorf("%w: назначение ролика закреплено за каналом потока", domain.ErrInvalid)
+			}
+		} else if e != pgx.ErrNoRows {
 			return e
-		}
-		if len(targets) != 1 || targets[0].AccountID != settings.TargetAccountID || settings.TargetAccountID <= 0 {
-			return fmt.Errorf("%w: Twitch drafts use the single configured YouTube account", domain.ErrInvalid)
+		} else {
+			settings, e := readTwitchSettings(ctx, tx)
+			if e != nil {
+				return e
+			}
+			if len(targets) != 1 || targets[0].AccountID != settings.TargetAccountID || settings.TargetAccountID <= 0 {
+				return fmt.Errorf("%w: Twitch drafts use the single configured YouTube account", domain.ErrInvalid)
+			}
 		}
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM sub_job_targets WHERE sub_job_id=$1`, id); err != nil {
@@ -394,7 +426,7 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, nextID, old.StartSec, old.EndSec, old.Title, old.Hashtags); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal) SELECT $1,source_revision_id,source_clip_id,ordinal FROM twitch_compilation_items WHERE compilation_revision_id=$2`, nextID, targetID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal,source_id,media_id) SELECT $1,source_revision_id,source_clip_id,ordinal,source_id,media_id FROM twitch_compilation_items WHERE compilation_revision_id=$2`, nextID, targetID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL)`, clipID); err != nil {

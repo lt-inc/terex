@@ -102,7 +102,7 @@ func TestTwitchImportDeduplicatesAndAtomicallyCreatesReadyWorkflow(t *testing.T)
 	}
 }
 func TestTwitchCompilationPinsSourcesReordersImmutablyAndRejectsDependency(t *testing.T) {
-	s, _, _ := twitchFixture(t)
+	s, _, settings := twitchFixture(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 	items := []twitch.CompilationItemRequest{}
@@ -132,6 +132,10 @@ func TestTwitchCompilationPinsSourcesReordersImmutablyAndRejectsDependency(t *te
 		t.Fatal(err)
 	}
 	items[0], items[2] = items[2], items[0]
+	settings.CompilationMinClips = 5
+	if err = s.SaveTwitchSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
 	updated, err := s.UpdateCompilation(ctx, c.ClipID, domain.CompilationUpdate{ExpectedVersion: 1, CompilationRequest: twitch.CompilationRequest{Title: "Changed", Items: items}}, now)
 	if err != nil || updated.Version != 2 || updated.State != "pending" || updated.ApprovedAt != nil {
 		t.Fatal(updated, err)

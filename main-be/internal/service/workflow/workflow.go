@@ -123,12 +123,16 @@ func (s *Service) Editor(ctx context.Context, id string) (domain.Editor, error) 
 	if err = json.Unmarshal(r.Manifest, &source); err != nil {
 		return domain.Editor{}, err
 	}
+	// Verified Twitch sources already have immutable timing and no transcript to
+	// hydrate. Return editor metadata without issuing short-lived video URLs.
+	if source.Assembly != nil || strings.HasPrefix(id, "twitch-") {
+		editor := domain.Editor{Revision: r, SourceDurationSec: source.DurationSec, SourceAvailable: source.Original.Object != "" || source.Assembly != nil}
+		s.editorHistory(ctx, &editor)
+		return editor, nil
+	}
 	ec, err := s.Gateway.EditorContext(ctx, &w.EditorContextRequest{JobID: clip.JobID, ClipID: id, StartSec: r.StartSec, EndSec: r.EndSec, Source: source})
 	if err != nil {
 		editor := domain.Editor{Revision: r, SourceDurationSec: source.DurationSec, SourceError: err.Error()}
-		if r.Object != "" {
-			editor.RenderedPreviewURL, _ = s.Gpu.PresignGet(ctx, r.Bucket, r.Object)
-		}
 		s.editorHistory(ctx, &editor)
 		return editor, nil
 	}
@@ -151,13 +155,10 @@ func (s *Service) Editor(ctx context.Context, id string) (domain.Editor, error) 
 	if r.Version == 1 {
 		r.SubtitlesEnabled = ec.Source.Options.Subtitles
 	}
-	editor := domain.Editor{Revision: r, SourceURL: ec.SourceURL, SourceDurationSec: ec.Source.DurationSec, SourceAvailable: ec.SourceAvailable}
+	editor := domain.Editor{Revision: r, SourceDurationSec: ec.Source.DurationSec, SourceAvailable: ec.SourceAvailable}
 	if r.ApprovedAt != nil {
 		rid := r.ID
 		editor.ApprovedRevisionID = &rid
-	}
-	if r.Object != "" {
-		editor.RenderedPreviewURL, _ = s.Gpu.PresignGet(ctx, r.Bucket, r.Object)
 	}
 	s.editorHistory(ctx, &editor)
 	return editor, nil

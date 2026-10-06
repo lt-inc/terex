@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { approveClip, rejectClip, fetchClips } from "@/lib/api";
 import type { Clip } from "@/types";
+import PreviewModal, {
+  type PreviewTarget,
+} from "@/components/media/PreviewModal";
 
 const TABS = [
   { key: "pending", label: "Pending approval" },
@@ -23,6 +26,7 @@ export default function ClipsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [preview, setPreview] = useState<PreviewTarget | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,16 +97,27 @@ export default function ClipsPage() {
             className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden flex flex-col"
           >
             <div className="bg-black aspect-[9/16] max-h-96 flex items-center justify-center">
-              {c.preview_url ? (
-                <video
-                  src={c.preview_url}
-                  className="w-full h-full object-contain"
-                  controls
-                  preload="metadata"
-                />
-              ) : (
-                <span className="text-xs text-slate-600">no preview</span>
-              )}
+              <button
+                className="flex h-full w-full flex-col items-center justify-center gap-3 text-sm text-slate-300 hover:bg-slate-900 disabled:text-slate-600"
+                disabled={!!c.render_state && c.render_state !== "ready"}
+                onClick={() =>
+                  setPreview({
+                    clipID: c.clip_id,
+                    kind: "rendered",
+                    title: c.title || c.clip_id,
+                  })
+                }
+              >
+                <span className="text-4xl">▶</span>
+                <span>
+                  {c.render_state && c.render_state !== "ready"
+                    ? "Видео ещё готовится"
+                    : "Смотреть видео"}
+                </span>
+                <span className="text-xs text-slate-500">
+                  Загрузка начнётся после нажатия
+                </span>
+              </button>
             </div>
             <div className="p-3 flex flex-col gap-2">
               <Link
@@ -145,6 +160,7 @@ export default function ClipsPage() {
           </div>
         ))}
       </div>
+      <PreviewModal target={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }

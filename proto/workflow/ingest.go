@@ -7,6 +7,8 @@ import (
 )
 
 type AssemblyItem struct {
+	MediaID          string    `json:"media_id,omitempty"`
+	TwitchSourceID   string    `json:"twitch_source_id,omitempty"`
 	SourceClipID     string    `json:"source_clip_id"`
 	SourceRevisionID int64     `json:"source_revision_id"`
 	Original         ObjectRef `json:"original"`

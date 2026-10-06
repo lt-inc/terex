@@ -174,14 +174,79 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 	if err != nil || n != 2 {
 		t.Fatal("calendar-day quota did not reset", n, err)
 	}
-	// Enforce ten tracked channels in the same transaction as additions.
+	// The catalogue is shared by flows and category discovery; it has no ten-channel cap.
+	// Simulate upgrading an existing two-channel collector before new flow discovery.
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.state SET legacy_broadcaster_ids=NULL`); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for i := 3; i <= 10; i++ {
 		if _, err = s.CreateChannel(ctx, domain.Channel{BroadcasterID: string(rune('a' + i)), Login: "test", DisplayName: "Test"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err = s.CreateChannel(ctx, domain.Channel{BroadcasterID: "eleventh", Login: "extra", DisplayName: "Extra"}); !errors.Is(err, domain.ErrConflict) {
-		t.Fatal("channel cap not enforced", err)
+	if _, err = s.CreateChannel(ctx, domain.Channel{BroadcasterID: "eleventh", Login: "extra", DisplayName: "Extra"}); err != nil {
+		t.Fatal("shared catalogue unexpectedly capped", err)
+	}
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ids, e := s.LegacyBroadcasterIDs(ctx); e != nil || len(ids) != 2 {
+		t.Fatal("new flow sources leaked into the legacy flow", ids, e)
+	}
+
+	f1 := twitch.Flow{ID: "flow-one", Version: 1, Enabled: true, MinViews: 10, WindowHours: 72, MinAgeMinutes: 60, MinDurationSec: 5, MaxDurationSec: 60}
+	f2 := f1
+	f2.ID = "flow-two"
+	if err = s.SyncFlows(ctx, []twitch.Flow{f1, f2}); err != nil {
+		t.Fatal(err)
+	}
+	shared := domain.Clip{ID: "shared-flow-clip", ChannelID: a.ID, BroadcasterID: a.BroadcasterID, BroadcasterName: a.Login, Duration: 20, ViewCount: 900, CreatedAt: now.Add(-2 * time.Hour), FlowID: f1.ID, FlowVersion: 1}
+	if err = s.UpsertClips(ctx, []domain.Clip{shared}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []twitch.Flow{f1, f2} {
+		if err = s.ObserveFlow(ctx, f, []domain.Clip{shared}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err = s.Reserve(ctx, []domain.Clip{shared, shared}, looseQuotas, now); err != nil || n != 1 {
+		t.Fatal("shared source downloaded twice", n, err)
+	}
+	task, err = s.Claim(ctx, time.Minute)
+	if err != nil || task == nil || task.Clip.ID != shared.ID {
+		t.Fatal("flow task not claimed", task, err)
+	}
+	reservation := twitch.Import{ImportID: "saved-import", ReservationID: "saved-reservation", UploadGeneration: 2}
+	if err = s.SaveReservation(ctx, *task, reservation); err != nil {
+		t.Fatal(err)
+	}
+	f1.Enabled = false
+	f1.Version = 2
+	if err = s.SyncFlows(ctx, []twitch.Flow{f1, f2}); err != nil {
+		t.Fatal(err)
+	}
+	if active, e := s.HasActiveConsumer(ctx, shared.ID); e != nil || !active {
+		t.Fatal("pausing one flow stopped shared download", active, e)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET lease_expires_at=now()-interval '1 second' WHERE clip_id=$1`, shared.ID); err != nil {
+		t.Fatal(err)
+	}
+	task, err = s.Claim(ctx, time.Minute)
+	if err != nil || task == nil || task.Reservation.ReservationID != reservation.ReservationID || task.Reservation.UploadGeneration != 2 {
+		t.Fatal("restart lost import fence", task, err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET attempts=3,lease_expires_at=now()-interval '1 second' WHERE clip_id=$1`, shared.ID); err != nil {
+		t.Fatal(err)
+	}
+	if task, err = s.Claim(ctx, time.Minute); err != nil || task != nil {
+		t.Fatal("exhausted task reclaimed", task, err)
+	}
+	var exhaustedState string
+	if err = s.pool.QueryRow(ctx, `SELECT state FROM twitch_collector.clips WHERE clip_id=$1`, shared.ID).Scan(&exhaustedState); err != nil || exhaustedState != "failed" {
+		t.Fatal("empty claim rolled back exhausted state", exhaustedState, err)
 	}
 }
 

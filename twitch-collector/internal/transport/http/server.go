@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"terex/proto/twitch"
 
 	"terex/twitch-collector/internal/domain"
 )
@@ -77,12 +78,69 @@ func Handler(service Service, token string) http.Handler {
 		out, err := service.Clips(r.Context(), limit, r.URL.Query().Get("state"))
 		result(w, 200, out, err)
 	}))
+	mux.HandleFunc("POST /api/clips/{id}/retry", auth(func(w http.ResponseWriter, r *http.Request) {
+		api, ok := service.(interface {
+			RetryClip(context.Context, string) error
+		})
+		if !ok {
+			reply(w, 503, map[string]string{"error": "clip retry unavailable"})
+			return
+		}
+		result(w, 202, map[string]bool{"accepted": true}, api.RetryClip(r.Context(), r.PathValue("id")))
+	}))
 	mux.HandleFunc("GET /api/status", auth(func(w http.ResponseWriter, r *http.Request) {
 		out, err := service.Status(r.Context())
 		result(w, 200, out, err)
 	}))
 	mux.HandleFunc("POST /api/check", auth(func(w http.ResponseWriter, r *http.Request) {
 		result(w, 202, map[string]bool{"accepted": true}, service.Check())
+	}))
+	mux.HandleFunc("POST /api/flows/{id}/check", auth(func(w http.ResponseWriter, r *http.Request) {
+		api, ok := service.(interface{ CheckFlow(string) error })
+		if !ok {
+			reply(w, 503, map[string]string{"error": "flow checks unavailable"})
+			return
+		}
+		result(w, 202, map[string]bool{"accepted": true}, api.CheckFlow(r.PathValue("id")))
+	}))
+	mux.HandleFunc("GET /api/categories", auth(func(w http.ResponseWriter, r *http.Request) {
+		api, ok := service.(interface {
+			Categories(context.Context, string) ([]twitch.Category, error)
+		})
+		if !ok {
+			reply(w, 503, map[string]string{"error": "category search unavailable"})
+			return
+		}
+		out, err := api.Categories(r.Context(), r.URL.Query().Get("q"))
+		result(w, 200, out, err)
+	}))
+	mux.HandleFunc("GET /api/flows/{id}/clip-status", auth(func(w http.ResponseWriter, r *http.Request) {
+		if state := r.URL.Query().Get("state"); state != "" && r.URL.Query().Get("source_ids") == "" {
+			api, ok := service.(interface {
+				FilteredClipStatuses(context.Context, string, string) ([]domain.ClipStatus, error)
+			})
+			if !ok {
+				reply(w, 503, map[string]string{"error": "flow status filter unavailable"})
+				return
+			}
+			out, err := api.FilteredClipStatuses(r.Context(), r.PathValue("id"), state)
+			result(w, 200, map[string]any{"items": out}, err)
+			return
+		}
+		ids := strings.Split(r.URL.Query().Get("source_ids"), ",")
+		if len(ids) > 50 {
+			reply(w, 400, map[string]string{"error": "maximum 50 source IDs"})
+			return
+		}
+		api, ok := service.(interface {
+			ClipStatuses(context.Context, string, []string) ([]domain.ClipStatus, error)
+		})
+		if !ok {
+			reply(w, 503, map[string]string{"error": "flow clip status unavailable"})
+			return
+		}
+		out, err := api.ClipStatuses(r.Context(), r.PathValue("id"), ids)
+		result(w, 200, map[string]any{"items": out}, err)
 	}))
 	return mux
 }
@@ -113,7 +171,7 @@ func result(w http.ResponseWriter, status int, out any, err error) {
 		message = "channel not found"
 	case errors.Is(err, domain.ErrConflict):
 		status = 409
-		message = "check already running or channel limit reached"
+		message = "check already running"
 	case errors.Is(err, domain.ErrPaused):
 		status = 409
 		message = "collector paused"

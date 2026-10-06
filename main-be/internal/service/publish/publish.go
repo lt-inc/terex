@@ -102,11 +102,6 @@ func (m *Manager) ListClips(ctx context.Context, approval string) ([]domain.Clip
 	if err != nil {
 		return nil, err
 	}
-	for i := range clips {
-		if u, err := m.Gpu.PresignGet(ctx, clips[i].Bucket, clips[i].Object); err == nil {
-			clips[i].PreviewURL = u
-		}
-	}
 	return clips, nil
 }
 

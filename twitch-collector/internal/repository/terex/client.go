@@ -49,7 +49,25 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return &domain.Failure{Kind: "import", Message: fmt.Sprintf("Terex request failed (HTTP %d)", res.StatusCode), HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
+		message := fmt.Sprintf("Terex request failed (HTTP %d)", res.StatusCode)
+		var diagnostic struct {
+			Error  string `json:"error"`
+			Detail string `json:"detail"`
+		}
+		if json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&diagnostic) == nil {
+			text := diagnostic.Error
+			if text == "" {
+				text = diagnostic.Detail
+			}
+			if len(text) > 0 && len(text) <= 1000 && !strings.Contains(text, "://") {
+				message += ": " + text
+			}
+		}
+		kind := "import"
+		if res.StatusCode == 409 && (strings.Contains(message, "лимит скачивания") || strings.Contains(message, "очередь проверки заполнена")) {
+			kind = "quota"
+		}
+		return &domain.Failure{Kind: kind, Message: message, HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
 	}
 	if out == nil {
 		return nil

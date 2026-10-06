@@ -71,7 +71,8 @@ test("Twitch defaults stay disabled and contradictory budgets or windows are rej
 });
 test("compilation candidates exclude rejected, failed and unfinished imports", () => {
   const ready = { import_id: "ready", state: "ready", clip_id: "clip", revision_id: 3, rejected: false };
-  assert.deepEqual(twitch.eligibleImports([ready, { ...ready, import_id: "rejected", rejected: true }, { ...ready, state: "pending" }, { ...ready, revision_id: 0 }, { ...ready, error: "render failed" }]), [ready]);
+  const sourceOnly = { import_id: "horizontal", state: "ready", media_state: "ready", rejected: false };
+  assert.deepEqual(twitch.eligibleImports([ready, sourceOnly, { ...ready, import_id: "rejected", rejected: true }, { ...ready, import_id: "excluded", excluded: true }, { ...ready, state: "pending" }, { ...ready, revision_id: 0 }, { ...ready, error: "render failed" }]), [ready, sourceOnly]);
 });
 test("reordering preserves pinned revisions; invalid bounds and duplicated clips cannot be saved", () => {
   const items = [1, 2, 3].map((id) => ({ clip_id: `clip-${id}`, revision_id: id * 10, start_sec: 0, end_sec: 15 }));
@@ -79,8 +80,8 @@ test("reordering preserves pinned revisions; invalid bounds and duplicated clips
   const moved = twitch.moveCompilationItem(items, 0, 1);
   assert.deepEqual(moved.map((item) => item.revision_id), [20, 10, 30]);
   assert.deepEqual(items.map((item) => item.revision_id), [10, 20, 30]);
-  assert.match(twitch.validateCompilation("Title", [items[0], items[0], items[2]]), /only appear once/);
-  assert.match(twitch.validateCompilation("Title", [{ ...items[0], end_sec: 0 }, items[1], items[2]]), /bounds/);
+  assert.match(twitch.validateCompilation("Title", [items[0], items[0], items[2]]), /только один раз/);
+  assert.match(twitch.validateCompilation("Title", [{ ...items[0], end_sec: 0 }, items[1], items[2]]), /границы/);
   assert.match(twitch.validateCompilation("Title", [items[0]]), /3–10/);
 });
 test("legacy YouTube jobs and imported sources retain their labels and URLs", () => {
@@ -103,11 +104,17 @@ test("API writes preserve string channel IDs, complete settings, ordered revisio
   await api.saveCompilation("comp/id", 7, spec);
   await api.rejectImport("source/id");
   await api.fetchImports("ready");
+  await api.saveTwitchFlow({ id: "flow/id", version: 12, account_id: 7 });
+  await api.fetchTwitchSourcePreview("source/id", "flow/id");
+  await api.fetchClipPreview("clip/id", "rendered", 31);
   assert.deepEqual(calls[0], { url: "/api/twitch/channels/channel%2Fid", method: "PATCH", body: { paused: true } });
   assert.deepEqual(calls[1].body, twitch.DEFAULT_TWITCH_SETTINGS);
   assert.deepEqual(calls[2].body, { expected_version: 7, ...spec });
   assert.deepEqual(calls[3].body, { rejected: true });
   assert.equal(calls[4].url, "/api/imports?state=ready");
+  assert.deepEqual(calls[5], { url: "/api/twitch/flows/flow%2Fid", method: "PUT", body: { id: "flow/id", version: 12, account_id: 7 } });
+  assert.equal(calls[6].url, "/api/twitch/sources/source%2Fid/preview?flow_id=flow%2Fid");
+  assert.equal(calls[7].url, "/api/clips/clip%2Fid/preview?kind=rendered&revision_id=31");
 });
 test("source-state and compilation version conflicts remain actionable API errors", async () => {
   const api = moduleFromSource("lib/api.ts", async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ detail: "source rejected or revision changed" }) }));
