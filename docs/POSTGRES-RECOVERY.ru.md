@@ -77,10 +77,15 @@ go vet ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/...
 Collector integration tests удаляют свою schema; указывайте только одноразовую
 БД с именем, заканчивающимся на `_test`. Не используйте рабочие credentials.
 
-Полный прогон main-be выявил существующий сбой
-`TestTwitchFlowsScheduleAtomicallyAndKeepEditedCompilationsManual` на запросе
-первой queued-публикации. Он воспроизведён на неизменённом `origin/master`
-`62cec92`; изменение расписаний не входит в это исправление.
+При первом прогоне main-be выявлен существующий сбой
+`TestTwitchFlowsScheduleAtomicallyAndKeepEditedCompilationsManual`, также
+воспроизведённый на неизменённом `origin/master` `62cec92`. Причина — разные
+часы фикстуры и БД: тест использует 08:00/09:00 UTC, а `next_attempt_at`
+получает реальные часы PostgreSQL через `DEFAULT now()`. После 09:00 публикации
+не проходят условие готовности. Фикстура теперь явно приводит `next_attempt_at`
+к тестовому времени, как соседний integration test. Полный прогон main-be и
+collector, включая PostgreSQL integration, проходит без исключения тестов.
+Изменение касается теста; логика расписаний сервиса не менялась.
 
 6 октября 2026 локальная PostgreSQL 16.3 на отдельном порту использовалась для
 проверок миграций и восстановления. При реальной остановке БД активное соединение

@@ -267,6 +267,11 @@ func TestTwitchFlowsScheduleAtomicallyAndKeepEditedCompilationsManual(t *testing
 	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.format='short' AND p.publish_at::date=$1::date`, now.Format("2006-01-02")).Scan(&shorts); err != nil || shorts != 2 {
 		t.Fatal(shorts, err)
 	}
+	// The scheduler uses an injected clock while next_attempt_at defaults to the
+	// database clock. Make eligibility explicit rather than racing those clocks.
+	if _, err = s.pool.Exec(ctx, `UPDATE publications SET next_attempt_at=$1`, now); err != nil {
+		t.Fatal(err)
+	}
 	firstAt := now.Add(time.Hour)
 	if err = s.PreparePublications(ctx, firstAt, 50); err != nil {
 		t.Fatal(err)
