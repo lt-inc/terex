@@ -28,15 +28,15 @@ func (s *Store) ListFlowClips(ctx context.Context, id string, q domain.FlowClipQ
  WHERE fs.flow_id=$1 AND($2='' OR i.request->'source'->>'broadcaster_id'=$2)
  AND($3='' OR concat(i.request->'source'->>'title',' ',i.request->'source'->>'broadcaster_login',' ',i.twitch_clip_id) ILIKE '%'||$3||'%')
  AND($4='' OR EXISTS(SELECT 1 FROM twitch_flows fl WHERE fl.id=fs.flow_id AND COALESCE((fl.config->>($4||'s_enabled'))::boolean,false)) OR EXISTS(SELECT 1 FROM twitch_outputs o WHERE o.flow_id=fs.flow_id AND o.format=$4 AND(o.source_id=i.id OR o.clip_id IN(SELECT r.clip_id FROM twitch_compilation_items ci JOIN clip_revisions r ON r.id=ci.compilation_revision_id WHERE ci.source_id=i.id))))
- AND($5='' OR $5=CASE WHEN fs.excluded OR i.rejected THEN 'excluded' WHEN i.media_state='ready' AND EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=fs.config->>'youtube_channel_id' AND u.media_id=i.media_id AND($4='' OR u.format=$4)) THEN 'used' WHEN i.media_state='ready' THEN 'ready' WHEN i.state='failed' THEN 'failed' WHEN i.state='upload_pending' THEN 'downloading' ELSE 'discovered' END
- OR(NOT fs.excluded AND NOT i.rejected AND i.media_state<>'ready' AND i.twitch_clip_id=ANY($6::text[]))
+ AND($5='' OR $5=CASE WHEN i.media_state='expired' OR i.state='expired' THEN 'media_expired' WHEN fs.excluded OR i.rejected THEN 'excluded' WHEN i.media_state='ready' AND EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=fs.config->>'youtube_channel_id' AND u.media_id=i.media_id AND($4='' OR u.format=$4)) THEN 'used' WHEN i.media_state='ready' THEN 'ready' WHEN i.state='failed' THEN 'failed' WHEN i.state='upload_pending' THEN 'downloading' ELSE 'discovered' END
+ OR(NOT fs.excluded AND NOT i.rejected AND i.media_state NOT IN('ready','expired') AND i.state<>'expired' AND i.twitch_clip_id=ANY($6::text[]))
  OR($5='failed' AND EXISTS(SELECT 1 FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id LEFT JOIN publications p ON p.clip_id=o.clip_id WHERE o.flow_id=fs.flow_id AND($4='' OR o.format=$4) AND(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=r.id AND ci.source_id=i.id)) AND(r.render_state='failed' OR p.status IN('failed','blocked','needs_attention')))))`
 	args := []any{id, q.BroadcasterID, q.Q, q.Format, q.State, q.CollectorSourceIDs}
 	if e := s.pool.QueryRow(ctx, `SELECT count(*)`+base, args...).Scan(&out.Total); e != nil {
 		return out, e
 	}
 	args = append(args, out.Limit, out.Offset)
-	rows, e := s.pool.Query(ctx, `SELECT i.id,i.request,fs.excluded,i.rejected,COALESCE(i.media_id,''),i.media_state,i.state,COALESCE(i.error,''),i.upload_claim_until`+base+` ORDER BY fs.created_at DESC,i.id LIMIT $7 OFFSET $8`, args...)
+	rows, e := s.pool.Query(ctx, `SELECT i.id,i.request,fs.excluded,i.rejected,COALESCE(i.media_id,''),i.media_state,i.state,COALESCE(i.error,''),i.upload_claim_until,EXISTS(SELECT 1 FROM twitch_storage_pins pin WHERE pin.kind='import' AND pin.target_id=i.id)`+base+` ORDER BY fs.created_at DESC,i.id LIMIT $7 OFFSET $8`, args...)
 	if e != nil {
 		return out, e
 	}
@@ -45,7 +45,7 @@ func (s *Store) ListFlowClips(ctx context.Context, id string, q domain.FlowClipQ
 		var req []byte
 		var mediaState, state, errorMsg string
 		var until *time.Time
-		if e = rows.Scan(&row.ImportID, &req, &row.Excluded, &row.Rejected, &row.MediaID, &mediaState, &state, &errorMsg, &until); e != nil {
+		if e = rows.Scan(&row.ImportID, &req, &row.Excluded, &row.Rejected, &row.MediaID, &mediaState, &state, &errorMsg, &until, &row.Keep); e != nil {
 			rows.Close()
 			return out, e
 		}
@@ -58,7 +58,12 @@ func (s *Store) ListFlowClips(ctx context.Context, id string, q domain.FlowClipQ
 		row.SourceClipID = row.ImportID
 		row.Outputs = []domain.FlowClipOutput{}
 		row.Reason.Actions = []string{}
+		row.MediaAvailable = mediaState == "ready"
 		switch {
+		case mediaState == "expired" || state == "expired":
+			row.SourceState = "media_expired"
+			row.Reason.Code = "media_expired"
+			row.Reason.Message = "Файл удалён по сроку хранения; история и ссылки на публикации сохранены"
 		case row.Rejected:
 			row.SourceState = "excluded"
 			row.Reason.Code = "globally_rejected"
@@ -113,7 +118,7 @@ func (s *Store) ListFlowClips(ctx context.Context, id string, q domain.FlowClipQ
 		if e = ors.Err(); e != nil {
 			return out, e
 		}
-		if !row.Rejected && !row.Excluded && len(row.Outputs) == 0 && !sourceEligible(f, row.Source, time.Now()) {
+		if row.SourceState != "media_expired" && !row.Rejected && !row.Excluded && len(row.Outputs) == 0 && !sourceEligible(f, row.Source, time.Now()) {
 			row.SourceState = "filtered"
 			row.Reason.Code = "filtered"
 			row.Reason.Message = sourceFilterMessage(f, row.Source, time.Now())
@@ -137,6 +142,12 @@ func sourceFilterMessage(f twitch.Flow, src twitch.Source, now time.Time) string
 		return fmt.Sprintf("Исходник слишком новый; минимальный возраст %d мин", f.MinAgeMinutes)
 	case src.CreatedAt.Before(now.Add(-time.Duration(f.WindowHours) * time.Hour)):
 		return fmt.Sprintf("Исходник вне окна последних %d часов", f.WindowHours)
+	case !preparationSourceFresh(f, src, now, now):
+		age := f.MaxSourceAgeHours
+		if age == 0 {
+			age = 72
+		}
+		return fmt.Sprintf("Клип уже старше допустимых %d часов для публикации", age)
 	default:
 		return fmt.Sprintf("Длина исходника должна быть от %.0f до %.0f сек", f.MinDurationSec, f.MaxDurationSec)
 	}

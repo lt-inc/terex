@@ -24,7 +24,11 @@ func scanPublication(row pgx.Row) (domain.PublicationRecord, error) {
 	return p, mapErr(err)
 }
 func (s *Store) GetPublicationRecord(ctx context.Context, id int64) (domain.PublicationRecord, error) {
-	return scanPublication(s.pool.QueryRow(ctx, `SELECT `+publicationCols+` FROM publications p JOIN accounts a ON a.id=p.account_id WHERE p.id=$1`, id))
+	p, err := scanPublication(s.pool.QueryRow(ctx, `SELECT `+publicationCols+` FROM publications p JOIN accounts a ON a.id=p.account_id WHERE p.id=$1`, id))
+	if err == nil {
+		err = s.enrichPublicationPolicy(ctx, &p)
+	}
+	return p, err
 }
 func (s *Store) ListPublicationRecords(ctx context.Context, f domain.PublicationFilter) ([]domain.PublicationRecord, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+publicationCols+` FROM publications p JOIN accounts a ON a.id=p.account_id
@@ -43,7 +47,16 @@ func (s *Store) ListPublicationRecords(ctx context.Context, f domain.Publication
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	for n := range out {
+		if err = s.enrichPublicationPolicy(ctx, &out[n]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.PublicationPatch) error {
 	tx, err := s.pool.Begin(ctx)
@@ -93,6 +106,12 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	if err = manualPublication(ctx, tx, id); err != nil {
 		return err
 	}
+	if err = setPublicationOverrideTx(ctx, tx, id, u.FreshnessOverride, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err = validatePublicationPolicyTx(ctx, tx, id, time.Now().UTC()); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE publication_id=$1 AND status='active'`, id); err != nil {
 		return err
 	}
@@ -105,6 +124,9 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	return tx.Commit(ctx)
 }
 func (s *Store) ActPublication(ctx context.Context, id int64, action string, version int, now time.Time) error {
+	return s.ActPublicationWithOverride(ctx, id, action, version, false, now)
+}
+func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action string, version int, override bool, now time.Time) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -185,6 +207,14 @@ func (s *Store) ActPublication(ctx context.Context, id int64, action string, ver
 	if p.StartedAt == nil {
 		if err = manualPublication(ctx, tx, id); err != nil {
 			return err
+		}
+		if action != "cancel" {
+			if err = setPublicationOverrideTx(ctx, tx, id, override, now); err != nil {
+				return err
+			}
+			if err = validatePublicationPolicyTx(ctx, tx, id, now); err != nil {
+				return err
+			}
 		}
 	}
 	if p.StartedAt == nil || action == "cancel" {
@@ -271,6 +301,11 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	for _, d := range ds {
+		if allowed, e := enforceUnstartedPolicyTx(ctx, tx, d.id, now); e != nil {
+			return e
+		} else if !allowed {
+			continue
+		}
 		if allowed, e := flowPublicationAllowed(ctx, tx, d.id); e != nil {
 			return e
 		} else if !allowed {
@@ -322,6 +357,11 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	for _, r := range renders {
+		if allowed, e := renderPreparationAllowed(ctx, tx, r.id, now); e != nil {
+			return e
+		} else if !allowed {
+			continue
+		}
 		attempt := uuid.NewString()
 		if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,$3)`, attempt, r.id, now.Add(2*time.Minute)); err != nil {
 			return err
@@ -333,6 +373,9 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 	return tx.Commit(ctx)
 }
 func manualPublication(ctx context.Context, tx pgx.Tx, id int64) error {
+	if _, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='consumed' WHERE state='active' AND clip_id=(SELECT clip_id FROM publications WHERE id=$1)`, id); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=(SELECT clip_id FROM publications WHERE id=$1)`, id); err != nil {
 		return err
 	}

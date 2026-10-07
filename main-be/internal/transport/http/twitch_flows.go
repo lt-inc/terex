@@ -15,6 +15,9 @@ import (
 
 func (a *API) twitchFlows(w http.ResponseWriter, r *http.Request) {
 	out, e := a.Twitch.Flows(r.Context())
+	if r.URL.Query().Get("include_archived") == "true" {
+		out, e = a.Twitch.FlowsIncludingArchived(r.Context())
+	}
 	if e != nil {
 		fail(w, e)
 		return
@@ -54,7 +57,7 @@ func (a *API) deleteTwitchFlow(w http.ResponseWriter, r *http.Request) {
 		fail(w, e)
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"deleted": true})
+	writeJSON(w, 200, map[string]bool{"deleted": true, "archived": true})
 }
 func (a *API) twitchCollectorConfig(w http.ResponseWriter, r *http.Request) {
 	out, e := a.Twitch.CollectorConfig(r.Context())
@@ -231,7 +234,7 @@ func (a *API) enrichFlowClips(r *http.Request, page *domain.FlowClipPage) {
 				row.SourceState = "queued"
 			case "downloading", "uploading":
 				row.SourceState = "downloading"
-			case "importing", "verifying", "waiting_quota", "retry_wait":
+			case "importing", "verifying", "waiting_quota", "waiting_capacity", "retry_wait":
 				row.SourceState = v.State
 			case "failed", "deferred":
 				row.SourceState = "failed"

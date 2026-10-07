@@ -93,6 +93,7 @@ func scanImport(row pgx.Row) (twitch.Import, error) {
 	}
 	o.Source, o.AccountID = r.Source, r.AccountID
 	o.FlowID, o.ReservationID = r.FlowID, r.ReservationID
+	o.FlowVersion = r.FlowVersion
 	if o.UploadGeneration > 0 {
 		o.UploadImportID = fmt.Sprintf("%s-g%d", o.ImportID, o.UploadGeneration)
 	}
@@ -130,7 +131,10 @@ const pendingTwitchSource = `NOT i.rejected AND i.state NOT IN('discovered','fai
  AND(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=c.latest_revision_id AND ci.source_id=i.id)))
  OR(i.media_state='ready' AND COALESCE((f.config->>'compilations_enabled')::boolean,false) AND (` + currentFlowSourceEligible + `)
  AND NOT EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=f.youtube_channel_id AND u.format='compilation' AND u.media_id=i.media_id))))
- OR(i.clip_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM twitch_outputs o WHERE o.clip_id=i.clip_id) AND EXISTS(SELECT 1 FROM clips c WHERE c.clip_id=i.clip_id AND c.approval='pending')))`
+ OR(i.clip_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM twitch_outputs o WHERE o.clip_id=i.clip_id) AND EXISTS(SELECT 1 FROM clips c WHERE c.clip_id=i.clip_id AND c.approval='pending')))
+ AND((SELECT mode FROM twitch_policy_settings WHERE id=1)<>'enforce'
+ OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations pr ON pr.id=ps.reservation_id JOIN twitch_flows pf ON pf.id=pr.flow_id WHERE ps.import_id=i.id AND pr.state='active' AND pr.expires_at>now() AND pf.enabled AND NOT pf.archived)
+ OR EXISTS(SELECT 1 FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN render_attempts ra ON ra.revision_id=c.latest_revision_id WHERE(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=c.latest_revision_id AND ci.source_id=i.id)) AND ra.status='active' AND ra.lease_until>now()))`
 
 func (s *Store) ListTwitchImports(ctx context.Context, pending bool, state string) ([]twitch.Import, error) {
 	rows, err := s.pool.Query(ctx, `WITH pending_sources AS(SELECT i.id,row_number()OVER(PARTITION BY COALESCE(i.media_id,i.id)ORDER BY i.created_at DESC,i.id)position FROM twitch_imports i WHERE `+pendingTwitchSource+`)
@@ -172,6 +176,13 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	}
 	if !errors.Is(err, domain.ErrNotFound) {
 		return twitch.Import{}, err
+	}
+	mode, err := policyMode(ctx, tx)
+	if err != nil {
+		return twitch.Import{}, err
+	}
+	if mode == "enforce" {
+		return twitch.Import{}, waitPreparation("legacy_collector_upgrade", "Для новых загрузок требуется collector с резервированием ёмкости потока", now)
 	}
 	settings, err := readTwitchSettings(ctx, tx)
 	if err != nil {
@@ -247,6 +258,9 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 	if out.Rejected {
 		return out, fmt.Errorf("%w: import is rejected", domain.ErrConflict)
 	}
+	if err = storageRefsAvailable(ctx, tx, v.Original); err != nil {
+		return out, err
+	}
 	var duplicate string
 	err = tx.QueryRow(ctx, `SELECT id FROM twitch_imports WHERE clip_id IS NOT NULL AND verified->>'sha256'=$1 AND id<>$2`, v.SHA256, id).Scan(&duplicate)
 	if err == nil {
@@ -295,7 +309,10 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 	if err != nil {
 		return out, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE twitch_imports SET state='rendering',original=$2,verified=$3,job_id=$4,clip_id=$5,updated_at=$6,error=NULL WHERE id=$1`, id, mustJSON(v.Original), mustJSON(v), jobID, clipID, now); err != nil {
+	if err = registerAcceptedStagingTx(ctx, tx, out.Original, now); err != nil {
+		return out, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_imports SET state='rendering',original=$2,verified=$3,job_id=$4,clip_id=$5,updated_at=$6,verified_at=COALESCE(verified_at,$6),error=NULL WHERE id=$1`, id, mustJSON(v.Original), mustJSON(v), jobID, clipID, now); err != nil {
 		return out, err
 	}
 	if err = storeVerifiedMedia(ctx, tx, id, v, now); err != nil {

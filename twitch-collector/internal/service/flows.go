@@ -312,6 +312,20 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 		if observationFailed {
 			continue
 		}
+		if capacityAPI, ok := api.(interface {
+			FlowCapacity(context.Context, string) (twitch.FlowCapacity, error)
+		}); ok {
+			capacity, e := capacityAPI.FlowCapacity(ctx, flow.ID)
+			if e != nil {
+				message = safeErrorMessage(e, "Не удалось проверить ближайшие места в календаре")
+				log.WarnContext(ctx, "collector preparation capacity unavailable", "reason", message)
+				continue
+			}
+			if capacity.Mode == "enforce" && !hasPreparationCapacity(capacity) {
+				log.InfoContext(ctx, "collector flow calendar full", "reason", "Календарь ближайших выпусков заполнен; обновлены только метаданные", "horizon_end", capacity.HorizonEnd)
+				continue
+			}
+		}
 		matching := []domain.Clip{}
 		excluded := map[string]bool{}
 		for _, id := range flow.ExcludedSourceIDs {
@@ -321,7 +335,11 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 			excluded[id] = true
 		}
 		for _, c := range all {
-			if !excluded[c.ID] && (flow.Language == "" || flow.Language == c.Language) {
+			maxAge := flow.MaxSourceAgeHours
+			if maxAge <= 0 {
+				maxAge = 72
+			}
+			if !excluded[c.ID] && (flow.Language == "" || flow.Language == c.Language) && !c.CreatedAt.Add(time.Duration(maxAge)*time.Hour).Before(started) {
 				matching = append(matching, c)
 			}
 		}
@@ -458,6 +476,23 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		if !errors.As(e, &f) {
 			f = &domain.Failure{Kind: "internal", Message: safeErrorMessage(e, "Не удалось обработать клип"), Retryable: true}
 		}
+		if f.Kind == "preparation" {
+			retry := time.Now().Add(time.Minute)
+			if f.NextCheckAt != nil && f.NextCheckAt.After(time.Now()) {
+				retry = *f.NextCheckAt
+			}
+			if deferred, ok := store.(interface {
+				DeferForCapacity(context.Context, domain.Task, time.Time, string) error
+			}); ok {
+				if err := deferred.DeferForCapacity(save, task, retry, f.Message); err != nil {
+					log.WarnContext(save, "collector capacity state unavailable", errorFields(err)...)
+				}
+			} else {
+				_ = s.store.Defer(save, task, retry)
+			}
+			log.InfoContext(save, "collector waiting for preparation capacity", "stage", stage, "reason_code", f.Code, "reason", f.Message, "retry_at", retry.UTC())
+			return
+		}
 		if f.Kind == "quota" {
 			retry := time.Now().Add(time.Minute)
 			if !strings.Contains(f.Message, "очередь") {
@@ -486,6 +521,15 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			return
 		}
 		retry := RetryAt(task.Attempt, f, time.Now())
+		if retry == nil && task.Reservation.ImportID != "" {
+			if aborter, ok := api.(interface {
+				AbortImport(context.Context, twitch.Import, string) error
+			}); ok {
+				if err := aborter.AbortImport(save, task.Reservation, f.Message); err != nil {
+					log.WarnContext(save, "collector preparation release unavailable", "import_id", task.Reservation.ImportID, "reason", safeErrorMessage(err, "Не удалось освободить резерв подготовки"))
+				}
+			}
+		}
 		log.ErrorContext(save, "collector task failed", "stage", stage, "reason", f.Message, "retry_at", retry)
 		if e = s.store.Fail(save, task, f.Kind, f.Message, retry); e != nil {
 			log.WarnContext(save, "collector failure state unavailable", errorFields(e)...)
@@ -501,7 +545,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		fail(err)
 		return
 	}
-	imp, err := api.ReserveImport(ctx, task)
+	imp, err := s.reserveSharedImport(ctx, task, api, store)
 	if err != nil {
 		fail(err)
 		return
@@ -556,6 +600,64 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		return
 	}
 	log.InfoContext(ctx, "collector import completed", "import_id", imp.ImportID, "stage", "complete")
+}
+
+func hasPreparationCapacity(capacity twitch.FlowCapacity) bool {
+	for _, f := range capacity.Formats {
+		if f.Reason == "storage_low" || f.Reason == "storage_status_unknown" {
+			continue
+		}
+		if f.FreeSlots > 0 || f.Format == "compilation" && f.PreparingSlots > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Try another unpinned consumer before postponing a shared physical download.
+// Once an import generation exists its immutable owner is never substituted.
+func (s *Service) reserveSharedImport(ctx context.Context, task domain.Task, api domain.FlowTerex, store domain.FlowStore) (twitch.Import, error) {
+	imp, err := api.ReserveImport(ctx, task)
+	if err == nil || task.Reservation.ImportID != "" {
+		return imp, err
+	}
+	var first *domain.Failure
+	if !errors.As(err, &first) || first.Kind != "preparation" && first.Kind != "expired" {
+		return imp, err
+	}
+	consumers, ok := store.(interface {
+		ReservationConsumers(context.Context, string) ([]twitch.Flow, error)
+	})
+	if !ok {
+		return imp, err
+	}
+	flows, loadErr := consumers.ReservationConsumers(ctx, task.Clip.ID)
+	if loadErr != nil {
+		return imp, loadErr
+	}
+	waiting := err
+	for _, f := range flows {
+		if f.ID == task.FlowID {
+			continue
+		}
+		next := task
+		next.FlowID, next.FlowVersion = f.ID, f.Version
+		other, e := api.ReserveImport(ctx, next)
+		if e == nil {
+			// SaveReservation pins the returned owner as well as the generation.
+			return other, nil
+		}
+		var failure *domain.Failure
+		if !errors.As(e, &failure) || failure.Kind != "preparation" && failure.Kind != "expired" {
+			return other, e
+		}
+		var previous *domain.Failure
+		if failure.Kind == "preparation" && (!errors.As(waiting, &previous) || previous.Kind == "expired" ||
+			failure.NextCheckAt != nil && previous.NextCheckAt != nil && failure.NextCheckAt.Before(*previous.NextCheckAt)) {
+			waiting = e
+		}
+	}
+	return imp, waiting
 }
 func (s *Service) Categories(ctx context.Context, q string) ([]twitch.Category, error) {
 	api, ok := s.twitch.(domain.FlowTwitch)

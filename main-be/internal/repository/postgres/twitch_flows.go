@@ -16,7 +16,7 @@ import (
 
 func defaultFlow() twitch.Flow {
 	s := twitch.DefaultSettings()
-	return twitch.Flow{Name: "Новый поток", SourceMode: "channels", Version: 1, PollIntervalMinutes: s.PollIntervalMinutes, WindowHours: s.WindowHours, MinViews: s.MinViews, MinAgeMinutes: s.MinAgeMinutes, MinDurationSec: s.MinDurationSec, MaxDurationSec: s.MaxDurationSec, ShortsEnabled: true, CompilationsEnabled: true, CompilationMinDurationSec: 480, CompilationMaxDurationSec: 720, CompilationMinClips: 3, CompilationMaxClips: 60, CompilationHour: 21, BalanceByTime: true, Timezone: s.Timezone, DailyShorts: s.DailyShorts, DailyCompilations: s.DailyCompilations, ShortsSlots: []string{"09:00", "12:00", "15:00", "18:00", "21:00"}, CompilationSlots: []string{"21:30"}, BroadcasterIDs: []string{}}
+	return twitch.Flow{ScheduleHorizonHours: 48, MaxSourceAgeHours: 72, Name: "Новый поток", SourceMode: "channels", Version: 1, PollIntervalMinutes: s.PollIntervalMinutes, WindowHours: s.WindowHours, MinViews: s.MinViews, MinAgeMinutes: s.MinAgeMinutes, MinDurationSec: s.MinDurationSec, MaxDurationSec: s.MaxDurationSec, ShortsEnabled: true, CompilationsEnabled: true, CompilationMinDurationSec: 480, CompilationMaxDurationSec: 720, CompilationMinClips: 3, CompilationMaxClips: 60, CompilationHour: 21, BalanceByTime: true, Timezone: s.Timezone, DailyShorts: s.DailyShorts, DailyCompilations: s.DailyCompilations, ShortsSlots: []string{"09:00", "12:00", "15:00", "18:00", "21:00"}, CompilationSlots: []string{"21:30"}, BroadcasterIDs: []string{}}
 }
 
 const flowCols = `config,version,COALESCE(account_id,0),youtube_channel_id,enabled,auto_publish,auto_enabled_at,created_at,updated_at,work_started_at,last_checked_at,
@@ -24,7 +24,8 @@ const flowCols = `config,version,COALESCE(account_id,0),youtube_channel_id,enabl
  (SELECT count(*) FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id WHERE o.flow_id=twitch_flows.id AND r.render_state='ready'),
  (SELECT min(p.publish_at) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=twitch_flows.id AND p.started_at IS NULL AND p.status IN('scheduled','queued','retry_wait')),
  CASE WHEN account_id IS NULL THEN 'Выберите YouTube-канал' WHEN NOT EXISTS(SELECT 1 FROM accounts a WHERE a.id=twitch_flows.account_id AND a.connection_state='connected' AND COALESCE(a.remote_account_id,'')=twitch_flows.youtube_channel_id AND twitch_flows.youtube_channel_id<>'') THEN 'Подключите подтверждённый YouTube-канал; назначение потока закреплено' ELSE '' END,
- COALESCE((SELECT jsonb_agg(i.twitch_clip_id) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=twitch_flows.id AND fs.excluded),'[]'::jsonb)`
+ COALESCE((SELECT jsonb_agg(i.twitch_clip_id) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=twitch_flows.id AND fs.excluded),'[]'::jsonb),archived,
+ COALESCE((SELECT schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=twitch_flows.youtube_channel_id),48)`
 
 func scanFlow(row pgx.Row) (twitch.Flow, error) {
 	f := defaultFlow()
@@ -39,7 +40,9 @@ func scanFlow(row pgx.Row) (twitch.Flow, error) {
 	var found, ready int
 	var blocked string
 	var excluded []byte
-	err := row.Scan(&b, &version, &account, &channel, &enabled, &auto, &since, &created, &updated, &work, &checked, &found, &ready, &next, &blocked, &excluded)
+	var horizon int
+	var archived bool
+	err := row.Scan(&b, &version, &account, &channel, &enabled, &auto, &since, &created, &updated, &work, &checked, &found, &ready, &next, &blocked, &excluded, &archived, &horizon)
 	if err != nil {
 		return f, mapErr(err)
 	}
@@ -47,6 +50,8 @@ func scanFlow(row pgx.Row) (twitch.Flow, error) {
 		return f, err
 	}
 	f.Version = version
+	f.Archived = archived
+	f.ScheduleHorizonHours = horizon
 	f.AccountID = account
 	f.YouTubeChannelID = channel
 	f.Enabled = enabled
@@ -74,7 +79,7 @@ func flowByID(ctx context.Context, q interface {
 	return scanFlow(q.QueryRow(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE id=$1 AND NOT archived`, id))
 }
 func (s *Store) GetTwitchFlow(ctx context.Context, id string) (twitch.Flow, error) {
-	return flowByID(ctx, s.pool, id)
+	return scanFlow(s.pool.QueryRow(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE id=$1`, id))
 }
 func (s *Store) ListTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE NOT archived ORDER BY created_at,id`)
@@ -93,6 +98,9 @@ func (s *Store) ListTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
 	return out, rows.Err()
 }
 func validateFlow(f twitch.Flow) error {
+	if f.ScheduleHorizonHours < 1 || f.ScheduleHorizonHours > 168 || f.MaxSourceAgeHours < 1 || f.MaxSourceAgeHours > 720 {
+		return fmt.Errorf("%w: горизонт календаря 1–168 часов, возраст клипа 1–720 часов", domain.ErrInvalid)
+	}
 	if strings.TrimSpace(f.Name) == "" || len([]rune(f.Name)) > 100 {
 		return fmt.Errorf("%w: задайте название потока до 100 символов", domain.ErrInvalid)
 	}
@@ -162,6 +170,12 @@ func confirmedFlow(ctx context.Context, tx pgx.Tx, f twitch.Flow) error {
 	return nil
 }
 func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, now time.Time) (twitch.Flow, error) {
+	if f.ScheduleHorizonHours == 0 {
+		f.ScheduleHorizonHours = 48
+	}
+	if f.MaxSourceAgeHours == 0 {
+		f.MaxSourceAgeHours = 72
+	}
 	if err := validateFlow(f); err != nil {
 		return f, err
 	}
@@ -212,7 +226,7 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 		return f, fmt.Errorf("%w: выберите YouTube-канал", domain.ErrInvalid)
 	}
 	if f.YouTubeChannelID != "" {
-		if _, err = tx.Exec(ctx, `INSERT INTO twitch_channel_limits(youtube_channel_id,timezone,daily_shorts,daily_compilations)VALUES($1,$2,$3,$4) ON CONFLICT(youtube_channel_id)DO UPDATE SET timezone=EXCLUDED.timezone,daily_shorts=EXCLUDED.daily_shorts,daily_compilations=EXCLUDED.daily_compilations`, f.YouTubeChannelID, f.Timezone, f.DailyShorts, f.DailyCompilations); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_channel_limits(youtube_channel_id,timezone,daily_shorts,daily_compilations,schedule_horizon_hours)VALUES($1,$2,$3,$4,$5) ON CONFLICT(youtube_channel_id)DO UPDATE SET timezone=EXCLUDED.timezone,daily_shorts=EXCLUDED.daily_shorts,daily_compilations=EXCLUDED.daily_compilations,schedule_horizon_hours=EXCLUDED.schedule_horizon_hours`, f.YouTubeChannelID, f.Timezone, f.DailyShorts, f.DailyCompilations, f.ScheduleHorizonHours); err != nil {
 			return f, err
 		}
 	}
@@ -230,8 +244,13 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 		return f, err
 	}
 	// Shared quota controls describe a channel, including all OAuth aliases and flows.
-	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET config=config||jsonb_build_object('daily_shorts',$2::int,'daily_compilations',$3::int,'timezone',$4::text),version=version+CASE WHEN id<>$5 AND(config->>'timezone' IS DISTINCT FROM $4 OR config->>'daily_shorts' IS DISTINCT FROM $2::text OR config->>'daily_compilations' IS DISTINCT FROM $3::text)THEN 1 ELSE 0 END WHERE youtube_channel_id=$1`, f.YouTubeChannelID, f.DailyShorts, f.DailyCompilations, f.Timezone, f.ID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET config=config||jsonb_build_object('daily_shorts',$2::int,'daily_compilations',$3::int,'timezone',$4::text,'schedule_horizon_hours',$6::int),version=version+CASE WHEN id<>$5 AND(config->>'timezone' IS DISTINCT FROM $4 OR config->>'daily_shorts' IS DISTINCT FROM $2::text OR config->>'daily_compilations' IS DISTINCT FROM $3::text OR config->>'schedule_horizon_hours' IS DISTINCT FROM $6::text)THEN 1 ELSE 0 END WHERE youtube_channel_id=$1`, f.YouTubeChannelID, f.DailyShorts, f.DailyCompilations, f.Timezone, f.ID, f.ScheduleHorizonHours); err != nil {
 		return f, err
+	}
+	if !f.Enabled {
+		if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='released',reason='flow_paused' WHERE flow_id=$1 AND state='active'`, f.ID); err != nil {
+			return f, err
+		}
 	}
 	if !f.Enabled || !f.AutoPublish {
 		if err = holdFlowAuto(ctx, tx, f.ID); err != nil {
@@ -243,6 +262,9 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 			return f, err
 		}
 	}
+	if err = expirePreparationTx(ctx, tx, now); err != nil {
+		return f, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return f, err
 	}
@@ -252,7 +274,7 @@ func holdFlowAuto(ctx context.Context, tx pgx.Tx, id string) error {
 	if _, err := tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE auto_flow_id=$1 AND started_at IS NULL AND status NOT IN('published','cancelled','needs_attention'))`, id); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `UPDATE publications SET status='on_hold',auto_hold=TRUE,version=version+1,error='Автопубликация потока выключена' WHERE auto_flow_id=$1 AND started_at IS NULL AND status NOT IN('published','cancelled','needs_attention') AND NOT auto_hold`, id)
+	_, err := tx.Exec(ctx, `UPDATE publications SET status='on_hold',auto_hold=TRUE,policy_hold_reason='flow_disabled',version=version+1,error='Автопубликация потока выключена' WHERE auto_flow_id=$1 AND started_at IS NULL AND status NOT IN('published','cancelled','needs_attention') AND NOT auto_hold`, id)
 	return err
 }
 func (s *Store) DeleteTwitchFlow(ctx context.Context, id string, now time.Time) error {
@@ -271,7 +293,10 @@ func (s *Store) DeleteTwitchFlow(ctx context.Context, id string, now time.Time) 
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
 	}
-	if err = holdFlowAuto(ctx, tx, id); err != nil {
+	if err = holdFlowAll(ctx, tx, id, "flow_archived", "Поток архивирован"); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='released',reason='flow_archived' WHERE flow_id=$1 AND state='active'`, id); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

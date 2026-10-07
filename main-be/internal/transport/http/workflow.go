@@ -147,7 +147,7 @@ func (a *API) publicationAction(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &u) {
 		return
 	}
-	out, err := a.Workflow.ActPublication(r.Context(), id, chi.URLParam(r, "action"), u.Version)
+	out, err := a.Workflow.ActPublicationWithOverride(r.Context(), id, chi.URLParam(r, "action"), u.Version, u.FreshnessOverride)
 	if err != nil {
 		fail(w, err)
 		return

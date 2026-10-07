@@ -147,6 +147,13 @@ func (s *Service) RevisionPreview(ctx context.Context, id string, rid int64, kin
 	if rev.ClipID != id {
 		return domain.Preview{}, domain.ErrNotFound
 	}
+	if available, ok := s.Repo.(interface {
+		TwitchRevisionMediaAvailable(context.Context, int64) error
+	}); ok {
+		if e = available.TwitchRevisionMediaAvailable(ctx, rid); e != nil {
+			return domain.Preview{}, e
+		}
+	}
 	ref := workflow.ObjectRef{Bucket: rev.Bucket, Object: rev.Object}
 	if kind == "source" {
 		var m workflow.SourceManifest

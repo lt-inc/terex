@@ -328,6 +328,21 @@ func (s *Service) PatchPublication(ctx context.Context, id int64, u domain.Publi
 	return s.Repo.GetPublicationRecord(ctx, id)
 }
 func (s *Service) ActPublication(ctx context.Context, id int64, action string, version int) (domain.PublicationRecord, error) {
+	return s.ActPublicationWithOverride(ctx, id, action, version, false)
+}
+func (s *Service) ActPublicationWithOverride(ctx context.Context, id int64, action string, version int, override bool) (domain.PublicationRecord, error) {
+	if override {
+		r, ok := s.Repo.(interface {
+			ActPublicationWithOverride(context.Context, int64, string, int, bool, time.Time) error
+		})
+		if !ok {
+			return domain.PublicationRecord{}, domain.ErrInvalid
+		}
+		if err := r.ActPublicationWithOverride(ctx, id, action, version, true, s.now()); err != nil {
+			return domain.PublicationRecord{}, err
+		}
+		return s.Repo.GetPublicationRecord(ctx, id)
+	}
 	if err := s.Repo.ActPublication(ctx, id, action, version, s.now()); err != nil {
 		return domain.PublicationRecord{}, err
 	}

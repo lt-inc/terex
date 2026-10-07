@@ -281,8 +281,26 @@ func (w *Worker) execute(ctx context.Context, q workflow.LeaseRequest, p *workfl
 			}
 		}
 		prepare := func() error {
+			// Downloading may cross the freshness deadline or outlive a settings
+			// change. Ask synchronously at the external session boundary rather
+			// than relying on the background renewal's last observation.
+			if e := check(); e != nil {
+				return e
+			}
+			permit, e := w.Coordinator.Renew(ctx, &q)
+			if e != nil {
+				return e
+			}
+			if !permit.Allowed {
+				return ErrLeaseLost
+			}
+			if !permit.CanPublish || permit.State == "cancel_pending" || permit.State == "cancelled" {
+				if e = complete("cancelled"); e != nil {
+					return e
+				}
+				return ErrLeaseLost
+			}
 			var session domain.UploadSession
-			var e error
 			if provider.Capabilities().PullFromURL {
 				urlPreparer, ok := provider.(domain.URLUploadPreparer)
 				if !ok {

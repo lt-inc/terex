@@ -25,11 +25,15 @@ func collectorRoute(r *http.Request) bool {
 	if p == "/api/twitch/settings" {
 		return r.Method == http.MethodGet
 	}
+	if strings.HasPrefix(p, "/api/twitch/flows/") && strings.HasSuffix(p, "/capacity") {
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "/api/twitch/flows/"), "/capacity")
+		return r.Method == http.MethodGet && id != "" && !strings.Contains(id, "/")
+	}
 	if p == "/api/imports" {
 		return r.Method == http.MethodGet || r.Method == http.MethodPost
 	}
 	if strings.HasPrefix(p, "/api/imports/") {
-		return r.Method == http.MethodGet || (r.Method == http.MethodPost && strings.HasSuffix(p, "/complete"))
+		return r.Method == http.MethodGet || (r.Method == http.MethodPost && (strings.HasSuffix(p, "/complete") || strings.HasSuffix(p, "/abort")))
 	}
 	return false
 }

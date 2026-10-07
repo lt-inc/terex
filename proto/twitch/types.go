@@ -80,6 +80,9 @@ type Flow struct {
 	Name                      string     `json:"name"`
 	Enabled                   bool       `json:"enabled"`
 	AutoPublish               bool       `json:"auto_publish"`
+	Archived                  bool       `json:"archived"`
+	ScheduleHorizonHours      int        `json:"schedule_horizon_hours"`
+	MaxSourceAgeHours         int        `json:"max_source_age_hours"`
 	AccountID                 int64      `json:"account_id"`
 	YouTubeChannelID          string     `json:"youtube_channel_id"`
 	Version                   int        `json:"version"`
@@ -125,6 +128,36 @@ type CollectorConfig struct {
 	Settings         Settings `json:"settings"`
 	Flows            []Flow   `json:"flows"`
 	BlockedSourceIDs []string `json:"blocked_source_ids,omitempty"`
+}
+
+// Capacity is advisory. Import reservation repeats admission in the database
+// transaction so collectors cannot overbook a shared YouTube destination.
+type FlowCapacity struct {
+	FlowID           string           `json:"flow_id"`
+	YouTubeChannelID string           `json:"youtube_channel_id"`
+	HorizonHours     int              `json:"horizon_hours"`
+	HorizonEnd       time.Time        `json:"horizon_end"`
+	Mode             string           `json:"mode"`
+	Formats          []FormatCapacity `json:"formats"`
+}
+type FormatCapacity struct {
+	Format             string     `json:"format"`
+	TotalSlots         int        `json:"total_slots"`
+	OccupiedSlots      int        `json:"occupied_slots"`
+	PreparingSlots     int        `json:"preparing_slots"`
+	FreeSlots          int        `json:"free_slots"`
+	NextSlotAt         *time.Time `json:"next_slot_at,omitempty"`
+	Reason             string     `json:"reason,omitempty"`
+	NextCheckAt        time.Time  `json:"next_check_at"`
+	SourceCount        int        `json:"source_count"`
+	SourceDurationSec  float64    `json:"source_duration_sec"`
+	MissingClips       int        `json:"missing_clips"`
+	MissingDurationSec float64    `json:"missing_duration_sec"`
+}
+type PreparationWait struct {
+	Code        string    `json:"code"`
+	Message     string    `json:"message"`
+	NextCheckAt time.Time `json:"next_check_at"`
 }
 
 type ObservationRequest struct {
@@ -174,6 +207,7 @@ type Import struct {
 	CreatedAt        time.Time     `json:"created_at"`
 	Error            string        `json:"error,omitempty"`
 	FlowID           string        `json:"flow_id,omitempty"`
+	FlowVersion      int           `json:"flow_version,omitempty"`
 	ReservationID    string        `json:"reservation_id,omitempty"`
 	MediaID          string        `json:"media_id,omitempty"`
 	MediaState       string        `json:"media_state,omitempty"`

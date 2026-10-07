@@ -47,6 +47,14 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		if r.Version != q.ExpectedVersion || r.RenderState == "ready" || r.RenderState == "failed" {
 			return out, nil
 		}
+		if e := storageRevisionAvailable(ctx, tx, rid); e != nil {
+			return out, nil
+		}
+		if allowed, e := renderPreparationAllowed(ctx, tx, rid, now); e != nil {
+			return nil, e
+		} else if !allowed {
+			return out, nil
+		}
 		var jobID string
 		if err = tx.QueryRow(ctx, `SELECT job_id FROM clips WHERE clip_id=$1`, r.ClipID).Scan(&jobID); err != nil {
 			return nil, err
@@ -89,6 +97,19 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		}
 		if p.Version != version || p.Status != "queued" {
 			return out, nil
+		}
+		if p.StartedAt == nil && !p.CancelRequested {
+			if allowed, e := enforceUnstartedPolicyTx(ctx, tx, pid, now); e != nil {
+				return nil, e
+			} else if !allowed {
+				if e = tx.Commit(ctx); e != nil {
+					return nil, e
+				}
+				return out, nil
+			}
+			if e := storageRevisionAvailable(ctx, tx, p.RevisionID); e != nil {
+				return out, nil
+			}
 		}
 		if allowed, e := flowPublicationAllowed(ctx, tx, pid); e != nil {
 			return nil, e
@@ -210,7 +231,10 @@ func lockRender(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now tim
 		return rid, false, nil
 	}
 	var version int
-	err = tx.QueryRow(ctx, `SELECT revision_no FROM clip_revisions WHERE id=$1 FOR UPDATE`, rid).Scan(&version)
+	err = tx.QueryRow(ctx, `SELECT revision_no FROM clip_revisions WHERE id=$1 AND storage_state='available' FOR UPDATE`, rid).Scan(&version)
+	if err == pgx.ErrNoRows {
+		return rid, false, nil
+	}
 	return rid, err == nil && version == q.ExpectedVersion, err
 }
 func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now time.Time) (*workflow.Permit, error) {
@@ -219,6 +243,9 @@ func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return nil, err
+	}
 	out := &workflow.Permit{}
 	pid, ok, err := lockAttempt(ctx, tx, *q, now)
 	if err != nil {
@@ -226,6 +253,14 @@ func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now
 	}
 	until := now.Add(leaseDuration)
 	if ok {
+		if allowed, e := enforceFirstUploadPolicyTx(ctx, tx, pid, q.AttemptID, now); e != nil {
+			return nil, e
+		} else if !allowed {
+			if e = tx.Commit(ctx); e != nil {
+				return nil, e
+			}
+			return out, nil
+		}
 		var cancel, approved bool
 		if err = tx.QueryRow(ctx, `SELECT p.cancel_requested,r.approved_at IS NOT NULL,p.status FROM publications p JOIN clip_revisions r ON r.id=p.revision_id WHERE p.id=$1`, pid).Scan(&cancel, &approved, &out.State); err != nil {
 			return nil, err
@@ -268,9 +303,20 @@ func (s *Store) CheckpointWorkflow(ctx context.Context, q *workflow.CheckpointRe
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return false, err
+	}
 	pid, ok, err := lockAttempt(ctx, tx, q.LeaseRequest, now)
 	if err != nil || !ok {
 		return false, err
+	}
+	if allowed, e := enforceFirstUploadPolicyTx(ctx, tx, pid, q.AttemptID, now); e != nil {
+		return false, e
+	} else if !allowed {
+		if e = tx.Commit(ctx); e != nil {
+			return false, e
+		}
+		return false, nil
 	}
 	var previousPhase string
 	if err = tx.QueryRow(ctx, `SELECT phase FROM publication_attempts WHERE id=$1`, q.AttemptID).Scan(&previousPhase); err != nil {
@@ -292,6 +338,9 @@ func (s *Store) CompleteWorkflow(ctx context.Context, q *workflow.CompleteReques
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return false, err
+	}
 	pid, ok, err := lockAttempt(ctx, tx, q.LeaseRequest, now)
 	if err != nil {
 		return false, err
@@ -317,7 +366,23 @@ func (s *Store) CompleteWorkflow(ctx context.Context, q *workflow.CompleteReques
 		if q.Media.Bucket == "" || q.Media.Object == "" {
 			return false, nil
 		}
+		if e := storageRevisionAvailable(ctx, tx, rid); e != nil {
+			return false, nil
+		}
+		if e := storageRefsAvailable(ctx, tx, q.Media); e != nil {
+			return false, nil
+		}
 		if q.Source != nil {
+			if e := storageRefsAvailable(ctx, tx, q.Source.Original); e != nil {
+				return false, nil
+			}
+			if q.Source.Assembly != nil {
+				for _, item := range q.Source.Assembly.Items {
+					if e := storageRefsAvailable(ctx, tx, item.Original); e != nil {
+						return false, nil
+					}
+				}
+			}
 			if math.IsNaN(q.Source.DurationSec) || math.IsInf(q.Source.DurationSec, 0) || q.Source.DurationSec <= 0 || q.Source.Original.Bucket != "imports" || q.Source.Original.Object == "" {
 				return false, fmt.Errorf("invalid resolved assembly source")
 			}
@@ -360,6 +425,9 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return false, err
+	}
 	pid, ok, err := lockAttempt(ctx, tx, q.LeaseRequest, now)
 	if err != nil {
 		return false, err

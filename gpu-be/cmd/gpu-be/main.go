@@ -34,6 +34,7 @@ import (
 	"terex/gpu-be/internal/service/renderer"
 	"terex/gpu-be/internal/service/renderworker"
 	"terex/gpu-be/internal/service/reporter"
+	"terex/gpu-be/internal/service/storagecleanup"
 	"terex/gpu-be/internal/service/storagegw"
 	"terex/gpu-be/internal/service/workflowgateway"
 	tamqp "terex/gpu-be/internal/transport/amqp"
@@ -124,6 +125,7 @@ func run() error {
 	gpuv1.RegisterGpuServiceServer(gs, &tgrpc.Server{State: state, GW: gw})
 	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, TmpDir: cfg.TmpDir})
 	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir})
+	workflow.RegisterStorageGatewayServer(gs, &storagecleanup.Service{Store: store})
 	go func() { _ = gs.Serve(lis) }()
 	slog.Info("gpu-be started", "grpc", cfg.GRPCAddr)
 

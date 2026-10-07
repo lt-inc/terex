@@ -25,6 +25,9 @@ import type {
   TwitchCollectorStatus,
   TwitchFlow,
   TwitchFlowClipPage,
+  TwitchCapacity,
+  TwitchPolicyPreview,
+  TwitchStorage,
 } from "@/types/twitch";
 
 export class ApiError extends Error {
@@ -232,7 +235,7 @@ export const fetchPublications = (filters: Record<string, string>) =>
   request<PublicationEvent[]>(`/publications?${new URLSearchParams(filters)}`);
 export const updatePublication = (
   id: number,
-  data: { version: number; publish_at: string; timezone: string },
+  data: { version: number; publish_at: string; timezone: string; freshness_override?: boolean },
 ) =>
   request<PublicationEvent>(
     `/publications/${id}`,
@@ -242,10 +245,11 @@ export const actPublication = (
   id: number,
   action: "approve" | "retry" | "cancel" | "publish-now",
   version: number,
+  freshnessOverride = false,
 ) =>
   request<PublicationEvent>(
     `/publications/${id}/${action}`,
-    json("POST", { expected_version: version }),
+    json("POST", { expected_version: version, freshness_override: freshnessOverride }),
   );
 export const fetchPublicationHistory = (id: number) =>
   request<PublicationHistory[]>(`/publications/${id}/history`);
@@ -356,14 +360,16 @@ export const triggerAutoCompilation = (flowID = "") =>
 function normalizeFlow(flow: TwitchFlow): TwitchFlow {
   return {
     ...flow,
+    schedule_horizon_hours: flow.schedule_horizon_hours || 48,
+    max_source_age_hours: flow.max_source_age_hours || 72,
     broadcaster_ids: flow.broadcaster_ids || [],
     channel_inputs: flow.channel_inputs || [],
     shorts_slots: flow.shorts_slots || [],
     compilation_slots: flow.compilation_slots || [],
   };
 }
-export const fetchTwitchFlows = () =>
-  request<TwitchFlow[] | null>("/twitch/flows").then((flows) =>
+export const fetchTwitchFlows = (includeArchived = false) =>
+  request<TwitchFlow[] | null>(`/twitch/flows${includeArchived ? "?include_archived=true" : ""}`).then((flows) =>
     (flows || []).map(normalizeFlow),
   );
 export const fetchTwitchFlow = (id: string) =>
@@ -415,3 +421,22 @@ export const fetchTwitchSourcePreview = (sourceID: string, flowID: string) =>
   }>(
     `/twitch/sources/${encodeURIComponent(sourceID)}/preview?flow_id=${encodeURIComponent(flowID)}`,
   );
+
+export const archiveTwitchFlow = (id: string) =>
+  request(`/twitch/flows/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const restoreTwitchFlow = (id: string) =>
+  request(`/twitch/flows/${encodeURIComponent(id)}/restore`, json("POST", {}));
+export const fetchTwitchCapacity = (id: string) =>
+  request<TwitchCapacity>(`/twitch/flows/${encodeURIComponent(id)}/capacity`);
+export const fetchTwitchPolicyPreview = () =>
+  request<TwitchPolicyPreview>("/twitch/policy/preview");
+export const applyTwitchPolicy = () =>
+  request("/twitch/policy/apply", json("POST", { confirm: true }));
+export const fetchTwitchStorage = (preview = false) =>
+  request<TwitchStorage>(`/twitch/storage${preview ? "/cleanup/preview" : ""}`);
+export const cleanupTwitchStorage = (execute: boolean) =>
+  request<{ dry_run: boolean; queued: number; deleted: number; failed: number; reclaimable_bytes: number; inventory_complete: boolean }>(
+    "/twitch/storage/cleanup", json("POST", { execute }),
+  );
+export const keepTwitchMaterial = (kind: "imports" | "clips", id: string, keep: boolean) =>
+  request<{ keep: boolean }>(`/twitch/${kind}/${encodeURIComponent(id)}/retention`, json("POST", { keep }));

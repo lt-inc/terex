@@ -9,6 +9,7 @@ export default function TwitchNav() {
         ["/admin/twitch", "Потоки"],
         ["/admin/twitch/clips", "Клипы"],
         ["/admin/compilations", "Подборки"],
+        ["/admin/twitch/storage", "Хранение и очистка"],
         ["/admin/twitch/settings", "Настройки сервиса"],
       ].map(([href, label]) => (
         <Link

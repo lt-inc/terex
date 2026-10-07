@@ -235,7 +235,8 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 	since := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	var total int
 	operation = "count today's download reservations"
-	if err = tx.QueryRow(ctx, "SELECT count(*) FROM twitch_collector.clips WHERE reserved_at >= $1", since).Scan(&total); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM twitch_collector.clips c WHERE reserved_at >= $1
+ AND(error_kind<>'capacity' OR EXISTS(SELECT 1 FROM twitch_collector.download_tasks t WHERE t.clip_id=c.clip_id AND COALESCE(t.reservation->>'import_id','')<>''))`, since).Scan(&total); err != nil {
 		return 0, err
 	}
 	for _, c := range clips {
@@ -263,7 +264,8 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 			continue
 		}
 		operation = "count today's channel reservations"
-		if err = tx.QueryRow(ctx, "SELECT count(*) FROM twitch_collector.clips WHERE channel_id=$1 AND reserved_at >= $2", c.ChannelID, since).Scan(&count); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM twitch_collector.clips c WHERE channel_id=$1 AND reserved_at >= $2
+ AND(error_kind<>'capacity' OR EXISTS(SELECT 1 FROM twitch_collector.download_tasks t WHERE t.clip_id=c.clip_id AND COALESCE(t.reservation->>'import_id','')<>''))`, c.ChannelID, since).Scan(&count); err != nil {
 			return 0, err
 		}
 		if count >= scfg.PerChannelDailyDownloads {
@@ -425,6 +427,14 @@ func (s *Store) Defer(ctx context.Context, t domain.Task, when time.Time) error 
 	return s.DeferWithReason(ctx, t, when, "")
 }
 func (s *Store) DeferWithReason(ctx context.Context, t domain.Task, when time.Time, message string) error {
+	return s.deferTask(ctx, t, when, message, "quota")
+}
+
+func (s *Store) DeferForCapacity(ctx context.Context, t domain.Task, when time.Time, message string) error {
+	return s.deferTask(ctx, t, when, message, "capacity")
+}
+
+func (s *Store) deferTask(ctx context.Context, t domain.Task, when time.Time, message, kind string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -437,7 +447,7 @@ func (s *Store) DeferWithReason(ctx context.Context, t domain.Task, when time.Ti
 	if tag.RowsAffected() != 1 {
 		return domain.ErrLeaseLost
 	}
-	if _, err = tx.Exec(ctx, "UPDATE twitch_collector.clips SET state='queued',last_error=$2,error_kind=CASE WHEN $2='' THEN '' ELSE 'quota' END WHERE clip_id=$1", t.Clip.ID, message); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE twitch_collector.clips SET state='queued',last_error=$2,error_kind=CASE WHEN $2='' THEN '' ELSE $3 END WHERE clip_id=$1", t.Clip.ID, message, kind); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

@@ -22,6 +22,19 @@ func (c *Client) CollectorConfig(ctx context.Context) (twitch.CollectorConfig, e
 	}
 	return out, err
 }
+
+func (c *Client) FlowCapacity(ctx context.Context, id string) (twitch.FlowCapacity, error) {
+	var out twitch.FlowCapacity
+	err := c.request(ctx, http.MethodGet, "/api/twitch/flows/"+url.PathEscape(id)+"/capacity", nil, &out)
+	return out, err
+}
+
+func (c *Client) AbortImport(ctx context.Context, imp twitch.Import, reason string) error {
+	return c.request(ctx, http.MethodPost, "/api/imports/"+url.PathEscape(imp.ImportID)+"/abort", map[string]any{
+		"upload_generation": imp.UploadGeneration,
+		"reason":            reason,
+	}, nil)
+}
 func (c *Client) Observe(ctx context.Context, q twitch.ObservationRequest) ([]twitch.Import, error) {
 	var out struct {
 		Imports []twitch.Import `json:"imports"`

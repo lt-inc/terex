@@ -20,7 +20,7 @@ func enforceTwitchCaps(ctx context.Context, tx pgx.Tx) error {
 	err = tx.QueryRow(ctx, `SELECT j.output_format,(p.publish_at AT TIME ZONE COALESCE(l.timezone,$1))::date::text,count(*)
  FROM publications p JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id JOIN accounts a ON a.id=p.account_id
  LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id LEFT JOIN twitch_channel_limits l ON l.youtube_channel_id=COALESCE(NULLIF(o.youtube_channel_id,''),a.remote_account_id)
- WHERE j.source_kind IN('twitch','twitch_compilation') AND p.status NOT IN('cancelled')
+ WHERE j.source_kind IN('twitch','twitch_compilation') AND p.status NOT IN('cancelled','on_hold','failed','blocked')
  GROUP BY COALESCE(NULLIF(o.youtube_channel_id,''),NULLIF(a.remote_account_id,''),'account:'||p.account_id::text),j.output_format,(p.publish_at AT TIME ZONE COALESCE(l.timezone,$1))::date,l.daily_compilations,l.daily_shorts
  HAVING count(*)>CASE WHEN j.output_format='compilation' THEN COALESCE(l.daily_compilations,$2::int) ELSE COALESCE(l.daily_shorts,$3::int) END
  LIMIT 1`, settings.Timezone, settings.DailyCompilations, settings.DailyShorts).Scan(&format, &day, &count)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	nethttp "net/http"
@@ -21,6 +22,7 @@ import (
 	"terex/main-be/internal/service/jobs"
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
+	"terex/main-be/internal/service/storagelifecycle"
 	twitchservice "terex/main-be/internal/service/twitch"
 	workflowservice "terex/main-be/internal/service/workflow"
 	tamqp "terex/main-be/internal/transport/amqp"
@@ -88,8 +90,13 @@ func run() error {
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
 
 	twitchSvc := &twitchservice.Service{Repo: store, Gateway: gpu.IngestGateway(), Gpu: gpu}
+	storageSvc := storagelifecycle.New(store, gpu.StorageGateway(), cfg.TwitchCleanupEnabled)
+	storageSvc.ConfigurePressure(cfg.TwitchStoragePrometheusURL, cfg.TwitchStorageMinFreeBytes, cfg.TwitchStorageMinFreePercent)
+	if err := storageSvc.PressureTick(ctx); err != nil {
+		return fmt.Errorf("initialize Twitch storage admission: %w", err)
+	}
 	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon, Workflow: flow,
-		Twitch: twitchSvc, Auth: &thttp.OperatorAuth{Username: cfg.AdminUsername, Password: cfg.AdminPassword, ServiceToken: cfg.ServiceToken, AllowedOrigin: cfg.AppPublicURL},
+		Twitch: twitchSvc, Storage: storageSvc, Auth: &thttp.OperatorAuth{Username: cfg.AdminUsername, Password: cfg.AdminPassword, ServiceToken: cfg.ServiceToken, AllowedOrigin: cfg.AppPublicURL},
 		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken}}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 
@@ -97,6 +104,8 @@ func run() error {
 	go cron.Every(ctx, "monitor", cfg.MonitorInterval, mon)
 	go cron.Every(ctx, "publish", cfg.PublishInterval, pubMgr)
 	go cron.Every(ctx, "twitch compilation", time.Minute, twitchSvc)
+	go cron.Every(ctx, "twitch storage cleanup", cfg.TwitchCleanupInterval, storageSvc)
+	go cron.Every(ctx, "twitch storage pressure", time.Minute, cron.Func(storageSvc.PressureTick))
 	listener, err := net.Listen("tcp", cfg.WorkflowGRPCAddr)
 	if err != nil {
 		return err

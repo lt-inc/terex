@@ -2,12 +2,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import TwitchNav from "@/components/twitch/TwitchNav";
+import CapacityPanel from "@/components/twitch/CapacityPanel";
+import ConfirmAction from "@/components/ui/ConfirmAction";
 import {
   checkTwitchFlow,
   fetchAccountsList,
   fetchTwitchFlows,
   fetchTwitchStatus,
   saveTwitchFlow,
+  archiveTwitchFlow,
+  restoreTwitchFlow,
 } from "@/lib/api";
 import { durationLabel } from "@/lib/twitch-status";
 import type { TwitchCollectorStatus, TwitchFlow } from "@/types/twitch";
@@ -18,6 +22,8 @@ export default function TwitchFlowsPage() {
   const [flows, setFlows] = useState<TwitchFlow[]>([]),
     [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [status, setStatus] = useState<TwitchCollectorStatus | null>(null);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<TwitchFlow | null>(null);
   const [loading, setLoading] = useState(true),
     [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
@@ -29,7 +35,7 @@ export default function TwitchFlowsPage() {
     if (initial) setLoading(true);
     try {
       const results = await Promise.allSettled([
-        fetchTwitchFlows(),
+        fetchTwitchFlows(includeArchived),
         fetchAccountsList(),
         fetchTwitchStatus(),
       ]);
@@ -49,7 +55,7 @@ export default function TwitchFlowsPage() {
       setLoading(false);
       refreshing.current = false;
     }
-  }, []);
+  }, [includeArchived]);
   useEffect(() => {
     void load(true);
   }, [load]);
@@ -59,7 +65,7 @@ export default function TwitchFlowsPage() {
     }, 10000);
     return () => clearInterval(timer);
   }, [load, busy]);
-  async function action(flow: TwitchFlow, kind: "check" | "pause") {
+  async function action(flow: TwitchFlow, kind: "check" | "pause" | "archive" | "restore") {
     setBusy(flow.id);
     setError("");
     setNotice("");
@@ -69,6 +75,12 @@ export default function TwitchFlowsPage() {
         setNotice(
           `Проверка «${flow.name}» запрошена. Результаты обновляются каждые 10 секунд.`,
         );
+      } else if (kind === "archive") {
+        await archiveTwitchFlow(flow.id);
+        setNotice("Поток архивирован. Новые задания остановлены, не начатые публикации удержаны. История и общие файлы сохранены до обычной очистки.");
+      } else if (kind === "restore") {
+        await restoreTwitchFlow(flow.id);
+        setNotice("Поток восстановлен на паузе. Автопубликация выключена; прежние выпуски сами не возобновятся.");
       } else {
         await saveTwitchFlow({ ...flow, enabled: !flow.enabled });
         setNotice(
@@ -105,6 +117,10 @@ export default function TwitchFlowsPage() {
         </div>
       </div>
       <TwitchNav />
+      <label className="flex items-center gap-2 text-sm text-slate-300">
+        <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
+        Показать архивированные потоки
+      </label>
       <p className="max-w-4xl text-sm text-slate-400">
         Выберите Twitch-каналы или категорию, язык и YouTube-назначение.
         Collector собирает исходники, Terex готовит выпуски. Проверка и
@@ -193,12 +209,14 @@ export default function TwitchFlowsPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
+                  {flow.archived ? <h2 className="text-lg font-semibold">{flow.name}</h2> :
                   <Link
                     href={`/admin/twitch/${encodeURIComponent(flow.id)}`}
                     className="text-lg font-semibold hover:text-indigo-300"
                   >
                     {flow.name}
                   </Link>
+                  }
                   <p className="mt-1 break-words text-sm text-slate-400">
                     YouTube:{" "}
                     {account?.remote_account_name ||
@@ -210,7 +228,7 @@ export default function TwitchFlowsPage() {
                 <span
                   className={`shrink-0 rounded px-2 py-1 text-xs ${flow.enabled ? "bg-emerald-950 text-emerald-300" : "bg-slate-700 text-slate-300"}`}
                 >
-                  {flow.enabled ? "Активен" : "На паузе"}
+                  {flow.archived ? "В архиве" : flow.enabled ? "Активен" : "На паузе"}
                 </span>
               </div>
               <p className="text-sm">
@@ -281,6 +299,8 @@ export default function TwitchFlowsPage() {
               {flow.last_error && (
                 <p className="text-sm text-red-300">{flow.last_error}</p>
               )}
+              {!flow.archived && <CapacityPanel flowID={flow.id} timezone={flow.timezone} />}
+              <p className="text-xs text-slate-400">Возраст исходников к выпуску: не более {flow.max_source_age_hours} ч от создания на Twitch. Сохранение файла не продлевает актуальность.</p>
               <div className="mt-auto flex flex-wrap gap-2 border-t border-slate-700 pt-3">
                 <Link
                   className={button}
@@ -298,7 +318,7 @@ export default function TwitchFlowsPage() {
                   className={button}
                   disabled={
                     !!busy ||
-                    !flow.enabled ||
+                    !flow.enabled || flow.archived ||
                     status?.paused ||
                     !status?.credentials_ready
                   }
@@ -309,21 +329,23 @@ export default function TwitchFlowsPage() {
                 <button
                   className={button}
                   disabled={!!busy}
-                  onClick={() => void action(flow, "pause")}
+                  onClick={() => void action(flow, flow.archived ? "restore" : "pause")}
                 >
-                  {flow.enabled ? "Приостановить" : "Включить"}
+                  {flow.archived ? "Восстановить на паузе" : flow.enabled ? "Приостановить" : "Включить"}
                 </button>
-                <Link
+                {!flow.archived && <button className={`${button} text-amber-200`} disabled={!!busy} onClick={() => setArchiveTarget(flow)}>Архивировать</button>}
+                {!flow.archived && <Link
                   className="self-center text-sm text-indigo-400"
                   href={`/admin/twitch/${encodeURIComponent(flow.id)}`}
                 >
                   Настройки →
-                </Link>
+                </Link>}
               </div>
             </article>
           );
         })}
       </div>
+      {archiveTarget && <ConfirmAction title={`Архивировать «${archiveTarget.name}»?`} message="Новые задания остановятся, не начавшиеся публикации будут удержаны. Начатая загрузка завершится. История сохранится; файлы удаляются отдельно по правилам хранения. Восстановление не включает поток и не возобновляет публикации." confirmLabel="Архивировать" onCancel={() => setArchiveTarget(null)} onConfirm={() => { const target = archiveTarget; setArchiveTarget(null); void action(target, "archive"); }} />}
     </div>
   );
 }
