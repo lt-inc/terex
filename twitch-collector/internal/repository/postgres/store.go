@@ -11,17 +11,22 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"terex/proto/pgxutil"
 	"terex/twitch-collector/internal/domain"
 )
 
 type Store struct{ pool *pgxpool.Pool }
 
 func New(ctx context.Context, dsn string) (*Store, error) {
-	p, err := pgxpool.New(ctx, dsn)
+	cfg, err := pgxutil.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
-	if err = p.Ping(ctx); err != nil {
+	p, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err = pgxutil.WaitPing(ctx, p.Ping); err != nil {
 		p.Close()
 		return nil, err
 	}

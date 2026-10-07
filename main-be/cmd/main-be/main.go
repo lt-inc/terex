@@ -43,6 +43,9 @@ func run() error {
 	if cfg.DatabaseURL == "" {
 		return errors.New("DATABASE_URL is required")
 	}
+	if cfg.DBStartupTimeout <= 0 {
+		return errors.New("DB_STARTUP_TIMEOUT must be a positive duration")
+	}
 	if cfg.AdminUsername == "" || cfg.AdminPassword == "" || cfg.ServiceToken == "" {
 		return errors.New("ADMIN_USERNAME, ADMIN_PASSWORD and TEREX_SERVICE_TOKEN are required")
 	}
@@ -59,14 +62,17 @@ func run() error {
 		_ = shutdownTelemetry(flush)
 	}()
 
-	if err := postgres.Migrate(cfg.DatabaseURL); err != nil {
+	initCtx, endStartup := context.WithTimeout(ctx, cfg.DBStartupTimeout)
+	defer endStartup()
+	if err := postgres.MigrateContext(initCtx, cfg.DatabaseURL); err != nil {
 		return err
 	}
-	store, err := postgres.New(ctx, cfg.DatabaseURL)
+	store, err := postgres.New(initCtx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	endStartup()
 
 	gpu, err := gpuclient.New(cfg.GpuGRPCAddr)
 	if err != nil {

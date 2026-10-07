@@ -26,4 +26,9 @@ Required environment: `DATABASE_URL`, `TEREX_SERVICE_TOKEN`, `COLLECTOR_SERVICE_
 
 Run `go test ./...`. PostgreSQL integration tests additionally require an explicitly provided disposable `COLLECTOR_TEST_DATABASE_URL`. They drop the collector schema in that test database; never point them at a production database. Tests use synthetic media and HTTP servers; they do not download Twitch clips or upload to YouTube.
 
+Database startup retries connection checks for up to `DB_STARTUP_TIMEOUT`
+(default `30s`), then applies migrations once. Invalid credentials or
+configuration fail immediately. Pool defaults and recovery diagnostics are
+documented in [POSTGRES-RECOVERY.ru.md](../docs/POSTGRES-RECOVERY.ru.md).
+
 The clip downloader remains dependent on Twitch's public player implementation and yt-dlp maintenance. Technical availability does not grant publication rights; the previously accepted content permissions and review workflow still apply.

@@ -119,6 +119,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | Variable | Service | Default |
 |----------|---------|---------|
 | `DATABASE_URL` | main-be | required |
+| `DB_STARTUP_TIMEOUT` | main-be / twitch-collector | `60s` / `30s` (connection and migrations; see `docs/POSTGRES-RECOVERY.ru.md`) |
 | `RABBITMQ_URL` | both | `amqp://guest:guest@rabbitmq:5672/` |
 | `GPU_GRPC_ADDR` | main-be | `gpu-be:9090` |
 | `HTTP_ADDR`, `MONITOR_INTERVAL`, `PUBLISH_INTERVAL` | main-be | `:8000`, `5m`, `30s` |
