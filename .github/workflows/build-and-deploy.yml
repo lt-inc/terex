@@ -16,6 +16,7 @@ env:
   IMAGE_GPU: registry.legendary-trio.me/lt-inc/terex-gpu-be
   IMAGE_FE: registry.legendary-trio.me/lt-inc/terex-fe
   IMAGE_COLLECTOR: registry.legendary-trio.me/lt-inc/terex-twitch-collector
+  IMAGE_STATS: registry.legendary-trio.me/lt-inc/terex-stats-collector
 
 jobs:
   build-be:
@@ -150,10 +151,41 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_COLLECTOR }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_COLLECTOR }}:buildcache,mode=max
 
+  build-stats-collector:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: registry.legendary-trio.me
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.IMAGE_STATS }}
+          tags: |
+            type=sha,format=long,prefix=,priority=1000
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: stats-collector/Dockerfile
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=registry,ref=${{ env.IMAGE_STATS }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_STATS }}:buildcache,mode=max
+
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-be, build-gpu-be, build-fe, build-twitch-collector]
+    needs: [build-be, build-gpu-be, build-fe, build-twitch-collector, build-stats-collector]
     steps:
       # Kubernetes structure, including Secrets and DB bootstrap, is managed by
       # Terraform in lt-inc/k3s. CI only changes images on existing Deployments.
@@ -228,3 +260,25 @@ jobs:
           KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
         with:
           args: rollout status deployment/terex-twitch-collector -n admin --timeout=180s
+
+      # The Deployment is created by k3s Terraform. Until that has been applied
+      # the image update must not fail the release of the other services.
+      - name: Update stats collector image
+        continue-on-error: true
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: set image deployment/terex-stats-collector terex-stats-collector=${{ env.IMAGE_STATS }}:${{ needs.build-stats-collector.outputs.image-tag }} -n admin
+
+      - name: Check stats collector rollout
+        continue-on-error: true
+        uses: actions-hub/kubectl@master
+        env:
+          KUBE_HOST: ${{ secrets.KUBE_HOST }}
+          KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
+          KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
+        with:
+          args: rollout status deployment/terex-stats-collector -n admin --timeout=180s

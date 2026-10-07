@@ -34,7 +34,7 @@ jobs:
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           sh -n docker/collector-db-init.sh
-      - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/...
+      - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/... ./stats-collector/...
       - name: Verify real DB bootstrap, restricted login and repeated provisioning
         env:
           PGHOST: localhost
@@ -52,6 +52,8 @@ jobs:
             postgres:16-alpine sh -c 'sh /init.sh && sh /init.sh'
       - name: Build pinned collector image
         run: docker build -f twitch-collector/Dockerfile -t terex-twitch-collector:ci .
+      - name: Build stats collector image
+        run: docker build -f stats-collector/Dockerfile -t terex-stats-collector:ci .
       - name: Media smoke with runtime media packages
         run: |
           go test -c -o /tmp/media-smoke ./gpu-be/internal/repository/ffmpeg

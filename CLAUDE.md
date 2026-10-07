@@ -54,6 +54,7 @@ terex/
   gpu-be/             # image terex-gpu-be (binary cmd/gpu-be)
     internal/{transport,service,repository,domain,config}
   FE/                 # Next.js 15 + TS + Tailwind
+  stats-collector/    # image terex-stats-collector: YouTube channel/video stats -> yt_stats schema -> Grafana (docs/YOUTUBE-STATS.ru.md)
   docker-compose.yml  # local stack; docker-compose.gpu.yml = overlay for the GPU host
   go.work             # ties proto + main-be + gpu-be
 ```
@@ -70,7 +71,7 @@ GPU_RUNTIME_BASE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 USE_NVENC=true \
 
 Set `OPENROUTER_API_KEY` for highlights mode. Locally gpu-be runs on CPU (`ubuntu:22.04`, whisper `base`).
 
-Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`. Regenerate gRPC: `cd proto && buf generate` (needs `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` in PATH).
+Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-collector && go test ./...`. Regenerate gRPC: `cd proto && buf generate` (needs `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` in PATH).
 
 ## Highlights mode (how clips are chosen)
 
@@ -119,6 +120,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | Variable | Service | Default |
 |----------|---------|---------|
 | `DATABASE_URL` | main-be | required |
+| `DB_STARTUP_TIMEOUT` | main-be / twitch-collector | `60s` / `30s` (connection and migrations; see `docs/POSTGRES-RECOVERY.ru.md`) |
 | `RABBITMQ_URL` | both | `amqp://guest:guest@rabbitmq:5672/` |
 | `GPU_GRPC_ADDR` | main-be | `gpu-be:9090` |
 | `HTTP_ADDR`, `MONITOR_INTERVAL`, `PUBLISH_INTERVAL` | main-be | `:8000`, `5m`, `30s` |
@@ -132,6 +134,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | `CLIP_MIN_SEC`, `CLIP_MAX_SEC`, `MAX_CLIPS`, `PROMPT_TAGS`, `YAMNET_CMD` | gpu-be | `15`, `180`, `12`, `energy:high,energy:spike,laugh,shout,gasp,music,fast,pause_before`, `python3 /opt/terex/yamnet.py` |
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_FORMAT`, `LOG_LEVEL` | both | service name, empty (off), `text`, `info` |
 | `BACKEND_URL` | FE | `http://localhost:8000` |
+| `GPU_GRPC_ADDR`, `STATS_INTERVAL`, `MAX_VIDEOS_PER_CHANNEL`, `FULL_RESOLUTION_DAYS` | stats-collector | `gpu-be:9090`, `1h`, `200`, `14` |
 
 In production (k3s), these env vars that are actual credentials
 (`DATABASE_URL`, `RABBITMQ_URL`, `S3_ACCESS_KEY`/`S3_SECRET_KEY`,

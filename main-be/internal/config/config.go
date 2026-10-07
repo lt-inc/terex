@@ -9,6 +9,7 @@ import (
 type Config struct {
 	HTTPAddr                    string
 	DatabaseURL                 string
+	DBStartupTimeout            time.Duration
 	RabbitURL                   string
 	GpuGRPCAddr                 string
 	MonitorInterval             time.Duration
@@ -32,6 +33,7 @@ func Load() Config {
 	return Config{
 		HTTPAddr:                    env("HTTP_ADDR", ":8000"),
 		DatabaseURL:                 os.Getenv("DATABASE_URL"),
+		DBStartupTimeout:            startupTimeout(),
 		RabbitURL:                   env("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/"),
 		GpuGRPCAddr:                 env("GPU_GRPC_ADDR", "gpu-be:9090"),
 		MonitorInterval:             duration("MONITOR_INTERVAL", 5*time.Minute),
@@ -50,6 +52,18 @@ func Load() Config {
 		TwitchStorageMinFreeBytes:   positiveInt64("TWITCH_STORAGE_MIN_FREE_BYTES", 1<<30),
 		TwitchStorageMinFreePercent: percentage("TWITCH_STORAGE_MIN_FREE_PERCENT", 10),
 	}
+}
+
+func startupTimeout() time.Duration {
+	value := os.Getenv("DB_STARTUP_TIMEOUT")
+	if value == "" {
+		return 60 * time.Second
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return 0 // run rejects invalid startup configuration before connecting.
+	}
+	return d
 }
 
 func env(k, def string) string {

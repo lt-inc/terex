@@ -4,5 +4,6 @@ use (
 	./gpu-be
 	./main-be
 	./proto
+	./stats-collector
 	./twitch-collector
 )
