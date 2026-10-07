@@ -65,6 +65,7 @@ const ADMIN_GROUPS = [
       { href: "/admin/twitch", label: "Потоки" },
       { href: "/admin/twitch/clips", label: "Клипы и состояния" },
       { href: "/admin/compilations", label: "Подборки" },
+      { href: "/admin/twitch/storage", label: "Хранение и очистка" },
       { href: "/admin/twitch/settings", label: "Настройки сервиса" },
     ],
   },

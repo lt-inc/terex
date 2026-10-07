@@ -51,8 +51,10 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		message := fmt.Sprintf("Terex request failed (HTTP %d)", res.StatusCode)
 		var diagnostic struct {
-			Error  string `json:"error"`
-			Detail string `json:"detail"`
+			Error       string     `json:"error"`
+			Detail      string     `json:"detail"`
+			Code        string     `json:"code"`
+			NextCheckAt *time.Time `json:"next_check_at"`
 		}
 		if json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&diagnostic) == nil {
 			text := diagnostic.Error
@@ -64,10 +66,18 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 			}
 		}
 		kind := "import"
+		if res.StatusCode == http.StatusConflict && diagnostic.Code != "" {
+			switch diagnostic.Code {
+			case "calendar_full", "preparation_wait", "stale_for_slot", "storage_low", "storage_status_unknown":
+				kind = "preparation"
+			case "source_stale", "media_expired":
+				kind = "expired"
+			}
+		}
 		if res.StatusCode == 409 && (strings.Contains(message, "лимит скачивания") || strings.Contains(message, "очередь проверки заполнена")) {
 			kind = "quota"
 		}
-		return &domain.Failure{Kind: kind, Message: message, HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res)}
+		return &domain.Failure{Kind: kind, Message: message, HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res), Code: diagnostic.Code, NextCheckAt: diagnostic.NextCheckAt}
 	}
 	if out == nil {
 		return nil

@@ -35,6 +35,9 @@ func (c *Client) WorkflowGateway() workflow.Gateway { return workflow.NewGateway
 func (c *Client) IngestGateway() workflow.IngestGateway {
 	return workflow.NewIngestGatewayClient(c.conn)
 }
+func (c *Client) StorageGateway() workflow.StorageGateway {
+	return workflow.NewStorageGatewayClient(c.conn)
+}
 
 func rpc(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, 15*time.Second)

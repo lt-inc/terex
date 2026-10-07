@@ -77,6 +77,9 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 	if prev.Version != u.Version {
 		return domain.Revision{}, domain.ErrConflict
 	}
+	if err = storageRevisionAvailable(ctx, tx, currentID); err != nil {
+		return domain.Revision{}, err
+	}
 	state, bucket, object := prev.RenderState, prev.Bucket, prev.Object
 	if rerender {
 		state = "pending"
@@ -159,6 +162,9 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
 	if r.RenderState != "ready" || r.Object == "" {
 		return fmt.Errorf("%w: rendered revision is not ready", domain.ErrConflict)
 	}
+	if err = storageRevisionAvailable(ctx, tx, rid); err != nil {
+		return err
+	}
 	if err = requireTwitchSources(ctx, tx, clipID, rid); err != nil {
 		return err
 	}
@@ -195,6 +201,37 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
 		if err == nil {
 			_, err = tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=$1`, clipID)
 		}
+	}
+	if err != nil {
+		return err
+	}
+	rows, e := tx.Query(ctx, `SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL`, clipID)
+	if e != nil {
+		return e
+	}
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return e
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if e = rows.Err(); e != nil {
+		return e
+	}
+	for _, id := range ids {
+		if e = setPublicationOverrideTx(ctx, tx, id, false, now); e != nil {
+			return e
+		}
+		if e = validatePublicationPolicyTx(ctx, tx, id, now); e != nil {
+			return e
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='consumed' WHERE clip_id=$1 AND state='active'`, clipID); err != nil {
+		return err
 	}
 	return err
 }
@@ -355,6 +392,9 @@ func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) e
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
 		return mapErr(err)
@@ -365,6 +405,9 @@ func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) e
 	}
 	if r.Version != version {
 		return domain.ErrConflict
+	}
+	if err = storageRevisionAvailable(ctx, tx, rid); err != nil {
+		return err
 	}
 	if r.RenderState == "ready" || r.RenderState == "pending" || r.RenderState == "rendering" {
 		return nil
@@ -417,6 +460,9 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	}
 	if old.RenderState != "ready" || old.Object == "" {
 		return fmt.Errorf("%w: selected revision has no finished asset", domain.ErrConflict)
+	}
+	if err = storageRevisionAvailable(ctx, tx, targetID); err != nil {
+		return err
 	}
 	spec := mustJSON(old.EditSpec)
 	var nextID int64

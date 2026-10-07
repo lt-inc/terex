@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import TwitchNav from "@/components/twitch/TwitchNav";
+import CapacityPanel from "@/components/twitch/CapacityPanel";
 import ConfirmAction from "@/components/ui/ConfirmAction";
 import PreviewModal, {
   type PreviewTarget,
@@ -11,6 +12,7 @@ import {
   fetchTwitchFlowClips,
   fetchTwitchFlows,
   rejectImport,
+  keepTwitchMaterial,
 } from "@/lib/api";
 import { clipState, durationLabel } from "@/lib/twitch-status";
 import type {
@@ -148,6 +150,15 @@ export default function TwitchClipsPage() {
       setBusy("");
     }
   }
+  async function keep(item: TwitchFlowClip) {
+    setBusy(item.source.clip_id); setError(""); setNotice("");
+    try {
+      await keepTwitchMaterial("imports", item.import_id, !item.keep);
+      setNotice(item.keep ? "Возвращён обычный срок хранения без обнуления возраста." : "Исходник сохранён без срока. Ограничение возраста при публикации остаётся.");
+      await load();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setBusy(""); }
+  }
   return (
     <div className="flex flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -209,6 +220,8 @@ export default function TwitchClipsPage() {
             {[
               "discovered",
               "waiting_quota",
+              "waiting_capacity",
+              "media_expired",
               "queued",
               "downloading",
               "importing",
@@ -271,6 +284,7 @@ export default function TwitchClipsPage() {
           </select>
         </label>
       </div>
+      {selectedFlow && <CapacityPanel flowID={selectedFlow.id} timezone={selectedFlow.timezone} />}
       {error && (
         <p
           role="alert"
@@ -315,7 +329,7 @@ export default function TwitchClipsPage() {
             : item.excluded
               ? "excluded"
               : item.source_state === "discovered" &&
-                  ["queued", "reserved", "retry_wait"].includes(
+                  ["queued", "reserved", "retry_wait", "waiting_quota", "waiting_capacity"].includes(
                     reasonState || "",
                   )
                 ? reasonState
@@ -325,7 +339,7 @@ export default function TwitchClipsPage() {
                   : item.source_state;
           const status = clipState(displayState);
           const next = item.reason?.next_attempt_at;
-          const available =
+          const available = item.media_available !== false &&
             (["ready", "imported", "used"].includes(item.source_state) ||
               !!item.media_id) &&
             !!(item.source_clip_id || item.import_id);
@@ -358,7 +372,7 @@ export default function TwitchClipsPage() {
                     />
                   )}
                   <span className="relative rounded-lg bg-black/70 px-3 py-2">
-                    {available ? "▶ Смотреть исходник" : "Файл пока не скачан"}
+                    {available ? "▶ Смотреть исходник" : ["media_expired", "expired", "deleted"].includes(item.source_state) ? "Файл удалён по сроку хранения" : "Файл пока не скачан"}
                   </span>
                 </button>
                 <a
@@ -381,6 +395,7 @@ export default function TwitchClipsPage() {
                     {durationLabel(source.duration_sec)} ·{" "}
                     {source.language || "язык неизвестен"}
                   </p>
+                  {selectedFlow && <p className="mt-1 text-xs text-amber-200">Крайний срок выпуска: {new Intl.DateTimeFormat("ru", { timeZone: selectedFlow.timezone, dateStyle: "short", timeStyle: "short" }).format(new Date(new Date(source.created_at).getTime() + selectedFlow.max_source_age_hours * 3600000))} · максимум {selectedFlow.max_source_age_hours} ч от создания. В подборке каждый исходник должен укладываться в срок.</p>}
                   <p className="mt-1 text-xs text-slate-500">
                     Создан:{" "}
                     {new Intl.DateTimeFormat("ru", {
@@ -476,6 +491,7 @@ export default function TwitchClipsPage() {
                                   }).format(new Date(output.publish_at))}
                                 </span>
                               )}
+                              {output.publish_at && <span className="text-slate-400">Возраст этого исходника к выпуску: {Math.max(0, Math.round((new Date(output.publish_at).getTime() - new Date(source.created_at).getTime()) / 3600000))} ч</span>}
                             </div>
                             <p className="mt-1 text-slate-400">
                               {clipState(outputState).explanation}
@@ -486,7 +502,7 @@ export default function TwitchClipsPage() {
                               </p>
                             )}
                             <div className="mt-2 flex gap-3">
-                              {output.render_state === "ready" && (
+                              {output.render_state === "ready" && item.media_available !== false && (
                                 <button
                                   className="text-indigo-400"
                                   onClick={() =>
@@ -515,6 +531,7 @@ export default function TwitchClipsPage() {
                   )}
                 </section>
                 <div className="flex flex-wrap items-center gap-2">
+                  {item.import_id && available && <button className={button} disabled={!!busy} onClick={() => void keep(item)}>{item.keep ? "Снять сохранение" : "Сохранить без срока"}</button>}
                   {item.import_id &&
                     !item.rejected &&
                     !item.excluded &&

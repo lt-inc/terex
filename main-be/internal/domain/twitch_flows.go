@@ -31,15 +31,17 @@ type FlowClipOutput struct {
 	Error            string     `json:"error,omitempty"`
 }
 type FlowClip struct {
-	Source       twitch.Source    `json:"source"`
-	SourceState  string           `json:"source_state"`
-	Reason       FlowClipReason   `json:"reason"`
-	ImportID     string           `json:"import_id"`
-	SourceClipID string           `json:"source_clip_id"`
-	MediaID      string           `json:"media_id,omitempty"`
-	Excluded     bool             `json:"excluded"`
-	Rejected     bool             `json:"rejected"`
-	Outputs      []FlowClipOutput `json:"outputs"`
+	Source         twitch.Source    `json:"source"`
+	SourceState    string           `json:"source_state"`
+	Reason         FlowClipReason   `json:"reason"`
+	ImportID       string           `json:"import_id"`
+	SourceClipID   string           `json:"source_clip_id"`
+	MediaID        string           `json:"media_id,omitempty"`
+	Excluded       bool             `json:"excluded"`
+	Rejected       bool             `json:"rejected"`
+	Keep           bool             `json:"keep"`
+	MediaAvailable bool             `json:"media_available"`
+	Outputs        []FlowClipOutput `json:"outputs"`
 }
 type FlowClipPage struct {
 	Items  []FlowClip `json:"items"`

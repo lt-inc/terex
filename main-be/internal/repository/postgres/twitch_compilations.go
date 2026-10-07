@@ -284,6 +284,22 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 	if err != nil {
 		return prev, err
 	}
+	if err = storageRevisionAvailable(ctx, tx, prev.RevisionID); err != nil {
+		return prev, err
+	}
+	if prev.FlowID != "" {
+		current, e := currentFlowPolicy(ctx, tx, prev.FlowID)
+		if e != nil {
+			return prev, e
+		}
+		ids := []string{}
+		for _, item := range m.Assembly.Items {
+			ids = append(ids, item.TwitchSourceID)
+		}
+		if _, e = reserveOutputPreparationTx(ctx, tx, current, id, "compilation", ids, now); e != nil {
+			return prev, e
+		}
+	}
 	spec := old.EditSpec
 	spec.StartSec, spec.EndSec, spec.Title, spec.Cues, spec.SubtitlesEnabled = 0, m.DurationSec, u.Title, []domain.Cue{}, false
 	spec.Description, err = assemblyProvenance(ctx, tx, m.Assembly)

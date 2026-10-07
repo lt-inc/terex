@@ -105,6 +105,9 @@ export interface TwitchFlow {
   id: string;
   name: string;
   enabled: boolean;
+  archived?: boolean;
+  schedule_horizon_hours: number;
+  max_source_age_hours: number;
   auto_publish: boolean;
   account_id: number;
   youtube_channel_id: string;
@@ -161,6 +164,8 @@ export interface TwitchFlowClip {
   import_id: string;
   source_clip_id?: string;
   media_id?: string;
+  media_available?: boolean;
+  keep?: boolean;
   excluded?: boolean;
   rejected?: boolean;
   outputs?: {
@@ -173,6 +178,81 @@ export interface TwitchFlowClip {
     publish_at?: string;
     error?: string;
   }[];
+}
+
+export interface TwitchCapacity {
+  flow_id: string;
+  youtube_channel_id: string;
+  horizon_hours: number;
+  horizon_end: string;
+  mode: "preview" | "enforce";
+  formats: {
+    format: string;
+    total_slots: number;
+    occupied_slots: number;
+    preparing_slots: number;
+    free_slots: number;
+    next_slot_at?: string;
+    reason?: string;
+    next_check_at?: string;
+    source_count?: number;
+    source_duration_sec?: number;
+    missing_clips?: number;
+    missing_duration_sec?: number;
+  }[];
+}
+
+export interface TwitchPolicyPreview {
+  mode: "preview" | "enforce";
+  violations: {
+    publication_id: number;
+    clip_id: string;
+    flow_id: string;
+    automatic: boolean;
+    publish_at: string;
+    source_created_at?: string;
+    deadline?: string;
+    code: string;
+    message: string;
+    protected: boolean;
+  }[];
+}
+
+export interface TwitchStorageItem {
+  bucket: string;
+  object: string;
+  kind: string;
+  size_bytes: number;
+  state: string;
+  keep: boolean;
+  pins?: { kind: "import" | "clip"; id: string }[];
+  expires_at?: string;
+  protected_reason?: string;
+  error?: string;
+  clip_ids: string[];
+  import_ids: string[];
+}
+export interface TwitchStorage {
+  pressure?: {
+    required: boolean;
+    state: "ok" | "low" | "unknown" | "disabled";
+    available_bytes: number;
+    capacity_bytes: number;
+    observed_at?: string;
+    reason: string;
+  };
+  cleanup_enabled: boolean;
+  inventory_complete: boolean;
+  physical_bytes: number;
+  reclaimable_bytes: number;
+  objects: number;
+  protected_objects: number;
+  deleted_objects: number;
+  pending_deletions: number;
+  failed_deletions: number;
+  updated_at?: string;
+  items: TwitchStorageItem[];
+  candidates?: TwitchStorageItem[];
 }
 export interface TwitchFlowClipPage {
   items: TwitchFlowClip[];

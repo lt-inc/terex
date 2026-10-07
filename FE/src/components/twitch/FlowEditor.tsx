@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import Toggle from "@/components/ui/Toggle";
 import TwitchNav from "./TwitchNav";
+import CapacityPanel from "./CapacityPanel";
 import {
   createTwitchFlow,
   fetchAccountsList,
@@ -75,6 +76,7 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
               account_id: 0,
               youtube_channel_id: "",
               enabled: false,
+              archived: false,
               auto_publish: false,
               work_started_at: undefined,
               excluded_source_ids: [],
@@ -133,6 +135,7 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
             timezone: policy.timezone,
             daily_shorts: policy.daily_shorts,
             daily_compilations: policy.daily_compilations,
+            schedule_horizon_hours: policy.schedule_horizon_hours,
           }
         : {}),
     }));
@@ -615,6 +618,7 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
             )}
             {step === 3 && (
               <>
+                {flowID && !flow.archived && <CapacityPanel flowID={flowID} timezone={original?.timezone || "Asia/Tomsk"} />}
                 <Toggle
                   label="Включить поток"
                   checked={flow.enabled}
@@ -649,6 +653,20 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                   </span>
                 </label>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  {numberField(
+                    "schedule_horizon_hours",
+                    "Заполнять календарь на ближайшие, часов",
+                    1,
+                    168,
+                    "Скользящий горизонт от текущего времени. Общий для всех потоков этого YouTube-канала; изменение повлияет на них все.",
+                  )}
+                  {numberField(
+                    "max_source_age_hours",
+                    "Максимальный возраст клипа на дату публикации, часов",
+                    1,
+                    720,
+                    "Считается от создания на Twitch, а не скачивания. В подборке проверяется каждый исходник. Окно поиска не продлевает актуальность.",
+                  )}
                   {flow.shorts_enabled && (
                     <label className="flex flex-col gap-1 text-sm">
                       Времена Shorts

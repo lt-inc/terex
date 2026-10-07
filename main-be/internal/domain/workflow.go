@@ -106,16 +106,26 @@ type PublicationRecord struct {
 	State       string    `json:"state"`
 	Version     int       `json:"version"`
 	PublicationMetadata
-	CancelRequested bool       `json:"cancel_requested"`
-	UploadID        *string    `json:"upload_id"`
-	ExternalURL     *string    `json:"external_url"`
-	Error           *string    `json:"error"`
-	UploadedAt      *time.Time `json:"uploaded_at"`
-	ProcessedAt     *time.Time `json:"processed_at"`
-	PublishedAt     *time.Time `json:"published_at"`
-	LastVerifiedAt  *time.Time `json:"last_verified_at"`
-	StartedAt       *time.Time `json:"started_at"`
-	PreviewURL      string     `json:"preview_url,omitempty"`
+	CancelRequested   bool                     `json:"cancel_requested"`
+	UploadID          *string                  `json:"upload_id"`
+	ExternalURL       *string                  `json:"external_url"`
+	Error             *string                  `json:"error"`
+	UploadedAt        *time.Time               `json:"uploaded_at"`
+	ProcessedAt       *time.Time               `json:"processed_at"`
+	PublishedAt       *time.Time               `json:"published_at"`
+	LastVerifiedAt    *time.Time               `json:"last_verified_at"`
+	StartedAt         *time.Time               `json:"started_at"`
+	PreviewURL        string                   `json:"preview_url,omitempty"`
+	TwitchPolicy      *PublicationTwitchPolicy `json:"twitch_policy,omitempty"`
+	FreshnessOverride bool                     `json:"freshness_override"`
+}
+type PublicationTwitchPolicy struct {
+	FlowID            string     `json:"flow_id"`
+	SourceCreatedAt   *time.Time `json:"source_created_at,omitempty"`
+	Deadline          *time.Time `json:"deadline,omitempty"`
+	HorizonEnd        time.Time  `json:"horizon_end"`
+	MaxSourceAgeHours int        `json:"max_source_age_hours"`
+	HorizonHours      int        `json:"horizon_hours"`
 }
 
 type PublicationFilter struct {
@@ -125,15 +135,17 @@ type PublicationFilter struct {
 	Limit, Offset   int
 }
 type PublicationPatch struct {
-	Version     int        `json:"expected_version"`
-	PublishAt   *time.Time `json:"publish_at"`
-	Timezone    *string    `json:"timezone"`
-	Title       *string    `json:"title"`
-	Description *string    `json:"description"`
-	Hashtags    *[]string  `json:"hashtags"`
+	Version           int        `json:"expected_version"`
+	PublishAt         *time.Time `json:"publish_at"`
+	Timezone          *string    `json:"timezone"`
+	Title             *string    `json:"title"`
+	Description       *string    `json:"description"`
+	Hashtags          *[]string  `json:"hashtags"`
+	FreshnessOverride bool       `json:"freshness_override"`
 }
 type PublicationAction struct {
-	Version int `json:"expected_version"`
+	Version           int  `json:"expected_version"`
+	FreshnessOverride bool `json:"freshness_override"`
 }
 type PublicationEvent struct {
 	AttemptID *string         `json:"attempt_id,omitempty"`

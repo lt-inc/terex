@@ -117,11 +117,13 @@ type Download struct {
 }
 
 type Failure struct {
-	Kind       string
-	Message    string
-	Retryable  bool
-	RetryAfter time.Duration
-	HTTPStatus int
+	Kind        string
+	Message     string
+	Retryable   bool
+	RetryAfter  time.Duration
+	HTTPStatus  int
+	Code        string
+	NextCheckAt *time.Time
 }
 
 func (e *Failure) Error() string { return e.Message }

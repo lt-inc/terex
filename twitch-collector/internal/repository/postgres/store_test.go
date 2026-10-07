@@ -219,7 +219,11 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 	if err != nil || task == nil || task.Clip.ID != shared.ID {
 		t.Fatal("flow task not claimed", task, err)
 	}
-	reservation := twitch.Import{ImportID: "saved-import", ReservationID: "saved-reservation", UploadGeneration: 2}
+	reservation := twitch.Import{ImportID: "saved-import", ReservationID: "saved-reservation", UploadGeneration: 2, FlowID: f2.ID, FlowVersion: 1}
+	f2.Version = 2
+	if err = s.SyncFlows(ctx, []twitch.Flow{f1, f2}); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.SaveReservation(ctx, *task, reservation); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +239,7 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, err = s.Claim(ctx, time.Minute)
-	if err != nil || task == nil || task.Reservation.ReservationID != reservation.ReservationID || task.Reservation.UploadGeneration != 2 {
+	if err != nil || task == nil || task.Reservation.ReservationID != reservation.ReservationID || task.Reservation.UploadGeneration != 2 || task.FlowID != f2.ID || task.FlowVersion != 1 {
 		t.Fatal("restart lost import fence", task, err)
 	}
 	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET attempts=3,lease_expires_at=now()-interval '1 second' WHERE clip_id=$1`, shared.ID); err != nil {
@@ -247,6 +251,32 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 	var exhaustedState string
 	if err = s.pool.QueryRow(ctx, `SELECT state FROM twitch_collector.clips WHERE clip_id=$1`, shared.ID).Scan(&exhaustedState); err != nil || exhaustedState != "failed" {
 		t.Fatal("empty claim rolled back exhausted state", exhaustedState, err)
+	}
+	// A denied preparation never starts yt-dlp and must not consume the daily
+	// download quota or prevent another flow from using its available slot.
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.clips SET reserved_at=$1`, now.Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	candidates := []domain.Clip{
+		{ID: "capacity-wait", ChannelID: a.ID, BroadcasterID: "1", CreatedAt: now.Add(-2 * time.Hour), Duration: 20},
+		{ID: "capacity-available", ChannelID: a.ID, BroadcasterID: "1", CreatedAt: now.Add(-2 * time.Hour), Duration: 20},
+	}
+	if err = s.UpsertClips(ctx, candidates); err != nil {
+		t.Fatal(err)
+	}
+	settings.DailyDownloads, settings.PerChannelDailyDownloads = 1, 1
+	if n, err = s.Reserve(ctx, candidates[:1], settings, now); err != nil || n != 1 {
+		t.Fatal("capacity fixture not reserved", n, err)
+	}
+	task, err = s.Claim(ctx, time.Minute)
+	if err != nil || task == nil || task.Clip.ID != candidates[0].ID {
+		t.Fatal("capacity fixture not claimed", task, err)
+	}
+	if err = s.DeferForCapacity(ctx, *task, now.Add(time.Hour), "calendar full"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err = s.Reserve(ctx, candidates[1:], settings, now); err != nil || n != 1 {
+		t.Fatal("waiting for capacity consumed download quota", n, err)
 	}
 }
 

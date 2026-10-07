@@ -178,6 +178,15 @@ export interface PublicationTarget {
 }
 
 export interface PublicationEvent {
+  freshness_override?: boolean;
+  twitch_policy?: {
+    flow_id: string;
+    source_created_at?: string;
+    deadline?: string;
+    horizon_end: string;
+    max_source_age_hours: number;
+    horizon_hours: number;
+  };
   id: number;
   clip_id: string;
   account_id: number;

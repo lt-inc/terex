@@ -16,6 +16,7 @@ import (
 	"terex/main-be/internal/service/jobs"
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
+	"terex/main-be/internal/service/storagelifecycle"
 	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/workflow"
 )
@@ -27,6 +28,7 @@ type API struct {
 	Monitor   *monitor.Service
 	Workflow  *workflow.Service
 	Twitch    *twitchservice.Service
+	Storage   *storagelifecycle.Service
 	Auth      *OperatorAuth
 	Collector *CollectorProxy
 }
@@ -44,6 +46,10 @@ func (a *API) Router() http.Handler {
 			r.Put("/twitch/flows/{id}", a.saveTwitchFlow)
 			r.Patch("/twitch/flows/{id}", a.saveTwitchFlow)
 			r.Delete("/twitch/flows/{id}", a.deleteTwitchFlow)
+			r.Post("/twitch/flows/{id}/restore", a.restoreTwitchFlow)
+			r.Get("/twitch/flows/{id}/capacity", a.twitchFlowCapacity)
+			r.Get("/twitch/policy/preview", a.twitchPolicyPreview)
+			r.Post("/twitch/policy/apply", a.twitchPolicyApply)
 			r.Get("/twitch/flows/{id}/clips", a.twitchFlowClips)
 			r.Post("/twitch/flows/{id}/clips/{sourceID}/{action:retry|exclude}", a.actFlowSource)
 			r.Post("/twitch/flows/{id}/check", a.Collector.ServeHTTP)
@@ -67,11 +73,19 @@ func (a *API) Router() http.Handler {
 			r.Get("/imports/{id}", a.getImport)
 			r.Patch("/imports/{id}", a.patchImport)
 			r.Post("/imports/{id}/complete", a.completeImport)
+			r.Post("/imports/{id}/abort", a.abortTwitchImport)
 			r.Get("/compilations", a.compilations)
 			r.Post("/compilations", a.createCompilation)
 			r.Post("/compilations/auto", a.autoCompilation)
 			r.Get("/compilations/{id}", a.getCompilation)
 			r.Put("/compilations/{id}", a.updateCompilation)
+		}
+		if a.Storage != nil {
+			r.Get("/twitch/storage", a.twitchStorage)
+			r.Get("/twitch/storage/cleanup/preview", a.previewTwitchCleanup)
+			r.Post("/twitch/storage/cleanup", a.cleanupTwitchStorage)
+			r.Post("/twitch/imports/{id}/retention", a.keepTwitchImport)
+			r.Post("/twitch/clips/{clipID}/retention", a.keepTwitchClip)
 		}
 		// jobs
 		r.Get("/jobs", a.listJobs)
@@ -140,6 +154,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func fail(w http.ResponseWriter, err error) {
+	var wait *domain.PreparationWaitError
+	if errors.As(err, &wait) {
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": wait.Message, "code": wait.Code, "next_check_at": wait.NextCheckAt})
+		return
+	}
 	code := http.StatusInternalServerError
 	if errors.Is(err, domain.ErrNotFound) {
 		code = http.StatusNotFound

@@ -444,6 +444,8 @@ export default function ClipEditorPage() {
             <p className="text-sm text-slate-500">
               {saved?.render_state === "failed"
                 ? "Render failed; edit and save again."
+                : saved?.render_state === "expired"
+                  ? "Файл удалён по сроку хранения. История и ссылки на публикации сохранены; просмотр, восстановление и новый монтаж этой версии недоступны."
                 : "The render appears here when ready."}
             </p>
           )}

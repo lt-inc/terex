@@ -25,7 +25,7 @@ func freezeFlowAssembly(ctx context.Context, tx pgx.Tx, req twitch.CompilationRe
 		var b, vb []byte
 		var id, media string
 		var excluded bool
-		err := tx.QueryRow(ctx, `SELECT i.id,i.request,m.id,m.verified,fs.excluded OR i.rejected FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 AND(( $2<>'' AND i.id=$2)OR($2='' AND i.clip_id=$3))`, f.ID, item.SourceID, item.ClipID).Scan(&id, &b, &media, &vb, &excluded)
+		err := tx.QueryRow(ctx, `SELECT i.id,i.request,m.id,m.verified,fs.excluded OR i.rejected FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 AND m.storage_state='available' AND i.media_state='ready' AND(( $2<>'' AND i.id=$2)OR($2='' AND i.clip_id=$3))`, f.ID, item.SourceID, item.ClipID).Scan(&id, &b, &media, &vb, &excluded)
 		if err != nil {
 			return m, mapErr(err)
 		}
@@ -44,6 +44,9 @@ func freezeFlowAssembly(ctx context.Context, tx pgx.Tx, req twitch.CompilationRe
 		var v workflow.VerifiedMedia
 		if json.Unmarshal(b, &r) != nil || json.Unmarshal(vb, &v) != nil {
 			return m, domain.ErrInvalid
+		}
+		if err = storageRefsAvailable(ctx, tx, v.Original); err != nil {
+			return m, err
 		}
 		start, end := item.StartSec, item.EndSec
 		if end == 0 {
@@ -84,6 +87,13 @@ func createFlowCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.Compilat
 	if err != nil {
 		return domain.Compilation{}, err
 	}
+	ids := []string{}
+	for _, item := range m.Assembly.Items {
+		ids = append(ids, item.TwitchSourceID)
+	}
+	if _, err = reserveOutputPreparationTx(ctx, tx, f, "", "compilation", ids, now); err != nil {
+		return domain.Compilation{}, err
+	}
 	id, jid := "compilation-"+uuid.NewString(), uuid.NewString()
 	rid, err := createTwitchDraft(ctx, tx, jid, id, "twitch_compilation", "compilation", "", "", req.Title, f.AccountID, f.Timezone, m, now)
 	if err != nil {
@@ -107,6 +117,9 @@ func createFlowCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.Compilat
 	}
 	auto := day != nil && f.AutoPublish && f.AutoEnabledAt != nil && !now.Before(*f.AutoEnabledAt)
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,account_id,youtube_channel_id,format,config,initial_revision_id,auto_eligible,created_at)VALUES($1,$2,$3,$4,'compilation',$5,$6,$7,$8)`, id, f.ID, f.AccountID, f.YouTubeChannelID, mustJSON(f), rid, auto, now); err != nil {
+		return domain.Compilation{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET clip_id=$2 WHERE r.flow_id=$1 AND r.format='compilation' AND r.state='active' AND r.clip_id IS NULL AND NOT EXISTS(SELECT 1 FROM unnest($3::text[]) x WHERE NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=x))`, f.ID, id, ids); err != nil {
 		return domain.Compilation{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET work_started_at=COALESCE(work_started_at,$2)WHERE id=$1`, f.ID, now); err != nil {
@@ -200,7 +213,41 @@ func (s *Store) AutoFlowCompilation(ctx context.Context, id string, now time.Tim
 	if err != pgx.ErrNoRows {
 		return out, err
 	}
-	rows, err := tx.Query(ctx, `SELECT i.id,m.id,COALESCE(i.request->'source'->>'broadcaster_id',''),COALESCE((m.verified->>'duration_sec')::float8,0),fs.excluded OR i.rejected,i.media_state,(i.request->'source'->>'created_at')::timestamptz,EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=m.id),i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 ORDER BY COALESCE((i.request->'source'->>'view_count')::bigint,0) DESC,fs.created_at,i.id`, id, f.YouTubeChannelID)
+	mode, err := policyMode(ctx, tx)
+	if err != nil {
+		return out, err
+	}
+	var batch string
+	var targetAt time.Time
+	if mode == "enforce" {
+		if err = expirePreparationTx(ctx, tx, now); err != nil {
+			return out, err
+		}
+		err = tx.QueryRow(ctx, `SELECT id,slot_at FROM twitch_preparation_reservations WHERE flow_id=$1 AND format='compilation' AND state='active' AND clip_id IS NULL AND expires_at>$2 ORDER BY slot_at LIMIT 1`, id, now).Scan(&batch, &targetAt)
+		if err != nil && err != pgx.ErrNoRows {
+			return out, err
+		}
+		if batch == "" {
+			slots, e := calendarSlotsTx(ctx, tx, f, "compilation", 0, "", now)
+			if e != nil {
+				return out, e
+			}
+			for _, s := range slots {
+				if !s.Occupied && !s.Preparing {
+					targetAt = s.At
+					break
+				}
+			}
+		}
+		if targetAt.IsZero() {
+			out.Reason = "calendar_full"
+			out.Message = "Календарь ближайших подборок заполнен; новый рендер не создаётся"
+			next := now.Add(time.Minute)
+			out.NextAttemptAt = &next
+			return out, nil
+		}
+	}
+	rows, err := tx.Query(ctx, `SELECT i.id,m.id,COALESCE(i.request->'source'->>'broadcaster_id',''),COALESCE((m.verified->>'duration_sec')::float8,0),fs.excluded OR i.rejected,CASE WHEN m.storage_state='available' THEN i.media_state ELSE 'expired' END,(i.request->'source'->>'created_at')::timestamptz,EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=m.id),i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 AND($3='' OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.import_id=i.id AND ps.reservation_id=$3)) ORDER BY COALESCE((i.request->'source'->>'view_count')::bigint,0) DESC,fs.created_at,i.id`, id, f.YouTubeChannelID, batch)
 	if err != nil {
 		return out, err
 	}
@@ -236,6 +283,8 @@ func (s *Store) AutoFlowCompilation(ctx context.Context, id string, now time.Tim
 		case used:
 			counts.AlreadyUsed++
 		case !sourceEligible(f, src.Source, now):
+			counts.Filtered++
+		case mode == "enforce" && !preparationSourceFresh(f, src.Source, targetAt, now):
 			counts.Filtered++
 		default:
 			counts.Eligible++

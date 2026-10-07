@@ -9,6 +9,7 @@ import {
   fetchPublicationHistory,
   fetchPublications,
   updatePublication,
+  fetchTwitchPolicyPreview,
 } from "@/lib/api";
 import {
   addDays,
@@ -25,6 +26,7 @@ import type {
   PublicationEvent,
   PublicationHistory,
 } from "@/types";
+import type { TwitchPolicyPreview } from "@/types/twitch";
 const cls =
   "bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 [color-scheme:dark]";
 const button =
@@ -316,6 +318,9 @@ function EventModal({
   const [confirmation, setConfirmation] = useState<
     "approve" | "retry" | "cancel" | "publish-now" | null
   >(null);
+  const [freshnessOverride, setFreshnessOverride] = useState(false);
+  const [policyViolation, setPolicyViolation] = useState<TwitchPolicyPreview["violations"][number] | null>(null);
+  const twitchPublication = !!event.twitch_policy || event.clip_id.startsWith("twitch-") || event.clip_id.startsWith("compilation-");
   const [value, setValue] = useState(() => {
       const p = zonedParts(event.publish_at, zone);
       return `${p.date}T${p.time}`;
@@ -334,21 +339,36 @@ function EventModal({
     loadHistory();
   }, [loadHistory, event.version]);
   useEffect(() => {
+    setFreshnessOverride(false);
+  }, [value, event.version, event.revision_id]);
+  useEffect(() => {
+    if (!twitchPublication) return;
+    let active = true;
+    fetchTwitchPolicyPreview().then((result) => {
+      if (active) setPolicyViolation((result.violations || []).find((item) => item.publication_id === event.id) || null);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [event.id, event.version, twitchPublication]);
+  useEffect(() => {
     function key(e: KeyboardEvent) {
       if (e.key === "Escape" && !busy) onClose();
     }
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [onClose, busy]);
+  let selectedAt = event.publish_at;
+  try { const [date, time] = value.split("T"); selectedAt = zonePartsToISO(date, time, zone); } catch { /* The server validates incomplete dates. */ }
+  const selectedAge = event.twitch_policy?.source_created_at ? Math.max(0, Math.round((new Date(selectedAt).getTime() - new Date(event.twitch_policy.source_created_at).getTime()) / 3600000)) : "неизвестен";
+  const policyStamp = (timestamp?: string) => timestamp ? formatInZone(timestamp, zone) : "неизвестно";
   async function action(kind: "approve" | "retry" | "cancel" | "publish-now") {
     setBusy(true);
     setError("");
     try {
-      onChanged(await actPublication(event.id, kind, event.version));
+      onChanged(await actPublication(event.id, kind, event.version, freshnessOverride));
     } catch (e) {
       setError(
         e instanceof ApiError && e.status === 409
-          ? "This event changed. Close and refresh the calendar before retrying."
+          ? `${e.message} Если выпуск изменился, закройте окно и обновите календарь.`
           : e instanceof Error
             ? e.message
             : String(e),
@@ -367,12 +387,13 @@ function EventModal({
           version: event.version,
           publish_at: zonePartsToISO(d, t, zone),
           timezone: zone,
+          freshness_override: freshnessOverride,
         }),
       );
     } catch (e) {
       setError(
         e instanceof ApiError && e.status === 409
-          ? "This event changed or started uploading. Refresh before retrying."
+          ? `${e.message} Если выпуск изменился или загрузка началась, обновите календарь.`
           : e instanceof Error
             ? e.message
             : String(e),
@@ -425,6 +446,14 @@ function EventModal({
             onChange={(e) => setValue(e.target.value)}
           />
         </label>
+        {twitchPublication && !isStarted(event) && <div className="rounded-lg border border-amber-900 bg-amber-950/20 p-3 text-xs">
+          {event.twitch_policy && <><p className="text-slate-300">Самый старый исходник создан {policyStamp(event.twitch_policy.source_created_at)}. Возраст к выбранной дате: {selectedAge} ч при максимуме {event.twitch_policy.max_source_age_hours} ч.</p><p className="mt-1 text-slate-400">Крайний срок: {policyStamp(event.twitch_policy.deadline)}. Горизонт {event.twitch_policy.horizon_hours} ч: до {policyStamp(event.twitch_policy.horizon_end)}.</p>{(new Date(selectedAt) > new Date(event.twitch_policy.deadline || "") || new Date(selectedAt) > new Date(event.twitch_policy.horizon_end)) && <p className="mt-2 text-amber-200">Выбранная дата нарушает ограничения. Выберите более раннее время или явно подтвердите исключение.</p>}</>}
+          {policyViolation && <><p className="text-amber-200">{policyViolation.message}</p><p className="mt-1 text-slate-400">Самый старый исходник: {policyStamp(policyViolation.source_created_at)}. Крайний срок: {policyStamp(policyViolation.deadline)}.</p></>}
+          {event.freshness_override && <p className="mt-2 text-emerald-300">Для сохранённых версии и времени уже подтверждено исключение. Новая дата требует повторного подтверждения.</p>}
+          <p className="mt-2 text-slate-400">Назначение Twitch-выпуска проверяет горизонт календаря и возраст всех исходников. Если выбранная дата выходит за ограничения, сервер укажет причину.</p>
+          <label className="mt-3 flex items-start gap-2 text-amber-100"><input type="checkbox" className="mt-0.5" checked={freshnessOverride} disabled={busy} onChange={(event) => setFreshnessOverride(event.target.checked)} /><span>Я подтверждаю исключение из правил актуальности и горизонта для этой версии и даты. Решение будет сохранено; изменение даты или версии потребует нового подтверждения.</span></label>
+          <p className="mt-2 text-slate-500">Кнопка переноса применяет выбранную дату. Одобрение и «Upload now» применяются к сохранённому плану, а не к несохранённому полю даты.</p>
+        </div>}
         <button
           className={button}
           disabled={

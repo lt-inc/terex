@@ -22,3 +22,7 @@ service IngestGateway {
   rpc ReserveUpload(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
   rpc VerifyUpload(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
 }
+service StorageGateway {
+  rpc Inventory(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc DeleteTwitchObject(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+}

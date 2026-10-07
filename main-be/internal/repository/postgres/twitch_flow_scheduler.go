@@ -17,6 +17,22 @@ func flowPublicationAllowed(ctx context.Context, tx pgx.Tx, pid int64) (bool, er
 	return allowed, err
 }
 func findFlowSlot(ctx context.Context, tx pgx.Tx, f twitch.Flow, format string, excludePublication int64, now time.Time) (time.Time, string, bool, error) {
+	mode, err := policyMode(ctx, tx)
+	if err != nil {
+		return time.Time{}, "", false, err
+	}
+	if mode == "enforce" {
+		slots, e := calendarSlotsTx(ctx, tx, f, format, excludePublication, "", now)
+		if e != nil {
+			return time.Time{}, "", false, e
+		}
+		for _, s := range slots {
+			if !s.Occupied && !s.Preparing {
+				return s.At, s.Slot, true, nil
+			}
+		}
+		return time.Time{}, "", false, nil
+	}
 	slots := append([]string{}, f.ShortsSlots...)
 	if format == "compilation" {
 		slots = append([]string{}, f.CompilationSlots...)
@@ -69,10 +85,13 @@ func (s *Store) scheduleFlowOutputs(ctx context.Context, now time.Time) error {
 	if err = lockTwitch(ctx, tx); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM twitch_publication_slots s USING publications p WHERE p.id=s.publication_id AND(p.status='cancelled' OR p.auto_flow_id IS NULL OR EXISTS(SELECT 1 FROM twitch_channel_limits l WHERE l.youtube_channel_id=s.youtube_channel_id AND(s.local_date<>(p.publish_at AT TIME ZONE l.timezone)::date OR s.slot<>to_char(p.publish_at AT TIME ZONE l.timezone,'HH24:MI'))))`); err != nil {
+	if err = expirePreparationTx(ctx, tx, now); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT o.clip_id,o.config,o.format,COALESCE(p.id,0),r.revision_no,p.auto_hold FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id JOIN accounts a ON a.id=o.account_id LEFT JOIN publications p ON p.clip_id=o.clip_id AND p.account_id=o.account_id WHERE o.auto_eligible AND c.latest_revision_id=o.initial_revision_id AND c.approval<>'rejected' AND r.render_state='ready' AND COALESCE(r.object,'')<>'' AND f.enabled AND f.auto_publish AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=o.youtube_channel_id AND(p.id IS NULL OR(p.auto_flow_id=o.flow_id AND p.auto_hold AND p.started_at IS NULL AND p.status='on_hold')) ORDER BY o.created_at,o.clip_id LIMIT 50`)
+	if _, err = tx.Exec(ctx, `DELETE FROM twitch_publication_slots s USING publications p WHERE p.id=s.publication_id AND(p.status IN('cancelled','on_hold','failed','blocked') OR p.auto_flow_id IS NULL OR EXISTS(SELECT 1 FROM twitch_channel_limits l WHERE l.youtube_channel_id=s.youtube_channel_id AND(s.local_date<>(p.publish_at AT TIME ZONE l.timezone)::date OR s.slot<>to_char(p.publish_at AT TIME ZONE l.timezone,'HH24:MI'))))`); err != nil {
+		return err
+	}
+	rows, err := tx.Query(ctx, `SELECT o.clip_id,o.config,o.format,COALESCE(p.id,0),r.revision_no,p.auto_hold FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id JOIN accounts a ON a.id=o.account_id LEFT JOIN publications p ON p.clip_id=o.clip_id AND p.account_id=o.account_id WHERE o.auto_eligible AND c.latest_revision_id=o.initial_revision_id AND c.approval<>'rejected' AND r.render_state='ready' AND COALESCE(r.object,'')<>'' AND f.enabled AND f.auto_publish AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=o.youtube_channel_id AND(p.id IS NULL OR(p.auto_flow_id=o.flow_id AND p.auto_hold AND p.policy_hold_reason='calendar_horizon' AND p.started_at IS NULL AND p.status='on_hold')) ORDER BY o.created_at,o.clip_id LIMIT 50`)
 	if err != nil {
 		return err
 	}
@@ -101,6 +120,21 @@ func (s *Store) scheduleFlowOutputs(ctx context.Context, now time.Time) error {
 		if err = json.Unmarshal(c.Config, &f); err != nil {
 			return err
 		}
+		// Rendering snapshots pin media/destination, never freshness policy.
+		current, e := currentFlowPolicy(ctx, tx, f.ID)
+		if e != nil {
+			return e
+		}
+		f.ScheduleHorizonHours = current.ScheduleHorizonHours
+		f.MaxSourceAgeHours = current.MaxSourceAgeHours
+		f.ShortsSlots = current.ShortsSlots
+		f.CompilationSlots = current.CompilationSlots
+		if e = storageClipAvailable(ctx, tx, c.Clip); e != nil {
+			if errors.Is(e, domain.ErrConflict) {
+				continue
+			}
+			return e
+		}
 		if err = tx.QueryRow(ctx, `SELECT timezone,daily_shorts,daily_compilations FROM twitch_channel_limits WHERE youtube_channel_id=$1`, f.YouTubeChannelID).Scan(&f.Timezone, &f.DailyShorts, &f.DailyCompilations); err != nil {
 			return err
 		}
@@ -110,12 +144,52 @@ func (s *Store) scheduleFlowOutputs(ctx context.Context, now time.Time) error {
 			}
 			return err
 		}
+		var prep string
+		var reservedAt time.Time
+		e = tx.QueryRow(ctx, `SELECT id,slot_at FROM twitch_preparation_reservations WHERE clip_id=$1 AND state='active' AND expires_at>$2 ORDER BY slot_at LIMIT 1`, c.Clip, now).Scan(&prep, &reservedAt)
+		if e != nil && e != pgx.ErrNoRows {
+			return e
+		}
+		// Reserve → publication is a transfer, not a second occupied slot.
+		if prep != "" {
+			if _, e = tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='consumed' WHERE id=$1`, prep); e != nil {
+				return e
+			}
+		}
 		at, slot, ok, e := findFlowSlot(ctx, tx, f, c.Format, c.PID, now)
+		if prep != "" && reservedAt.After(now) {
+			at = reservedAt
+			slot = at.In(mustLocation(f.Timezone)).Format("15:04")
+			ok = true
+		}
 		if e != nil {
 			return e
 		}
 		if !ok {
 			continue
+		}
+		mode, e := policyMode(ctx, tx)
+		if e != nil {
+			return e
+		}
+		if mode == "enforce" {
+			v, e := sourcePolicyViolation(ctx, tx, c.Clip, 0, at, now)
+			if e != nil {
+				return e
+			}
+			if v != nil {
+				if c.PID != 0 {
+					v.PublicationID = c.PID
+					v.Automatic = true
+					if e = holdPolicyPublication(ctx, tx, *v, now); e != nil {
+						return e
+					}
+				}
+				if _, e = tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=$1`, c.Clip); e != nil {
+					return e
+				}
+				continue
+			}
 		}
 		if c.PID == 0 {
 			if _, err = tx.Exec(ctx, `UPDATE sub_job_targets t SET timezone=$2 FROM sub_jobs sj,clips c WHERE t.sub_job_id=sj.sub_job_id AND sj.job_id=c.job_id AND c.clip_id=$1`, c.Clip, f.Timezone); err != nil {
@@ -128,7 +202,7 @@ func (s *Store) scheduleFlowOutputs(ctx context.Context, now time.Time) error {
 				return err
 			}
 		} else {
-			if _, err = tx.Exec(ctx, `UPDATE publications SET publish_at=$2,status='scheduled',auto_hold=FALSE,version=version+1,error=NULL,next_attempt_at=$3 WHERE id=$1 AND started_at IS NULL AND auto_hold`, c.PID, at, now); err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE publications SET publish_at=$2,status='scheduled',auto_hold=FALSE,policy_hold_reason='',freshness_override_revision_id=NULL,freshness_override_publish_at=NULL,version=version+1,error=NULL,next_attempt_at=$3 WHERE id=$1 AND started_at IS NULL AND auto_hold AND policy_hold_reason='calendar_horizon'`, c.PID, at, now); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(ctx, `DELETE FROM twitch_publication_slots WHERE publication_id=$1`, c.PID); err != nil {
