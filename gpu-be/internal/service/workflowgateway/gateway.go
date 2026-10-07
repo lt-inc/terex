@@ -14,6 +14,7 @@ import (
 
 	"terex/gpu-be/internal/domain"
 	"terex/gpu-be/internal/repository/credentials"
+	"terex/gpu-be/internal/repository/youtube"
 	"terex/gpu-be/internal/service/googleauth"
 	"terex/gpu-be/internal/service/renderer"
 	"terex/proto/workflow"
@@ -87,6 +88,41 @@ func (s *Service) CheckConnection(ctx context.Context, q *workflow.ConnectionReq
 		return &workflow.Connection{Provider: "youtube", Status: "needs_reauth", CredentialRef: q.CredentialRef, RemoteID: q.ExpectedRemoteID, Error: "connected YouTube channel does not match account"}, nil
 	}
 	return connection(c), nil
+}
+
+// ChannelStats reads public counters and the latest uploads of a connected channel
+// using that account's token, so tokens never leave gpu-be. Account-level problems
+// (re-auth, quota, API errors) are reported in the response status, not as RPC errors,
+// so one broken account cannot be mistaken for an unavailable gateway.
+func (s *Service) ChannelStats(ctx context.Context, q *workflow.ChannelStatsRequest) (*workflow.ChannelStatsResponse, error) {
+	id, err := credentialID(&workflow.ConnectionRequest{AccountID: q.AccountID, CredentialRef: q.CredentialRef})
+	if err != nil {
+		return nil, err
+	}
+	maxVideos := min(max(q.MaxVideos, 1), 500)
+	token, err := s.Auth.AccessToken(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrReauthentication) {
+			return &workflow.ChannelStatsResponse{Status: workflow.StatsNeedsReauth, Error: err.Error()}, nil
+		}
+		return &workflow.ChannelStatsResponse{Status: workflow.StatsError, Error: err.Error()}, nil
+	}
+	ch, videos, units, err := s.Auth.YouTube(func(context.Context) (string, error) { return token, nil }).Stats(ctx, maxVideos)
+	resp := &workflow.ChannelStatsResponse{QuotaUnits: units}
+	var api *youtube.APIError
+	switch {
+	case errors.As(err, &api) && (api.Reason == "quotaExceeded" || api.Reason == "dailyLimitExceeded"):
+		resp.Status, resp.Error = workflow.StatsQuota, err.Error()
+	case errors.As(err, &api) && api.Status == 401:
+		resp.Status, resp.Error = workflow.StatsNeedsReauth, err.Error()
+	case err != nil:
+		resp.Status, resp.Error = workflow.StatsError, err.Error()
+	case q.ExpectedRemoteID != "" && ch.ChannelID != q.ExpectedRemoteID:
+		resp.Status, resp.Error = workflow.StatsNeedsReauth, "connected YouTube channel does not match account"
+	default:
+		resp.Status, resp.Channel, resp.Videos = workflow.StatsOK, ch, videos
+	}
+	return resp, nil
 }
 
 func (s *Service) Disconnect(ctx context.Context, q *workflow.ConnectionRequest) (*workflow.Result, error) {

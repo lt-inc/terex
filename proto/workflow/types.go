@@ -172,6 +172,48 @@ type ConnectionRequest struct {
 	CredentialRef    ObjectRef `json:"credential_ref"`
 	ExpectedRemoteID string    `json:"expected_remote_id,omitempty"`
 }
+
+// ChannelStats statuses. Anything but StatsOK carries a message in Error and no data.
+const (
+	StatsOK          = "ok"
+	StatsNeedsReauth = "needs_reauth"
+	StatsQuota       = "quota"
+	StatsError       = "error"
+)
+
+type ChannelStatsRequest struct {
+	AccountID        int64     `json:"account_id"`
+	CredentialRef    ObjectRef `json:"credential_ref"`
+	ExpectedRemoteID string    `json:"expected_remote_id,omitempty"`
+	MaxVideos        int       `json:"max_videos"`
+}
+type ChannelStats struct {
+	ChannelID    string `json:"channel_id"`
+	Title        string `json:"title"`
+	CustomURL    string `json:"custom_url,omitempty"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+	Subscribers  *int64 `json:"subscribers"` // nil when the owner hides the count
+	Views        int64  `json:"views"`
+	Videos       int64  `json:"videos"`
+}
+type VideoStats struct {
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	ThumbnailURL string    `json:"thumbnail_url,omitempty"`
+	PublishedAt  time.Time `json:"published_at"`
+	DurationSec  int       `json:"duration_sec"`
+	Views        int64     `json:"views"`
+	Likes        *int64    `json:"likes"`    // nil when hidden
+	Comments     *int64    `json:"comments"` // nil when disabled
+}
+type ChannelStatsResponse struct {
+	Status     string       `json:"status"`
+	Error      string       `json:"error,omitempty"`
+	Channel    ChannelStats `json:"channel"`
+	Videos     []VideoStats `json:"videos"`
+	QuotaUnits int          `json:"quota_units"` // YouTube Data API units spent by this call
+}
+
 type EditorContextRequest struct {
 	JobID    string         `json:"job_id"`
 	ClipID   string         `json:"clip_id"`
