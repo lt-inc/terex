@@ -152,7 +152,9 @@ func TestTwitchPolicyFencesOldPlansAndFirstUploadRechecksAge(t *testing.T) {
 			t.Fatal(err)
 		}
 		var id int64
-		if err := s.pool.QueryRow(ctx, `UPDATE publications SET publish_at=$2,auto_flow_id=CASE WHEN $3 THEN $4 ELSE NULL END WHERE clip_id=$1 RETURNING id`, im.ClipID, at, automatic, f.ID).Scan(&id); err != nil {
+		// Match queue readiness to the fixture clock instead of PostgreSQL's
+		// DEFAULT now(), which may already be later than the test's 08:00 UTC.
+		if err := s.pool.QueryRow(ctx, `UPDATE publications SET publish_at=$2,next_attempt_at=$2,auto_flow_id=CASE WHEN $3 THEN $4 ELSE NULL END WHERE clip_id=$1 RETURNING id`, im.ClipID, at, automatic, f.ID).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		p, err := s.GetPublicationRecord(ctx, id)
