@@ -64,9 +64,9 @@ export function validateTwitchSettings(
     !Number.isFinite(settings.max_duration_sec) ||
     settings.min_duration_sec <= 0 ||
     settings.max_duration_sec < settings.min_duration_sec ||
-    settings.max_duration_sec > 60
+    settings.max_duration_sec > 180
   ) {
-    return "Clip durations must be greater than zero and no longer than 60 seconds; maximum must cover minimum.";
+    return "Clip durations must be greater than zero and no longer than 180 seconds; maximum must cover minimum.";
   }
   if (settings.per_channel_daily_downloads > settings.daily_downloads)
     return "The per-channel download limit must not exceed the total daily limit.";

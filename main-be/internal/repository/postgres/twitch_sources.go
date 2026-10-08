@@ -390,7 +390,7 @@ func (s *Store) FinishFlowImport(ctx context.Context, id string, generation int6
 	if out.Rejected {
 		return out, domain.ErrConflict
 	}
-	if v == nil || v.Original.Object == "" || v.SHA256 == "" || v.DurationSec <= 0 || v.DurationSec > 60.05 {
+	if v == nil || v.Original.Object == "" || v.SHA256 == "" || v.DurationSec <= 0 || v.DurationSec > twitch.MaxClipDurationSec+0.05 {
 		return out, domain.ErrInvalid
 	}
 	if err = storeVerifiedMedia(ctx, tx, id, v, now); err != nil {

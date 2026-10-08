@@ -105,6 +105,23 @@ func discoverySettings(g twitch.Settings, f twitch.Flow) twitch.Settings {
 	g.MaxDurationSec = f.MaxDurationSec
 	return g
 }
+
+// Terex rejects a whole observation batch with HTTP 400 when one source is
+// outside its duration limits, so such clips are never sent.
+
+// observableSources converts clips into observation sources, leaving out the
+// ones Terex would refuse so they cannot fail the batch they travel in.
+func observableSources(clips []domain.Clip) []twitch.Source {
+	sources := make([]twitch.Source, 0, len(clips))
+	for _, c := range clips {
+		if c.Duration <= 0 || c.Duration > twitch.MaxClipDurationSec {
+			continue
+		}
+		sources = append(sources, clipSource(c))
+	}
+	return sources
+}
+
 func clipSource(c domain.Clip) twitch.Source {
 	title := strings.TrimSpace(c.Title)
 	if title == "" {
@@ -307,10 +324,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 			if end > len(all) {
 				end = len(all)
 			}
-			sources := []twitch.Source{}
-			for _, c := range all[offset:end] {
-				sources = append(sources, clipSource(c))
-			}
+			sources := observableSources(all[offset:end])
 			imports, e := api.Observe(ctx, twitch.ObservationRequest{Epoch: cfg.Epoch, FlowID: flow.ID, FlowVersion: flow.Version, Sources: sources})
 			if e != nil {
 				message = safeErrorMessage(e, "Не удалось передать наблюдения в Terex")

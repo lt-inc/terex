@@ -66,3 +66,22 @@ func TestImportUsesOnlyPresignedUploadAndGuardsCompletion(t *testing.T) {
 		t.Fatalf("err=%v uploaded=%d completed=%d", err, uploaded.Load(), completed.Load())
 	}
 }
+
+// Terex only matches a language-filtered flow when the source says the language
+// came from the clip itself; without it every reservation ends in HTTP 409.
+func TestReserveImportCarriesLanguageProvenance(t *testing.T) {
+	var got twitch.ImportRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		json.NewEncoder(w).Encode(twitch.Import{ImportID: "id", State: "awaiting_upload"})
+	}))
+	defer server.Close()
+	c := New(server.URL, "service-token")
+	task := domain.Task{FlowID: "flow", FlowVersion: 1, Clip: domain.Clip{ID: "SafeClip", Language: "en", LanguageSource: "clip", Duration: 20}}
+	if _, err := c.ReserveImport(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if got.Source.Language != "en" || got.Source.LanguageSource != "clip" {
+		t.Fatalf("language provenance not sent: %+v", got.Source)
+	}
+}
