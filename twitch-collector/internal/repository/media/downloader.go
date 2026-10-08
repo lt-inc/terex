@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"terex/proto/twitch"
 	"terex/twitch-collector/internal/domain"
 	"terex/twitch-collector/internal/repository/helix"
 )
@@ -204,14 +205,14 @@ func inspect(data []byte, expected float64) (*domain.Download, error) {
 		}
 	}
 	invalid := func() (*domain.Download, error) {
-		return nil, &domain.Failure{Kind: "invalid", Message: "download is not a valid 5–60 second video"}
+		return nil, &domain.Failure{Kind: "invalid", Message: fmt.Sprintf("download is not a valid 5–%d second video", twitch.MaxClipDurationSec)}
 	}
 	if json.Unmarshal(data, &probe) != nil {
 		return invalid()
 	}
 	var duration float64
 	const durationBoundarySlackSec = 0.25
-	if _, err := fmt.Sscan(probe.Format.Duration, &duration); err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 5-durationBoundarySlackSec || duration > 60+durationBoundarySlackSec {
+	if _, err := fmt.Sscan(probe.Format.Duration, &duration); err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 5-durationBoundarySlackSec || duration > twitch.MaxClipDurationSec+durationBoundarySlackSec {
 		return invalid()
 	}
 	result := &domain.Download{Duration: duration}

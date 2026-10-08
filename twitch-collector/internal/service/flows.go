@@ -106,17 +106,15 @@ func discoverySettings(g twitch.Settings, f twitch.Flow) twitch.Settings {
 	return g
 }
 
-// maxObservableDurationSec mirrors the Terex source validation. Twitch can
-// report a clip as 60.1 s; one such source makes Terex reject the whole batch
-// with HTTP 400, and no flow accepts more than 60 s anyway.
-const maxObservableDurationSec = 60
+// Terex rejects a whole observation batch with HTTP 400 when one source is
+// outside its duration limits, so such clips are never sent.
 
 // observableSources converts clips into observation sources, leaving out the
 // ones Terex would refuse so they cannot fail the batch they travel in.
 func observableSources(clips []domain.Clip) []twitch.Source {
 	sources := make([]twitch.Source, 0, len(clips))
 	for _, c := range clips {
-		if c.Duration <= 0 || c.Duration > maxObservableDurationSec {
+		if c.Duration <= 0 || c.Duration > twitch.MaxClipDurationSec {
 			continue
 		}
 		sources = append(sources, clipSource(c))

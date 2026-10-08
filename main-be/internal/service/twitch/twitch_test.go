@@ -24,7 +24,7 @@ func TestImportRejectsInvalidProvenanceMetadata(t *testing.T) {
 		func(r *tw.ImportRequest) { r.Source.DurationSec = math.NaN() },
 		func(r *tw.ImportRequest) { r.Source.DurationSec = math.Inf(1) },
 		func(r *tw.ImportRequest) { r.Source.DurationSec = 0 },
-		func(r *tw.ImportRequest) { r.Source.DurationSec = 61 },
+		func(r *tw.ImportRequest) { r.Source.DurationSec = tw.MaxClipDurationSec + 1 },
 		func(r *tw.ImportRequest) { r.Source.BroadcasterLogin = "" },
 		func(r *tw.ImportRequest) { r.Source.BroadcasterLogin = "bad/name" },
 		func(r *tw.ImportRequest) { r.Source.BroadcasterID = "not-numeric" },

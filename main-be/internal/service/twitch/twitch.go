@@ -39,7 +39,7 @@ func ValidateImport(r t.ImportRequest, now time.Time) error {
 		return fmt.Errorf("%w: schema_version=1 and a bounded idempotency_key are required", domain.ErrInvalid)
 	}
 	src := r.Source
-	if src.Platform != "twitch" || !clipID.MatchString(src.ClipID) || !broadcasterID.MatchString(src.BroadcasterID) || !broadcasterLogin.MatchString(src.BroadcasterLogin) || src.CreatedAt.IsZero() || src.CreatedAt.After(now.Add(5*time.Minute)) || src.ViewCount < 0 || math.IsNaN(src.DurationSec) || math.IsInf(src.DurationSec, 0) || src.DurationSec <= 0 || src.DurationSec > 60 {
+	if src.Platform != "twitch" || !clipID.MatchString(src.ClipID) || !broadcasterID.MatchString(src.BroadcasterID) || !broadcasterLogin.MatchString(src.BroadcasterLogin) || src.CreatedAt.IsZero() || src.CreatedAt.After(now.Add(5*time.Minute)) || src.ViewCount < 0 || math.IsNaN(src.DurationSec) || math.IsInf(src.DurationSec, 0) || src.DurationSec <= 0 || src.DurationSec > t.MaxClipDurationSec {
 		return fmt.Errorf("%w: invalid Twitch source metadata", domain.ErrInvalid)
 	}
 	u, err := url.Parse(src.URL)

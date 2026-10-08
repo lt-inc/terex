@@ -38,6 +38,11 @@ func DefaultSettings() Settings {
 		DailyShorts: 5, DailyCompilations: 1, CompilationMinClips: 3, CompilationMaxClips: 10,
 		CompilationHour: 21, BacklogLimit: 40, Timezone: "Asia/Tomsk"}
 }
+
+// MaxClipDurationSec is the longest source clip the pipeline accepts. Twitch
+// reports some clips slightly over 60 s; 180 s is the YouTube Shorts limit.
+const MaxClipDurationSec = 180
+
 func (s Settings) Validate() error {
 	if s.CompilationBudgetPercent < 0 || s.CompilationBudgetPercent > 100 || (s.AdmissionMode != "" && s.AdmissionMode != "shadow" && s.AdmissionMode != "enforce") {
 		return fmt.Errorf("invalid preparation allocation settings")
@@ -45,8 +50,8 @@ func (s Settings) Validate() error {
 	if s.PollIntervalMinutes < 1 || s.PollIntervalMinutes > 10080 || s.WindowHours < 1 || s.WindowHours > 720 || s.First < 1 || s.First > 100 || s.MinViews < 0 || s.MinAgeMinutes < 0 || s.MinAgeMinutes >= s.WindowHours*60 {
 		return fmt.Errorf("invalid discovery limits")
 	}
-	if math.IsNaN(s.MinDurationSec) || math.IsNaN(s.MaxDurationSec) || math.IsInf(s.MinDurationSec, 0) || math.IsInf(s.MaxDurationSec, 0) || s.MinDurationSec <= 0 || s.MaxDurationSec < s.MinDurationSec || s.MaxDurationSec > 60 {
-		return fmt.Errorf("duration must be between 0 and 60 seconds")
+	if math.IsNaN(s.MinDurationSec) || math.IsNaN(s.MaxDurationSec) || math.IsInf(s.MinDurationSec, 0) || math.IsInf(s.MaxDurationSec, 0) || s.MinDurationSec <= 0 || s.MaxDurationSec < s.MinDurationSec || s.MaxDurationSec > MaxClipDurationSec {
+		return fmt.Errorf("duration must be between 0 and %d seconds", MaxClipDurationSec)
 	}
 	if s.DailyDownloads < 1 || s.DailyDownloads > 100 || s.PerChannelDailyDownloads < 1 || s.PerChannelDailyDownloads > s.DailyDownloads || s.DailyShorts < 1 || s.DailyShorts > 100 || s.DailyCompilations < 1 || s.DailyCompilations > 10 || s.BacklogLimit < 1 || s.BacklogLimit > 1000 {
 		return fmt.Errorf("invalid daily or backlog limits")

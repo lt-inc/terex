@@ -129,8 +129,8 @@ func validateFlow(f twitch.Flow) error {
 			return domain.ErrInvalid
 		}
 	}
-	if f.MinDurationSec <= 0 || f.MaxDurationSec < f.MinDurationSec || f.MaxDurationSec > 60 {
-		return fmt.Errorf("%w: длина исходника должна быть до 60 секунд", domain.ErrInvalid)
+	if f.MinDurationSec <= 0 || f.MaxDurationSec < f.MinDurationSec || f.MaxDurationSec > twitch.MaxClipDurationSec {
+		return fmt.Errorf("%w: длина исходника должна быть до %d секунд", domain.ErrInvalid, twitch.MaxClipDurationSec)
 	}
 	if f.CompilationMinClips < 3 || f.CompilationMaxClips < f.CompilationMinClips || f.CompilationMaxClips > 60 || f.CompilationMinDurationSec < 0 || (!f.LegacyLength && f.CompilationMinDurationSec <= 0) || f.CompilationMaxDurationSec < f.CompilationMinDurationSec || f.CompilationMaxDurationSec > 3600 || f.CompilationHour < 0 || f.CompilationHour > 23 {
 		return fmt.Errorf("%w: неверные ограничения подборки", domain.ErrInvalid)
