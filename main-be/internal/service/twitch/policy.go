@@ -49,7 +49,9 @@ func (s *Service) RestoreFlow(ctx context.Context, id string) (t.Flow, error) {
 	return r.RestoreTwitchFlow(ctx, id, s.now())
 }
 func (s *Service) AbortImport(ctx context.Context, id string, generation int64, reason string) error {
-	if generation < 1 || len(reason) > 1000 {
+	// Generation zero is a coordinator admission that failed before upload.
+	// The repository still requires an exact generation match to fence retries.
+	if generation < 0 || len(reason) > 1000 {
 		return domain.ErrInvalid
 	}
 	r, e := s.policyRepo()
