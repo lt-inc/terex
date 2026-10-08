@@ -827,6 +827,9 @@ func (s *Store) AbortFlowImport(ctx context.Context, id string, generation int64
 	if _, err = tx.Exec(ctx, `DELETE FROM twitch_preparation_sources WHERE import_id=$1 AND reservation_id IN(SELECT id FROM twitch_preparation_reservations WHERE state='active')`, id); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_download_grants SET state='released' WHERE import_id=$1 AND state='active'`, id); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET state='released',reason='source_failed' WHERE r.state='active' AND NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id)`); err != nil {
 		return err
 	}

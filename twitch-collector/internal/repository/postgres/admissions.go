@@ -26,7 +26,9 @@ func (s *Store) QueueAdmissions(ctx context.Context, grants []twitch.DownloadGra
 		if g.Epoch != epoch {
 			continue
 		}
-		reservation, _ := json.Marshal(twitch.Import{PreparationFormat: g.Format, Epoch: g.Epoch})
+		// An admission is not an upload generation. Keep its source and identity
+		// durably so a failure before ReserveImport can still release preparation.
+		reservation, _ := json.Marshal(twitch.Import{ImportID: g.ImportID, Source: g.Source, FlowID: g.FlowID, FlowVersion: g.FlowVersion, PreparationFormat: g.Format, Epoch: g.Epoch})
 		tag, e := tx.Exec(ctx, `UPDATE twitch_collector.clips SET state='queued',reserved_at=$2,last_error='',error_kind='' WHERE clip_id=$1 AND state IN('discovered','queued')`, g.ClipID, now)
 		if e != nil {
 			return 0, e
@@ -34,7 +36,7 @@ func (s *Store) QueueAdmissions(ctx context.Context, grants []twitch.DownloadGra
 		if tag.RowsAffected() == 0 {
 			continue
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO twitch_collector.download_tasks(clip_id,run_at,flow_id,flow_version,reservation,epoch)VALUES($1,$2,$3,$4,$5,$6)ON CONFLICT(clip_id)DO UPDATE SET flow_id=EXCLUDED.flow_id,flow_version=EXCLUDED.flow_version,reservation=EXCLUDED.reservation,epoch=EXCLUDED.epoch WHERE twitch_collector.download_tasks.state='queued' AND COALESCE(twitch_collector.download_tasks.reservation->>'import_id','')=''`, g.ClipID, now, g.FlowID, g.FlowVersion, reservation, g.Epoch); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_collector.download_tasks(clip_id,run_at,flow_id,flow_version,reservation,epoch)VALUES($1,$2,$3,$4,$5,$6)ON CONFLICT(clip_id)DO UPDATE SET flow_id=EXCLUDED.flow_id,flow_version=EXCLUDED.flow_version,reservation=EXCLUDED.reservation,epoch=EXCLUDED.epoch WHERE twitch_collector.download_tasks.state='queued' AND COALESCE((twitch_collector.download_tasks.reservation->>'upload_generation')::bigint,0)=0`, g.ClipID, now, g.FlowID, g.FlowVersion, reservation, g.Epoch); err != nil {
 			return 0, err
 		}
 		added++

@@ -71,7 +71,13 @@ func TestImportUsesOnlyPresignedUploadAndGuardsCompletion(t *testing.T) {
 // came from the clip itself; without it every reservation ends in HTTP 409.
 func TestReserveImportCarriesLanguageProvenance(t *testing.T) {
 	var got twitch.ImportRequest
+	var allocationWait atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if allocationWait.Load() {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"code": "allocation_wait", "error": "waiting for coordinator"})
+			return
+		}
 		json.NewDecoder(r.Body).Decode(&got)
 		json.NewEncoder(w).Encode(twitch.Import{ImportID: "id", State: "awaiting_upload"})
 	}))
@@ -83,5 +89,19 @@ func TestReserveImportCarriesLanguageProvenance(t *testing.T) {
 	}
 	if got.Source.Language != "en" || got.Source.LanguageSource != "clip" {
 		t.Fatalf("language provenance not sent: %+v", got.Source)
+	}
+	task.Clip.LanguageSource = "channel"
+	task.Reservation = twitch.Import{ImportID: "admitted-import", Source: twitch.Source{ClipID: "SafeClip", Language: "en", LanguageSource: "clip", DurationSec: 45}}
+	if _, err := c.ReserveImport(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if got.Source.LanguageSource != "clip" || got.Source.DurationSec != 45 || got.UploadGeneration != 0 || got.ReservationID != "" {
+		t.Fatalf("grant changed or was mistaken for an upload reservation: %+v", got)
+	}
+	allocationWait.Store(true)
+	_, err := c.ReserveImport(context.Background(), task)
+	var waiting *domain.Failure
+	if !errors.As(err, &waiting) || waiting.Kind != "preparation" {
+		t.Fatal("allocation wait became a terminal import failure", err)
 	}
 }

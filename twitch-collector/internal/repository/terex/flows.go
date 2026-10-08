@@ -52,6 +52,11 @@ func (c *Client) ReserveImport(ctx context.Context, t domain.Task) (twitch.Impor
 	}
 	q := twitch.ImportRequest{Epoch: t.Epoch, SchemaVersion: 2, IdempotencyKey: "twitch:" + t.Clip.ID, FlowID: t.FlowID, FlowVersion: t.FlowVersion, ReservationID: t.Reservation.ReservationID, UploadGeneration: t.Reservation.UploadGeneration, Source: twitch.Source{
 		Platform: "twitch", ClipID: t.Clip.ID, BroadcasterID: t.Clip.BroadcasterID, BroadcasterLogin: t.Clip.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + t.Clip.ID, CreatedAt: t.Clip.CreatedAt, ObservedAt: time.Now().UTC(), ViewCount: t.Clip.ViewCount, DurationSec: t.Clip.Duration, VideoID: t.Clip.VideoID, VODOffset: t.Clip.VODOffset, GameID: t.Clip.GameID, Language: t.Clip.Language, LanguageSource: t.Clip.LanguageSource, ThumbnailURL: t.Clip.ThumbnailURL}}
+	if t.Reservation.Source.ClipID == t.Clip.ID {
+		// Use the metadata admitted by the coordinator, retaining its observation
+		// time. main-be still checks current flow filters and source freshness.
+		q.Source = t.Reservation.Source
+	}
 	var out twitch.Import
 	err := c.request(ctx, "POST", "/api/imports", q, &out)
 	if err == nil && out.ImportID == "" {

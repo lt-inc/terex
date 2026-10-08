@@ -60,7 +60,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 	if err = expirePreparationTx(ctx, tx, now); err != nil {
 		return out, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE twitch_download_grants g SET state=CASE WHEN i.media_state='ready' OR i.download_reserved_at IS NOT NULL THEN 'consumed' ELSE 'released' END FROM twitch_imports i,twitch_flows f WHERE i.id=g.import_id AND f.id=g.flow_id AND g.state='active' AND(g.expires_at<=$1 OR i.media_state='ready' OR i.download_reserved_at IS NOT NULL OR NOT f.enabled OR f.archived)`, now); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE twitch_download_grants g SET state=CASE WHEN i.media_state='ready' OR i.download_reserved_at IS NOT NULL THEN 'consumed' ELSE 'released' END FROM twitch_imports i,twitch_flows f WHERE i.id=g.import_id AND f.id=g.flow_id AND g.state='active' AND(g.expires_at<=$1 OR i.media_state='ready' OR i.state IN('failed','expired') OR i.download_reserved_at IS NOT NULL OR NOT f.enabled OR f.archived)`, now); err != nil {
 		return out, err
 	}
 	day := now.In(mustLocation(settings.Timezone)).Format("2006-01-02")

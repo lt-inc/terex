@@ -62,6 +62,13 @@ type Task struct {
 	Reservation twitch.Import
 }
 
+type FailedImport struct {
+	ClipID      string
+	Reservation twitch.Import
+	Reason      string
+	FailedAt    time.Time
+}
+
 type ClipStatus struct {
 	ClipID        string     `json:"clip_id"`
 	State         string     `json:"state"`

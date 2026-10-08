@@ -252,6 +252,55 @@ func TestPostgresReservationsRecoveryAndFencing(t *testing.T) {
 	if err = s.pool.QueryRow(ctx, `SELECT state FROM twitch_collector.clips WHERE clip_id=$1`, shared.ID).Scan(&exhaustedState); err != nil || exhaustedState != "failed" {
 		t.Fatal("empty claim rolled back exhausted state", exhaustedState, err)
 	}
+	admitted := shared
+	admitted.ID = "admitted-before-upload"
+	if err = s.UpsertClips(ctx, []domain.Clip{admitted}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ObserveFlow(ctx, f2, []domain.Clip{admitted}); err != nil {
+		t.Fatal(err)
+	}
+	grant := twitch.DownloadGrant{ClipID: admitted.ID, ImportID: "admitted-import", FlowID: f2.ID, FlowVersion: f2.Version, Format: "compilation", Source: twitch.Source{ClipID: admitted.ID, Language: "en", LanguageSource: "clip", DurationSec: 20}}
+	if n, err = s.QueueAdmissions(ctx, []twitch.DownloadGrant{grant}, now); err != nil || n != 1 {
+		t.Fatal("admission was not queued", n, err)
+	}
+	task, err = s.Claim(ctx, time.Minute)
+	if err != nil || task == nil || task.Reservation.ImportID != grant.ImportID || task.Reservation.UploadGeneration != 0 || task.Reservation.Source.LanguageSource != "clip" {
+		t.Fatal("admission lost its pre-upload identity", task, err)
+	}
+	if err = s.Fail(ctx, *task, "import", "filters rejected before first upload", nil); err != nil {
+		t.Fatal(err)
+	}
+	failures, err := s.FailedImports(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failureFound := false
+	for _, failure := range failures {
+		if failure.Reservation.ImportID == grant.ImportID {
+			failureFound = true
+			if err = s.RetryClip(ctx, failure.ClipID); err != nil {
+				t.Fatal(err)
+			}
+			task, err = s.Claim(ctx, time.Minute)
+			if err != nil || task == nil {
+				t.Fatal("failed admission could not retry", task, err)
+			}
+			if err = s.Fail(ctx, *task, "import", "new terminal failure", nil); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.FailedImportSynced(ctx, failure); err != nil {
+				t.Fatal(err)
+			}
+			var prematurelySynced bool
+			if err = s.pool.QueryRow(ctx, `SELECT failure_synced_at IS NOT NULL FROM twitch_collector.download_tasks WHERE clip_id=$1`, failure.ClipID).Scan(&prematurelySynced); err != nil || prematurelySynced {
+				t.Fatal("late acknowledgement swallowed a new terminal failure", prematurelySynced, err)
+			}
+		}
+	}
+	if !failureFound {
+		t.Fatal("terminal failure lost its durable generation-zero release")
+	}
 	// A denied preparation never starts yt-dlp and must not consume the daily
 	// download quota or prevent another flow from using its available slot.
 	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.clips SET reserved_at=$1`, now.Add(-24*time.Hour)); err != nil {
