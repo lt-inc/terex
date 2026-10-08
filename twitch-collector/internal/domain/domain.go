@@ -46,12 +46,14 @@ type Clip struct {
 	SHA256          string    `json:"sha256,omitempty"`
 	GameID          string    `json:"game_id,omitempty"`
 	Language        string    `json:"language,omitempty"`
+	LanguageSource  string    `json:"language_source,omitempty"`
 	ThumbnailURL    string    `json:"thumbnail_url,omitempty"`
 	FlowID          string    `json:"flow_id,omitempty"`
 	FlowVersion     int       `json:"flow_version,omitempty"`
 }
 
 type Task struct {
+	Epoch       int64
 	Clip        Clip
 	Token       string
 	Attempt     int
@@ -67,6 +69,21 @@ type ClipStatus struct {
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	Attempt       int        `json:"attempt"`
+}
+
+// DiscoveryReport describes a bounded metadata search, never a download queue.
+type DiscoveryReport struct {
+	FlowID           string    `json:"flow_id"`
+	BroadcasterID    string    `json:"broadcaster_id,omitempty"`
+	Language         string    `json:"language,omitempty"`
+	Fetched          int       `json:"fetched"`
+	LanguageMatched  int       `json:"language_matched"`
+	LanguageRejected int       `json:"language_rejected"`
+	LanguageUnknown  int       `json:"language_unknown"`
+	Pages            int       `json:"pages"`
+	PageLimitReached bool      `json:"page_limit_reached"`
+	CheckedAt        time.Time `json:"checked_at"`
+	Error            string    `json:"error,omitempty"`
 }
 
 // Flow interfaces keep the v1 adapter available during a rolling deployment.

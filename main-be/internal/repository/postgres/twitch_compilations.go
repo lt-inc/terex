@@ -266,7 +266,15 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 		}
 		if err == nil {
 			u.FlowID = prev.FlowID
-			m, err = freezeFlowAssembly(ctx, tx, u.CompilationRequest, flow, id)
+			var current twitch.Flow
+			current, err = currentFlowPolicy(ctx, tx, prev.FlowID)
+			if err == nil {
+				flow.Language = current.Language
+				flow.SourceMode = current.SourceMode
+				flow.CategoryID = current.CategoryID
+				flow.BroadcasterIDs = current.BroadcasterIDs
+				m, err = freezeFlowAssembly(ctx, tx, u.CompilationRequest, flow, id)
+			}
 		}
 	} else {
 		if prev.FlowConfig != nil {
@@ -316,7 +324,7 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, id); err != nil {
 		return prev, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,status='on_hold',version=version+1,metadata=$3,cancel_requested=FALSE,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN('cancelled','published','needs_attention')`, id, rid, mustJSON(spec)); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait')THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,metadata=$3,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN('cancelled','published','needs_attention')`, id, rid, mustJSON(spec)); err != nil {
 		return prev, err
 	}
 	if err = saveAssemblyItems(ctx, tx, rid, m.Assembly); err != nil {
@@ -326,12 +334,6 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 		if err = reserveAssemblyUse(ctx, tx, flow, id, m, now); err != nil {
 			return prev, err
 		}
-	}
-	if _, err = tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=$1`, id); err != nil {
-		return prev, err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=NULL,auto_hold=FALSE WHERE clip_id=$1 AND started_at IS NULL`, id); err != nil {
-		return prev, err
 	}
 	if err = queueInitialRender(ctx, tx, rid, prev.Version+1, now); err != nil {
 		return prev, err

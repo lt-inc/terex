@@ -28,6 +28,9 @@ import type {
   TwitchCapacity,
   TwitchPolicyPreview,
   TwitchStorage,
+  TwitchFlowDiagnostics,
+  TwitchResetPreview,
+  TwitchResetStatus,
 } from "@/types/twitch";
 
 export class ApiError extends Error {
@@ -440,3 +443,8 @@ export const cleanupTwitchStorage = (execute: boolean) =>
   );
 export const keepTwitchMaterial = (kind: "imports" | "clips", id: string, keep: boolean) =>
   request<{ keep: boolean }>(`/twitch/${kind}/${encodeURIComponent(id)}/retention`, json("POST", { keep }));
+
+export const fetchTwitchDiagnostics = (id: string) => request<TwitchFlowDiagnostics>(`/twitch/flows/${encodeURIComponent(id)}/diagnostics`);
+export const previewTwitchReset = () => request<TwitchResetPreview>("/twitch/reset/preview",json("POST",{}));
+export const startTwitchReset = (preview_token: string, confirmation: string) => request<TwitchResetStatus>("/twitch/reset",json("POST",{preview_token,confirmation}));
+export const fetchTwitchReset = () => request<TwitchResetStatus>("/twitch/reset");

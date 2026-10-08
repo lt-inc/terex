@@ -63,6 +63,18 @@ func (s *Service) CollectorConfig(ctx context.Context) (t.CollectorConfig, error
 	}
 	out := t.CollectorConfig{Settings: settings, Flows: flows}
 	if repo, ok := s.Repo.(interface {
+		TwitchReset(context.Context) (t.ResetStatus, error)
+	}); ok {
+		reset, err := repo.TwitchReset(ctx)
+		if err != nil {
+			return out, err
+		}
+		out.Epoch = reset.Epoch
+		if reset.State != "idle" && reset.State != "completed" {
+			out.Maintenance = &t.ResetMaintenance{ID: reset.ID, Epoch: reset.Epoch, State: reset.State}
+		}
+	}
+	if repo, ok := s.Repo.(interface {
 		BlockedTwitchSources(context.Context) ([]string, error)
 	}); ok {
 		out.BlockedSourceIDs, e = repo.BlockedTwitchSources(ctx)

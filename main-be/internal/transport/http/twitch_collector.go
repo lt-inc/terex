@@ -104,7 +104,7 @@ func (a *API) resolveFlowChannels(ctx context.Context, f *twitch.Flow, create bo
 }
 func (a *API) collectorFilterSources(r *http.Request, flow, state string) ([]string, error) {
 	switch state {
-	case "failed", "queued", "downloading", "importing", "verifying", "retry_wait", "waiting_quota":
+	case "failed", "queued", "downloading", "importing", "verifying", "retry_wait", "waiting_quota", "waiting_capacity":
 	default:
 		return nil, nil
 	}

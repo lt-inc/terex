@@ -41,7 +41,7 @@ func flowFixture(t *testing.T, s *Store, account int64, auto bool, now time.Time
 	return out
 }
 func flowSource(slug, broadcaster string, duration float64, now time.Time) twitch.Source {
-	return twitch.Source{Platform: "twitch", ClipID: slug, BroadcasterID: broadcaster, BroadcasterLogin: "streamer", URL: "https://clips.twitch.tv/" + slug, Title: slug, CreatedAt: now.Add(-2 * time.Hour), ObservedAt: now, ViewCount: 1000, DurationSec: duration, Language: "ru"}
+	return twitch.Source{Platform: "twitch", ClipID: slug, BroadcasterID: broadcaster, BroadcasterLogin: "streamer", URL: "https://clips.twitch.tv/" + slug, Title: slug, CreatedAt: now.Add(-2 * time.Hour), ObservedAt: now, ViewCount: 1000, DurationSec: duration, Language: "ru", LanguageSource: "clip"}
 }
 func reserveFlow(t *testing.T, s *Store, f twitch.Flow, src twitch.Source, now time.Time) twitch.Import {
 	t.Helper()
@@ -99,6 +99,7 @@ func TestTwitchFlowsShareVerifiedMediaAndFencePinnedUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Enabled = false
+	a.Language = "en" // A changed owner must not interrupt another matching consumer.
 	var err error
 	a, err = s.SaveTwitchFlow(ctx, a, false, now.Add(time.Second))
 	if err != nil {
@@ -121,6 +122,7 @@ func TestTwitchFlowsShareVerifiedMediaAndFencePinnedUpload(t *testing.T) {
 		t.Fatal(other, err)
 	}
 	a.Enabled = true
+	a.Language = "ru"
 	a, err = s.SaveTwitchFlow(ctx, a, false, now.Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -242,11 +244,8 @@ func TestTwitchFlowsScheduleAtomicallyAndKeepEditedCompilationsManual(t *testing
 			}
 		}
 	}
-	if err = s.TickTwitchFlows(ctx, now.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
 	comp, err := s.AutoFlowCompilation(ctx, f.ID, now)
-	if err != nil || comp.Compilation == nil || comp.Reason != "daily_draft_exists" {
+	if err != nil || comp.Compilation == nil || !comp.Created {
 		t.Fatal(comp, err)
 	}
 	completeRender(t, s, comp.Compilation.RevisionID, now.Add(time.Minute), nil)

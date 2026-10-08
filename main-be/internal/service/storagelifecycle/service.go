@@ -80,6 +80,14 @@ func (s *Service) Stats(ctx context.Context) (domain.TwitchStorageStats, error) 
 	defer s.mu.Unlock()
 	return s.stats(ctx)
 }
+
+// RefreshInventory is used by explicit reset after writers have drained. It
+// neither applies retention nor deletes anything, and rejects partial scans.
+func (s *Service) RefreshInventory(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refresh(ctx, true)
+}
 func (s *Service) Preview(ctx context.Context) (domain.TwitchStorageStats, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -45,6 +45,9 @@ func freezeFlowAssembly(ctx context.Context, tx pgx.Tx, req twitch.CompilationRe
 		if json.Unmarshal(b, &r) != nil || json.Unmarshal(vb, &v) != nil {
 			return m, domain.ErrInvalid
 		}
+		if !sourceMatches(f, r.Source) {
+			return m, fmt.Errorf("%w: исходник не соответствует текущим каналам, категории или языку потока", domain.ErrConflict)
+		}
 		if err = storageRefsAvailable(ctx, tx, v.Original); err != nil {
 			return m, err
 		}
@@ -115,7 +118,7 @@ func createFlowCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.Compilat
 	if err = reserveAssemblyUse(ctx, tx, f, id, m, now); err != nil {
 		return domain.Compilation{}, err
 	}
-	auto := day != nil && f.AutoPublish && f.AutoEnabledAt != nil && !now.Before(*f.AutoEnabledAt)
+	auto := f.AutoPublish && f.AutoEnabledAt != nil && !now.Before(*f.AutoEnabledAt)
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,account_id,youtube_channel_id,format,config,initial_revision_id,auto_eligible,created_at)VALUES($1,$2,$3,$4,'compilation',$5,$6,$7,$8)`, id, f.ID, f.AccountID, f.YouTubeChannelID, mustJSON(f), rid, auto, now); err != nil {
 		return domain.Compilation{}, err
 	}
@@ -167,158 +170,4 @@ func selectFlowCandidates(pool []flowCandidate, f twitch.Flow) []twitch.Compilat
 		out = append(out, twitch.CompilationItemRequest{SourceID: c.ID, EndSec: c.Duration})
 	}
 	return out
-}
-func (s *Store) AutoFlowCompilation(ctx context.Context, id string, now time.Time) (domain.AutoCompilationResult, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return domain.AutoCompilationResult{}, err
-	}
-	defer tx.Rollback(ctx)
-	if err = lockTwitch(ctx, tx); err != nil {
-		return domain.AutoCompilationResult{}, err
-	}
-	f, err := flowByID(ctx, tx, id)
-	if err != nil {
-		return domain.AutoCompilationResult{}, err
-	}
-	loc, _ := time.LoadLocation(f.Timezone)
-	local := now.In(loc)
-	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-	out := domain.AutoCompilationResult{Timezone: f.Timezone, LocalDate: day.Format("2006-01-02"), MinimumClips: f.CompilationMinClips, WindowHours: f.WindowHours, MinimumDurationSec: f.CompilationMinDurationSec, ScheduledAt: day.Add(time.Duration(f.CompilationHour) * time.Hour)}
-	if !f.Enabled || !f.CompilationsEnabled {
-		out.Reason = "collection_disabled"
-		out.Message = "Подборки потока выключены"
-		return out, nil
-	}
-	if err = confirmedFlow(ctx, tx, f); err != nil {
-		out.Reason = "target_account_missing"
-		out.Message = err.Error()
-		return out, nil
-	}
-	if now.Before(out.ScheduledAt) {
-		out.Reason = "before_scheduled_hour"
-		out.Message = "Подборка будет подготовлена после " + out.ScheduledAt.Format("15:04")
-		out.NextAttemptAt = &out.ScheduledAt
-		return out, nil
-	}
-	var existing string
-	err = tx.QueryRow(ctx, `SELECT clip_id FROM twitch_compilations WHERE flow_id=$1 AND local_date=$2 AND timezone=$3`, id, day, f.Timezone).Scan(&existing)
-	if err == nil {
-		c, e := compilationByID(ctx, tx, existing)
-		out.Compilation = &c
-		out.Reason = "daily_draft_exists"
-		out.Message = "Сегодняшний автоматический черновик уже подготовлен"
-		return out, e
-	}
-	if err != pgx.ErrNoRows {
-		return out, err
-	}
-	mode, err := policyMode(ctx, tx)
-	if err != nil {
-		return out, err
-	}
-	var batch string
-	var targetAt time.Time
-	if mode == "enforce" {
-		if err = expirePreparationTx(ctx, tx, now); err != nil {
-			return out, err
-		}
-		err = tx.QueryRow(ctx, `SELECT id,slot_at FROM twitch_preparation_reservations WHERE flow_id=$1 AND format='compilation' AND state='active' AND clip_id IS NULL AND expires_at>$2 ORDER BY slot_at LIMIT 1`, id, now).Scan(&batch, &targetAt)
-		if err != nil && err != pgx.ErrNoRows {
-			return out, err
-		}
-		if batch == "" {
-			slots, e := calendarSlotsTx(ctx, tx, f, "compilation", 0, "", now)
-			if e != nil {
-				return out, e
-			}
-			for _, s := range slots {
-				if !s.Occupied && !s.Preparing {
-					targetAt = s.At
-					break
-				}
-			}
-		}
-		if targetAt.IsZero() {
-			out.Reason = "calendar_full"
-			out.Message = "Календарь ближайших подборок заполнен; новый рендер не создаётся"
-			next := now.Add(time.Minute)
-			out.NextAttemptAt = &next
-			return out, nil
-		}
-	}
-	rows, err := tx.Query(ctx, `SELECT i.id,m.id,COALESCE(i.request->'source'->>'broadcaster_id',''),COALESCE((m.verified->>'duration_sec')::float8,0),fs.excluded OR i.rejected,CASE WHEN m.storage_state='available' THEN i.media_state ELSE 'expired' END,(i.request->'source'->>'created_at')::timestamptz,EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=m.id),i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 AND($3='' OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.import_id=i.id AND ps.reservation_id=$3)) ORDER BY COALESCE((i.request->'source'->>'view_count')::bigint,0) DESC,fs.created_at,i.id`, id, f.YouTubeChannelID, batch)
-	if err != nil {
-		return out, err
-	}
-	counts := &domain.CompilationSourceCounts{}
-	pool := []flowCandidate{}
-	for rows.Next() {
-		var c flowCandidate
-		var media *string
-		var rejected, used bool
-		var state string
-		var created time.Time
-		var request []byte
-		var src twitch.ImportRequest
-		if err = rows.Scan(&c.ID, &media, &c.Broadcaster, &c.Duration, &rejected, &state, &created, &used, &request); err != nil {
-			rows.Close()
-			return out, err
-		}
-		if err = json.Unmarshal(request, &src); err != nil {
-			rows.Close()
-			return out, err
-		}
-		if media != nil {
-			c.Media = *media
-		}
-		counts.Total++
-		switch {
-		case rejected:
-			counts.Rejected++
-		case state != "ready" || media == nil || c.Duration < f.MinDurationSec || c.Duration > f.MaxDurationSec+0.05:
-			counts.NotReady++
-		case created.Before(now.Add(-time.Duration(f.WindowHours) * time.Hour)):
-			counts.OutsideWindow++
-		case used:
-			counts.AlreadyUsed++
-		case !sourceEligible(f, src.Source, now):
-			counts.Filtered++
-		case mode == "enforce" && !preparationSourceFresh(f, src.Source, targetAt, now):
-			counts.Filtered++
-		default:
-			counts.Eligible++
-			pool = append(pool, c)
-		}
-	}
-	rows.Close()
-	if err = rows.Err(); err != nil {
-		return out, err
-	}
-	out.Sources = counts
-	items := selectFlowCandidates(pool, f)
-	duration := float64(len(items) - 1)
-	for _, v := range items {
-		duration += math.Ceil(v.EndSec*30-1e-7) / 30
-	}
-	out.ReadyDurationSec = math.Max(0, duration)
-	out.MissingDurationSec = math.Max(0, f.CompilationMinDurationSec-out.ReadyDurationSec)
-	if len(items) < f.CompilationMinClips || duration < f.CompilationMinDurationSec {
-		out.Reason = "insufficient_eligible_sources"
-		out.Message = fmt.Sprintf("Готово %d исходников, подборка %.0f сек. Ждём минимум %d исходников и %.0f сек; максимум %.0f сек с переходами.", counts.Eligible, math.Max(0, duration), f.CompilationMinClips, f.CompilationMinDurationSec, f.CompilationMaxDurationSec)
-		return out, nil
-	}
-	req := twitch.CompilationRequest{FlowID: id, Title: f.Name + " | " + day.Format("02.01.2006"), Items: items}
-	if len([]rune(req.Title)) > 100 {
-		req.Title = string([]rune(req.Title)[:100])
-	}
-	c, err := createFlowCompilationTx(ctx, tx, req, &day, now)
-	if err != nil {
-		return out, err
-	}
-	out.Created = true
-	out.Compilation = &c
-	out.Reason = "created"
-	out.Message = "Подборка подготовлена и отправлена на обработку"
-	return out, tx.Commit(ctx)
 }

@@ -90,3 +90,5 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, object string) error 
 	_, err := c.c.DeleteObject(ctx, &gpuv1.ObjectRef{Bucket: bucket, Object: object})
 	return err
 }
+
+func (c *Client) ResetGateway() workflow.ResetGateway { return workflow.NewResetGatewayClient(c.conn) }

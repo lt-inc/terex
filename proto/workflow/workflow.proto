@@ -26,3 +26,6 @@ service StorageGateway {
   rpc Inventory(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
   rpc DeleteTwitchObject(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
 }
+service ResetGateway {
+  rpc SetTwitchMaintenance(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+}

@@ -50,7 +50,7 @@ func (c *Client) ReserveImport(ctx context.Context, t domain.Task) (twitch.Impor
 	if r := []rune(title); len(r) > 100 {
 		title = string(r[:100])
 	}
-	q := twitch.ImportRequest{SchemaVersion: 2, IdempotencyKey: "twitch:" + t.Clip.ID, FlowID: t.FlowID, FlowVersion: t.FlowVersion, ReservationID: t.Reservation.ReservationID, UploadGeneration: t.Reservation.UploadGeneration, Source: twitch.Source{
+	q := twitch.ImportRequest{Epoch: t.Epoch, SchemaVersion: 2, IdempotencyKey: "twitch:" + t.Clip.ID, FlowID: t.FlowID, FlowVersion: t.FlowVersion, ReservationID: t.Reservation.ReservationID, UploadGeneration: t.Reservation.UploadGeneration, Source: twitch.Source{
 		Platform: "twitch", ClipID: t.Clip.ID, BroadcasterID: t.Clip.BroadcasterID, BroadcasterLogin: t.Clip.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + t.Clip.ID, CreatedAt: t.Clip.CreatedAt, ObservedAt: time.Now().UTC(), ViewCount: t.Clip.ViewCount, DurationSec: t.Clip.Duration, VideoID: t.Clip.VideoID, VODOffset: t.Clip.VODOffset, GameID: t.Clip.GameID, Language: t.Clip.Language, ThumbnailURL: t.Clip.ThumbnailURL}}
 	var out twitch.Import
 	err := c.request(ctx, "POST", "/api/imports", q, &out)
@@ -97,5 +97,5 @@ func (c *Client) UploadImport(ctx context.Context, imp twitch.Import, file domai
 		return err
 	}
 	var completed twitch.Import
-	return c.request(ctx, "POST", "/api/imports/"+url.PathEscape(imp.ImportID)+"/complete", twitch.ImportCompleteRequest{SHA256: file.SHA256, SizeBytes: file.Size, UploadGeneration: imp.UploadGeneration}, &completed)
+	return c.request(ctx, "POST", "/api/imports/"+url.PathEscape(imp.ImportID)+"/complete", twitch.ImportCompleteRequest{Epoch: imp.Epoch, SHA256: file.SHA256, SizeBytes: file.Size, UploadGeneration: imp.UploadGeneration}, &completed)
 }

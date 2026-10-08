@@ -24,6 +24,7 @@ type Config struct {
 	CollectorToken              string
 	TwitchCleanupEnabled        bool
 	TwitchCleanupInterval       time.Duration
+	TwitchResetInterval         time.Duration
 	TwitchStoragePrometheusURL  string
 	TwitchStorageMinFreeBytes   int64
 	TwitchStorageMinFreePercent float64
@@ -48,6 +49,7 @@ func Load() Config {
 		CollectorToken:              os.Getenv("COLLECTOR_SERVICE_TOKEN"),
 		TwitchCleanupEnabled:        os.Getenv("TWITCH_CLEANUP_ENABLED") == "true",
 		TwitchCleanupInterval:       positiveDuration("TWITCH_CLEANUP_INTERVAL", time.Hour),
+		TwitchResetInterval:         positiveDuration("TWITCH_RESET_INTERVAL", 5*time.Second),
 		TwitchStoragePrometheusURL:  os.Getenv("TWITCH_STORAGE_PROMETHEUS_URL"),
 		TwitchStorageMinFreeBytes:   positiveInt64("TWITCH_STORAGE_MIN_FREE_BYTES", 1<<30),
 		TwitchStorageMinFreePercent: percentage("TWITCH_STORAGE_MIN_FREE_PERCENT", 10),

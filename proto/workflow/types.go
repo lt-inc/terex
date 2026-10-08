@@ -69,6 +69,8 @@ type PublicationWork struct {
 }
 
 type RenderWork struct {
+	Epoch      int64          `json:"epoch"`
+	Twitch     bool           `json:"twitch,omitempty"`
 	RevisionID int64          `json:"revision_id"`
 	ClipID     string         `json:"clip_id"`
 	JobID      string         `json:"job_id"`

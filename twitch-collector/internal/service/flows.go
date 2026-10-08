@@ -16,6 +16,9 @@ func flowBlockReason(c twitch.CollectorConfig, err error, ready bool) string {
 	if err != nil {
 		return "Не удалось получить настройки Terex: " + safeErrorMessage(err, "проверьте связь и служебный токен")
 	}
+	if c.Maintenance != nil {
+		return "Полный сброс Twitch: новые задания временно остановлены"
+	}
 	if !ready {
 		return "Не заданы TWITCH_CLIENT_ID и TWITCH_CLIENT_SECRET"
 	}
@@ -45,6 +48,11 @@ func syncFlowConfig(ctx context.Context, store domain.FlowStore, cfg twitch.Coll
 func (s *Service) scheduleFlows(ctx context.Context) {
 	api := s.terex.(domain.FlowTerex)
 	cfg, err := api.CollectorConfig(ctx)
+	if err == nil {
+		if skip, e := s.handleReset(ctx, cfg); skip || e != nil {
+			return
+		}
+	}
 	if reason := flowBlockReason(cfg, err, s.twitch.Ready()); reason != "" {
 		s.logGate(ctx, "scheduler", reason, err)
 		return
@@ -76,6 +84,9 @@ func (s *Service) startFlowCheck(id string, force bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.resetting {
+		return domain.ErrPaused
+	}
 	if s.checking {
 		return domain.ErrConflict
 	}
@@ -102,11 +113,15 @@ func clipSource(c domain.Clip) twitch.Source {
 	if r := []rune(title); len(r) > 100 {
 		title = string(r[:100])
 	}
-	return twitch.Source{Platform: "twitch", ClipID: c.ID, BroadcasterID: c.BroadcasterID, BroadcasterLogin: c.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + c.ID, CreatedAt: c.CreatedAt, ObservedAt: time.Now().UTC(), ViewCount: c.ViewCount, DurationSec: c.Duration, VideoID: c.VideoID, VODOffset: c.VODOffset, GameID: c.GameID, Language: c.Language, ThumbnailURL: c.ThumbnailURL}
+	return twitch.Source{Platform: "twitch", ClipID: c.ID, BroadcasterID: c.BroadcasterID, BroadcasterLogin: c.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + c.ID, CreatedAt: c.CreatedAt, ObservedAt: time.Now().UTC(), ViewCount: c.ViewCount, DurationSec: c.Duration, VideoID: c.VideoID, VODOffset: c.VODOffset, GameID: c.GameID, Language: c.Language, LanguageSource: c.LanguageSource, ThumbnailURL: c.ThumbnailURL}
 }
 func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
 	defer cancel()
+	s.mu.Lock()
+	s.checkCancel = cancel
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.checkCancel = nil; s.mu.Unlock() }()
 	ctx, span := telemetry.Start(ctx, "collector.check_flows")
 	defer span.End()
 	defer func() { s.mu.Lock(); s.checking = false; s.mu.Unlock() }()
@@ -282,7 +297,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 		}
 		observationFailed := false
 		if len(all) == 0 {
-			if _, e := api.Observe(ctx, twitch.ObservationRequest{FlowID: flow.ID, FlowVersion: flow.Version, Sources: []twitch.Source{}}); e != nil {
+			if _, e := api.Observe(ctx, twitch.ObservationRequest{Epoch: cfg.Epoch, FlowID: flow.ID, FlowVersion: flow.Version, Sources: []twitch.Source{}}); e != nil {
 				message = safeErrorMessage(e, "Не удалось записать проверку потока")
 				observationFailed = true
 			}
@@ -296,7 +311,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 			for _, c := range all[offset:end] {
 				sources = append(sources, clipSource(c))
 			}
-			imports, e := api.Observe(ctx, twitch.ObservationRequest{FlowID: flow.ID, FlowVersion: flow.Version, Sources: sources})
+			imports, e := api.Observe(ctx, twitch.ObservationRequest{Epoch: cfg.Epoch, FlowID: flow.ID, FlowVersion: flow.Version, Sources: sources})
 			if e != nil {
 				message = safeErrorMessage(e, "Не удалось передать наблюдения в Terex")
 				log.WarnContext(ctx, message, errorFields(e)...)
@@ -339,7 +354,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 			if maxAge <= 0 {
 				maxAge = 72
 			}
-			if !excluded[c.ID] && (flow.Language == "" || flow.Language == c.Language) && !c.CreatedAt.Add(time.Duration(maxAge)*time.Hour).Before(started) {
+			if !excluded[c.ID] && (flow.Language == "" || flow.Language == c.Language && c.LanguageSource == "clip") && !c.CreatedAt.Add(time.Duration(maxAge)*time.Hour).Before(started) {
 				matching = append(matching, c)
 			}
 		}
@@ -357,6 +372,22 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 	if pending >= cfg.Settings.BacklogLimit {
 		message = fmt.Sprintf("Ожидают обработки %d источников; предел %d", pending, cfg.Settings.BacklogLimit)
 		return
+	}
+	if cfg.Settings.AdmissionMode == "enforce" {
+		s.mu.Lock()
+		s.lastAdmissionsAt = time.Time{}
+		s.mu.Unlock()
+		reserved, err = s.queueAdmissions(ctx, cfg)
+		if err != nil {
+			message = safeErrorMessage(err, "Не удалось получить назначения main-be")
+		}
+		return
+	}
+	// Shadow calculates the new distribution without changing current behavior.
+	if api, ok := api.(interface {
+		Admissions(context.Context, twitch.AdmissionRequest) (twitch.AdmissionResult, error)
+	}); ok {
+		_, _ = api.Admissions(ctx, twitch.AdmissionRequest{Epoch: cfg.Epoch, Limit: cfg.Settings.DailyDownloads})
 	}
 	selected := []domain.Clip{}
 	seen := map[string]bool{}
@@ -385,14 +416,30 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 
 func (s *Service) flowWorkerOnce(ctx context.Context, api domain.FlowTerex) {
 	cfg, err := api.CollectorConfig(ctx)
+	if err == nil {
+		if skip, e := s.handleReset(ctx, cfg); skip || e != nil {
+			return
+		}
+	}
 	if reason := flowBlockReason(cfg, err, s.twitch.Ready()); reason != "" {
 		s.logGate(ctx, "worker", reason, err)
 		return
 	}
+	ctx, release, err := s.beginResetWorker(ctx, cfg.Epoch)
+	if err != nil {
+		return
+	}
+	defer release()
 	store := s.store.(domain.FlowStore)
 	if err = syncFlowConfig(ctx, store, cfg); err != nil {
 		s.logGate(ctx, "worker", "Не удалось обновить состояние потоков", err)
 		return
+	}
+	if cfg.Settings.AdmissionMode == "enforce" {
+		if _, err = s.queueAdmissions(ctx, cfg); err != nil {
+			s.logGate(ctx, "admissions", "Не удалось получить назначения подготовки", err)
+			return
+		}
 	}
 	pending, err := s.terex.PendingCount(ctx)
 	if err != nil || pending >= cfg.Settings.BacklogLimit {
@@ -423,7 +470,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 	stage := "reservation"
 	guard := func(c context.Context) error {
 		cfg, e := api.CollectorConfig(c)
-		if e != nil || !cfg.Settings.Enabled {
+		if e != nil || !cfg.Settings.Enabled || cfg.Maintenance != nil || task.Epoch != cfg.Epoch {
 			return domain.ErrPaused
 		}
 		if e = syncFlowConfig(c, store, cfg); e != nil {

@@ -44,18 +44,26 @@ type AutoCompilationResult struct {
 	MinimumDurationSec float64                  `json:"minimum_duration_sec"`
 	ReadyDurationSec   float64                  `json:"ready_duration_sec"`
 	MissingDurationSec float64                  `json:"missing_duration_sec"`
+	SelectedClips      int                      `json:"selected_clips"`
 	Sources            *CompilationSourceCounts `json:"sources,omitempty"`
 }
 
 // Each import is counted once, in rejection, readiness, age, reuse order.
 type CompilationSourceCounts struct {
-	Total         int `json:"total"`
-	Eligible      int `json:"eligible"`
-	Rejected      int `json:"rejected"`
-	NotReady      int `json:"not_ready"`
-	OutsideWindow int `json:"outside_window"`
-	AlreadyUsed   int `json:"already_used"`
-	Filtered      int `json:"filtered"`
+	Total            int `json:"total"`
+	Eligible         int `json:"eligible"`
+	Rejected         int `json:"rejected"`
+	NotReady         int `json:"not_ready"`
+	OutsideWindow    int `json:"outside_window"`
+	AlreadyUsed      int `json:"already_used"`
+	Filtered         int `json:"filtered"`
+	DownloadPending  int `json:"download_pending"`
+	Downloading      int `json:"downloading"`
+	Verifying        int `json:"verifying"`
+	Failed           int `json:"failed"`
+	Expired          int `json:"expired"`
+	LanguageFiltered int `json:"language_filtered"`
+	DurationFiltered int `json:"duration_filtered"`
 }
 type TwitchRepo interface {
 	TwitchSettings(context.Context) (twitch.Settings, error)

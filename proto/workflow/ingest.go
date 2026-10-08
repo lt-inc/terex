@@ -24,6 +24,7 @@ type AssemblySpec struct {
 	Items                []AssemblyItem `json:"items"`
 }
 type ReserveUploadRequest struct {
+	Epoch    int64     `json:"epoch"`
 	ImportID string    `json:"import_id"`
 	Ref      ObjectRef `json:"ref"`
 }
@@ -33,6 +34,7 @@ type ReserveUploadResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 type VerifyUploadRequest struct {
+	Epoch               int64     `json:"epoch"`
 	ImportID            string    `json:"import_id"`
 	Ref                 ObjectRef `json:"ref"`
 	ExpectedSHA256      string    `json:"expected_sha256"`

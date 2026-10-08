@@ -239,7 +239,7 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
       setTitle(result.title);
       setItems(result.items ?? []);
       setNotice(
-        "Подборка отправлена на рендер. Посмотрите готовую версию в редакторе перед одобрением.",
+        "Подборка отправлена на рендер. Готовая версия допускается автоматически; публикация зависит от настроек потока и расписания.",
       );
       if (!clipID)
         router.replace(
@@ -275,7 +275,7 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
       <p className="text-sm text-slate-400">
         Выберите готовые исходники потока, порядок и границы. Между клипами
         добавляется секундная перебивка. Изменение состава создаёт новую версию
-        и снимает одобрение.
+        и удерживает будущий выпуск до готовности нового рендера.
       </p>
       {error && (
         <p role="alert" className="text-sm text-red-400">
@@ -561,7 +561,7 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
           </h2>
           <p className="mt-2 text-sm text-slate-400">
             Обработка: {saved.state} · версия {saved.version} ·{" "}
-            {saved.approved_at ? "Одобрена" : "Ожидает одобрения"}
+            {saved.approved_at ? "Готова · допущена автоматически" : saved.state === "ready" ? "Рендер готов · ожидает автоматических проверок" : "Ожидает готового рендера"}
           </p>
           {saved.error && (
             <p role="alert" className="mt-2 text-sm text-red-400">
@@ -593,15 +593,14 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
               href={`/admin/clips/${encodeURIComponent(saved.clip_id)}`}
               className="text-indigo-400"
             >
-              Открыть редактор для проверки и одобрения →
+              Открыть редактор и расписание →
             </Link>
             <Link href="/admin/calendar" className="text-indigo-400">
               Календарь публикаций →
             </Link>
           </div>
           <p className="mt-3 text-xs text-slate-400">
-            Изменение состава создаёт новый рендер и снимает одобрение. Ручное
-            сохранение требует повторной проверки перед публикацией.
+            Изменение состава создаёт новый рендер. Готовая версия допускается автоматически; будущая публикация ждёт окончания обработки.
           </p>
         </section>
       )}

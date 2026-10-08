@@ -34,6 +34,7 @@ import (
 	"terex/gpu-be/internal/service/renderer"
 	"terex/gpu-be/internal/service/renderworker"
 	"terex/gpu-be/internal/service/reporter"
+	"terex/gpu-be/internal/service/resetgate"
 	"terex/gpu-be/internal/service/storagecleanup"
 	"terex/gpu-be/internal/service/storagegw"
 	"terex/gpu-be/internal/service/workflowgateway"
@@ -100,6 +101,7 @@ func run() error {
 	}
 	defer coordConn.Close()
 	coord := workflow.NewCoordinatorClient(coordConn)
+	resetGate := resetgate.New()
 	workerID, _ := os.Hostname()
 	rendererSvc := &renderer.Service{Store: store, Media: media, Broker: br, State: state, Rep: rep, TmpDir: cfg.TmpDir, AssemblyTmpDir: cfg.AssemblyTmpDir, AssemblyBudgetBytes: cfg.AssemblyBudgetBytes}
 	if err := rendererSvc.PrepareAssemblyScratch(); err != nil {
@@ -113,7 +115,7 @@ func run() error {
 		Renderer:         rendererSvc,
 		Publisher:        &publisher.Service{Pub: publisher.Manual{}, Broker: br},
 		Publication:      &publishworker.Worker{Coordinator: coord, Store: store, Auth: auth, TmpDir: cfg.TmpDir, WorkerID: workerID + "-publish"},
-		RenderRevision:   &renderworker.Worker{Coordinator: coord, Renderer: rendererSvc, WorkerID: workerID + "-render"},
+		RenderRevision:   &renderworker.Worker{Coordinator: coord, Renderer: rendererSvc, WorkerID: workerID + "-render", Reset: resetGate},
 		PublisherWorkers: cfg.PublisherWorkers, RenderRevisionWorkers: cfg.RenderRevisionWorkers,
 	}
 
@@ -124,7 +126,8 @@ func run() error {
 	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	gpuv1.RegisterGpuServiceServer(gs, &tgrpc.Server{State: state, GW: gw})
 	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, TmpDir: cfg.TmpDir})
-	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir})
+	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir, Reset: resetGate})
+	workflow.RegisterResetGatewayServer(gs, resetGate)
 	workflow.RegisterStorageGatewayServer(gs, &storagecleanup.Service{Store: store})
 	go func() { _ = gs.Serve(lis) }()
 	slog.Info("gpu-be started", "grpc", cfg.GRPCAddr)

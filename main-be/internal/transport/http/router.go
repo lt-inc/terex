@@ -18,6 +18,7 @@ import (
 	"terex/main-be/internal/service/publish"
 	"terex/main-be/internal/service/storagelifecycle"
 	twitchservice "terex/main-be/internal/service/twitch"
+	"terex/main-be/internal/service/twitchreset"
 	"terex/main-be/internal/service/workflow"
 )
 
@@ -29,6 +30,7 @@ type API struct {
 	Workflow  *workflow.Service
 	Twitch    *twitchservice.Service
 	Storage   *storagelifecycle.Service
+	Reset     *twitchreset.Service
 	Auth      *OperatorAuth
 	Collector *CollectorProxy
 }
@@ -48,6 +50,8 @@ func (a *API) Router() http.Handler {
 			r.Delete("/twitch/flows/{id}", a.deleteTwitchFlow)
 			r.Post("/twitch/flows/{id}/restore", a.restoreTwitchFlow)
 			r.Get("/twitch/flows/{id}/capacity", a.twitchFlowCapacity)
+			r.Get("/twitch/flows/{id}/diagnostics", a.twitchFlowDiagnostics)
+			r.Post("/twitch/collector/admissions", a.twitchAdmissions)
 			r.Get("/twitch/policy/preview", a.twitchPolicyPreview)
 			r.Post("/twitch/policy/apply", a.twitchPolicyApply)
 			r.Get("/twitch/flows/{id}/clips", a.twitchFlowClips)
@@ -86,6 +90,12 @@ func (a *API) Router() http.Handler {
 			r.Post("/twitch/storage/cleanup", a.cleanupTwitchStorage)
 			r.Post("/twitch/imports/{id}/retention", a.keepTwitchImport)
 			r.Post("/twitch/clips/{clipID}/retention", a.keepTwitchClip)
+		}
+		if a.Reset != nil {
+			r.Post("/twitch/reset/preview", a.previewTwitchReset)
+			r.Post("/twitch/reset", a.startTwitchReset)
+			r.Get("/twitch/reset", a.twitchResetStatus)
+			r.Post("/twitch/reset/collector-ack", a.acknowledgeTwitchReset)
 		}
 		// jobs
 		r.Get("/jobs", a.listJobs)

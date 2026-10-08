@@ -88,7 +88,7 @@ func (a *API) twitchFlowClips(w http.ResponseWriter, r *http.Request) {
 		fail(w, e)
 		return
 	}
-	out, e := a.Twitch.FlowClips(r.Context(), chi.URLParam(r, "id"), domain.FlowClipQuery{Limit: limit, Offset: offset, State: q.Get("state"), Format: q.Get("format"), BroadcasterID: q.Get("broadcaster_id"), Q: q.Get("q"), CollectorSourceIDs: ids})
+	out, e := a.Twitch.FlowClips(r.Context(), chi.URLParam(r, "id"), domain.FlowClipQuery{Limit: limit, Offset: offset, State: q.Get("state"), Format: q.Get("format"), BroadcasterID: q.Get("broadcaster_id"), Q: q.Get("q"), CollectorSourceIDs: ids, ShowFiltered: q.Get("show_filtered") == "true"})
 	if e != nil {
 		fail(w, e)
 		return

@@ -214,6 +214,13 @@ func (s *Store) QueueTwitchCleanup(ctx context.Context, now time.Time, limit int
 	if err = lockTwitch(ctx, tx); err != nil {
 		return 0, err
 	}
+	_, resetActive, e := twitchResetEpoch(ctx, tx)
+	if e != nil {
+		return 0, e
+	}
+	if resetActive {
+		return 0, nil
+	}
 	if err = refreshStorageReferences(ctx, tx); err != nil {
 		return 0, err
 	}
@@ -234,7 +241,15 @@ func (s *Store) QueueTwitchCleanup(ctx context.Context, now time.Time, limit int
 	if err = rows.Err(); err != nil {
 		return 0, err
 	}
+	queued := 0
 	for _, ref := range refs {
+		var external bool
+		if err = tx.QueryRow(ctx, externalStorageRefSQL, ref.Bucket, ref.Object).Scan(&external); err != nil {
+			return 0, err
+		}
+		if external {
+			continue
+		}
 		if _, err = tx.Exec(ctx, `UPDATE twitch_storage_objects SET state='deleting' WHERE bucket=$1 AND object=$2`, ref.Bucket, ref.Object); err != nil {
 			return 0, err
 		}
@@ -244,8 +259,9 @@ func (s *Store) QueueTwitchCleanup(ctx context.Context, now time.Time, limit int
 		if err = markStorageUnavailable(ctx, tx, ref, "deleting", now); err != nil {
 			return 0, err
 		}
+		queued++
 	}
-	return len(refs), tx.Commit(ctx)
+	return queued, tx.Commit(ctx)
 }
 func (s *Store) PendingTwitchDeletion(ctx context.Context, now time.Time, limit int) ([]workflow.ObjectRef, error) {
 	rows, err := s.pool.Query(ctx, `SELECT bucket,object FROM twitch_storage_deletions WHERE state IN('pending','failed') AND next_attempt_at<=$1 ORDER BY created_at LIMIT $2`, now, limit)
@@ -271,6 +287,20 @@ func (s *Store) CheckTwitchDeletion(ctx context.Context, ref workflow.ObjectRef,
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
 		return false, err
+	}
+	_, resetActive, e := twitchResetEpoch(ctx, tx)
+	if e != nil {
+		return false, e
+	}
+	if resetActive {
+		return false, nil
+	}
+	var external bool
+	if err = tx.QueryRow(ctx, externalStorageRefSQL, ref.Bucket, ref.Object).Scan(&external); err != nil {
+		return false, err
+	}
+	if external {
+		return false, nil
 	}
 	if err = refreshStorageReferences(ctx, tx); err != nil {
 		return false, err

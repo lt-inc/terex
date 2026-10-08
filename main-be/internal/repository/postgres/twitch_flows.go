@@ -265,6 +265,42 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 	if err = expirePreparationTx(ctx, tx, now); err != nil {
 		return f, err
 	}
+	if !create {
+		rows, e := tx.Query(ctx, `SELECT p.id,p.clip_id,COALESCE(p.revision_id,0)FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=$1 AND p.started_at IS NULL AND p.status NOT IN('published','cancelled','needs_attention')`, f.ID)
+		if e != nil {
+			return f, e
+		}
+		type pending struct {
+			ID       int64
+			Clip     string
+			Revision int64
+		}
+		items := []pending{}
+		for rows.Next() {
+			var p pending
+			if e = rows.Scan(&p.ID, &p.Clip, &p.Revision); e != nil {
+				rows.Close()
+				return f, e
+			}
+			items = append(items, p)
+		}
+		rows.Close()
+		if e = rows.Err(); e != nil {
+			return f, e
+		}
+		for _, p := range items {
+			v, e := flowFilterViolationTx(ctx, tx, p.Clip, p.Revision)
+			if e != nil {
+				return f, e
+			}
+			if v != nil {
+				v.PublicationID = p.ID
+				if e = holdPolicyPublication(ctx, tx, *v, now); e != nil {
+					return f, e
+				}
+			}
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return f, err
 	}

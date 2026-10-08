@@ -430,6 +430,7 @@ function EventModal({
           {event.account_name} · {event.platform} · {event.state} · render
           revision {event.revision_id ?? "original"}
         </p>
+        {twitchPublication && event.state === "on_hold" && event.error === "Выберите время публикации в календаре" && <p className="rounded-lg border border-indigo-900 p-3 text-sm text-indigo-200">Версия готова и допущена автоматически. Выберите время ниже и нажмите «Назначить время». Автопубликация потока выключена, поэтому выпуск ожидает вашего расписания.</p>}
         <Link
           className="text-indigo-400 text-sm"
           href={`/admin/clips/${encodeURIComponent(event.clip_id)}`}
@@ -452,7 +453,7 @@ function EventModal({
           {event.freshness_override && <p className="mt-2 text-emerald-300">Для сохранённых версии и времени уже подтверждено исключение. Новая дата требует повторного подтверждения.</p>}
           <p className="mt-2 text-slate-400">Назначение Twitch-выпуска проверяет горизонт календаря и возраст всех исходников. Если выбранная дата выходит за ограничения, сервер укажет причину.</p>
           <label className="mt-3 flex items-start gap-2 text-amber-100"><input type="checkbox" className="mt-0.5" checked={freshnessOverride} disabled={busy} onChange={(event) => setFreshnessOverride(event.target.checked)} /><span>Я подтверждаю исключение из правил актуальности и горизонта для этой версии и даты. Решение будет сохранено; изменение даты или версии потребует нового подтверждения.</span></label>
-          <p className="mt-2 text-slate-500">Кнопка переноса применяет выбранную дату. Одобрение и «Upload now» применяются к сохранённому плану, а не к несохранённому полю даты.</p>
+          <p className="mt-2 text-slate-500">Кнопка переноса применяет выбранную дату. «Upload now» применяется к сохранённому плану, а не к несохранённому полю даты.</p>
         </div>}
         <button
           className={button}
@@ -463,7 +464,7 @@ function EventModal({
           }
           onClick={reschedule}
         >
-          Reschedule this account
+          {twitchPublication ? "Назначить время" : "Reschedule this account"}
         </button>
         <div className="grid grid-cols-2 gap-2">
           {[
@@ -473,7 +474,7 @@ function EventModal({
             "pending_approval",
             "needs_attention",
           ].includes(event.state) &&
-            !isStarted(event) && (
+            !isStarted(event) && !twitchPublication && (
               <button
                 disabled={busy}
                 className="bg-indigo-600 disabled:opacity-40 rounded-lg p-2 text-sm"
@@ -529,7 +530,7 @@ function EventModal({
               </button>
             )}
         </div>
-        {event.error && <p className="text-red-400 text-sm">{event.error}</p>}
+        {event.error && <p className={event.error === "Выберите время публикации в календаре" ? "text-indigo-200 text-sm" : "text-red-400 text-sm"}>{event.error}</p>}
         {event.external_url && (
           <a
             className="text-indigo-400 text-sm"

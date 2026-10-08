@@ -142,6 +142,17 @@ func Handler(service Service, token string) http.Handler {
 		out, err := api.ClipStatuses(r.Context(), r.PathValue("id"), ids)
 		result(w, 200, map[string]any{"items": out}, err)
 	}))
+	mux.HandleFunc("GET /api/flows/{id}/diagnostics", auth(func(w http.ResponseWriter, r *http.Request) {
+		api, ok := service.(interface {
+			FlowDiagnostics(context.Context, string) (domain.FlowDiagnostics, error)
+		})
+		if !ok {
+			reply(w, 503, map[string]string{"error": "flow diagnostics unavailable"})
+			return
+		}
+		out, err := api.FlowDiagnostics(r.Context(), r.PathValue("id"))
+		result(w, 200, out, err)
+	}))
 	return mux
 }
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {

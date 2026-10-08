@@ -145,7 +145,7 @@ export default function ClipsPage() {
                     href={`/admin/clips/${encodeURIComponent(c.clip_id)}`}
                     className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-center text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
                   >
-                    Review & approve
+                    {c.clip_id.startsWith("twitch-") || c.clip_id.startsWith("compilation-") ? "Редактор · автоматический допуск после рендера" : "Review & approve"}
                   </Link>
                   <button
                     disabled={busyIds.has(c.clip_id)}

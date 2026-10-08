@@ -71,6 +71,9 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	if err != nil {
 		return err
 	}
+	if err = twitchResetClipAllowed(ctx, tx, p.ClipID); err != nil {
+		return err
+	}
 	if p.Version != u.Version {
 		return domain.ErrConflict
 	}
@@ -99,7 +102,18 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 			state = "scheduled"
 		}
 	}
-	_, err = tx.Exec(ctx, `UPDATE publications SET publish_at=$2,timezone=$3,metadata=$4,status=$5,version=version+1,error=NULL WHERE id=$1`, id, p.PublishAt, p.Timezone, mustJSON(p.PublicationMetadata), state)
+	var twitchReady, flowAllowed bool
+	var holdReason string
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clips c JOIN jobs j ON j.job_id=c.job_id JOIN clip_revisions r ON r.id=$2 WHERE c.clip_id=$1 AND j.source_kind IN('twitch','twitch_compilation')AND r.render_state='ready' AND r.approved_at IS NOT NULL),NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=$1 AND(f.archived OR NOT f.enabled)),COALESCE(policy_hold_reason,'')FROM publications WHERE id=$3`, p.ClipID, p.RevisionID, id).Scan(&twitchReady, &flowAllowed, &holdReason); err != nil {
+		return err
+	}
+	if twitchReady && flowAllowed && (p.Status == "scheduled" || p.Status == "queued" || p.Status == "retry_wait" || (p.Status == "on_hold" && holdReason == "manual_schedule" && u.PublishAt != nil)) {
+		if err = requireFlowFiltersTx(ctx, tx, p.ClipID, p.RevisionID); err != nil {
+			return err
+		}
+		state = "scheduled"
+	}
+	_, err = tx.Exec(ctx, `UPDATE publications SET publish_at=$2,timezone=$3,metadata=$4,status=$5,policy_hold_reason=CASE WHEN $5='scheduled' THEN '' ELSE policy_hold_reason END,version=version+1,error=NULL WHERE id=$1`, id, p.PublishAt, p.Timezone, mustJSON(p.PublicationMetadata), state)
 	if err != nil {
 		return err
 	}
@@ -137,6 +151,9 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 	}
 	p, err := scanPublication(tx.QueryRow(ctx, `SELECT `+publicationCols+` FROM publications p JOIN accounts a ON a.id=p.account_id WHERE p.id=$1 FOR UPDATE OF p`, id))
 	if err != nil {
+		return err
+	}
+	if err = twitchResetClipAllowed(ctx, tx, p.ClipID); err != nil {
 		return err
 	}
 	if p.Version != version {
@@ -187,6 +204,24 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 		if p.Status == "scheduled" || p.Status == "queued" || p.Status == "retry_wait" || p.Status == "blocked" {
 			state = "scheduled"
 		}
+		if p.Status == "on_hold" {
+			var readyManualTwitch bool
+			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM publications p JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id JOIN clip_revisions r ON r.id=p.revision_id JOIN twitch_outputs o ON o.clip_id=c.clip_id JOIN twitch_flows f ON f.id=o.flow_id WHERE p.id=$1 AND p.policy_hold_reason='manual_schedule' AND j.source_kind IN('twitch','twitch_compilation') AND r.render_state='ready' AND r.approved_at IS NOT NULL AND f.enabled AND NOT f.archived)`, id).Scan(&readyManualTwitch); err != nil {
+				return err
+			}
+			if readyManualTwitch {
+				if err = requireFlowFiltersTx(ctx, tx, p.ClipID, p.RevisionID); err != nil {
+					return err
+				}
+				if err = requireTwitchSources(ctx, tx, p.ClipID, p.RevisionID); err != nil {
+					return err
+				}
+				if err = storageRevisionAvailable(ctx, tx, p.RevisionID); err != nil {
+					return err
+				}
+				state = "scheduled"
+			}
+		}
 		cancel = false
 	case "cancel":
 		if p.Status == "published" {
@@ -201,7 +236,7 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 	default:
 		return fmt.Errorf("%w: unknown publication action", domain.ErrInvalid)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET status=$2,cancel_requested=$3,publish_at=$4,version=version+1,next_attempt_at=$5,error=NULL,legacy_status=CASE WHEN $6 IN ('approve','retry') THEN NULL ELSE legacy_status END WHERE id=$1`, id, state, cancel, at, now, action); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET status=$2,cancel_requested=$3,publish_at=$4,version=version+1,next_attempt_at=$5,error=NULL,policy_hold_reason=CASE WHEN $2='scheduled' THEN '' ELSE policy_hold_reason END,legacy_status=CASE WHEN $6 IN ('approve','retry') THEN NULL ELSE legacy_status END WHERE id=$1`, id, state, cancel, at, now, action); err != nil {
 		return err
 	}
 	if p.StartedAt == nil {

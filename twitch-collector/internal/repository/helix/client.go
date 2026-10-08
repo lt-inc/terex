@@ -25,6 +25,7 @@ type Client struct {
 	mu                                 sync.Mutex
 	token                              string
 	expires                            time.Time
+	discoveries                        map[string]domain.DiscoveryReport
 }
 
 func New(id, secret string) *Client {
