@@ -125,6 +125,18 @@ func (s *Store) ObserveFlow(ctx context.Context, f twitch.Flow, clips []domain.C
 }
 func (s *Store) SharedReady(ctx context.Context, imports []twitch.Import) error {
 	for _, i := range imports {
+		if _, err := s.pool.Exec(ctx, `UPDATE twitch_collector.clips SET import_id=$2 WHERE clip_id=$1 AND(import_id='' OR import_id=$2)`, i.Source.ClipID, i.ImportID); err != nil {
+			return err
+		}
+		// Older collectors did not retain an admission's import ID. Observations
+		// supply it without changing an already issued upload generation.
+		raw, err := json.Marshal(i)
+		if err != nil {
+			return err
+		}
+		if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET reservation=$2 WHERE clip_id=$1 AND state='failed' AND COALESCE(reservation->>'import_id','')='' AND epoch=$3`, i.Source.ClipID, raw, i.Epoch); err != nil {
+			return err
+		}
 		if i.MediaState != "ready" && i.State != "ready" {
 			continue
 		}
@@ -176,8 +188,9 @@ func (s *Store) HasActiveConsumer(ctx context.Context, id string) (bool, error) 
 	return out, err
 }
 
-// Before the first import reservation, pick a saved consumer that is still active.
-// A reservation already made retains its immutable flow and generation.
+// A coordinator admission keeps its selected flow/version before any upload is
+// issued. An existing upload generation also retains its immutable owner.
+// Only the legacy local admission path may select another active consumer.
 func (s *Store) PinActiveConsumer(ctx context.Context, t domain.Task) (domain.Task, error) {
 	if t.Reservation.ImportID != "" {
 		return t, nil
@@ -233,7 +246,7 @@ func (s *Store) RetryClip(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks SET state='queued',attempts=0,run_at=now(),last_error='',lease_token=NULL,lease_expires_at=NULL WHERE clip_id=$1 AND state='failed'`, id)
+	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks SET state='queued',attempts=0,run_at=now(),last_error='',failure_synced_at=NULL,lease_token=NULL,lease_expires_at=NULL WHERE clip_id=$1 AND state='failed'`, id)
 	if err != nil {
 		return err
 	}

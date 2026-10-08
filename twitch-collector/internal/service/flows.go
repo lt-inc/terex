@@ -449,6 +449,7 @@ func (s *Service) flowWorkerOnce(ctx context.Context, api domain.FlowTerex) {
 		s.logGate(ctx, "worker", "Не удалось обновить состояние потоков", err)
 		return
 	}
+	s.reconcileFailedImports(ctx, api, cfg.Epoch)
 	if cfg.Settings.AdmissionMode == "enforce" {
 		if _, err = s.queueAdmissions(ctx, cfg); err != nil {
 			s.logGate(ctx, "admissions", "Не удалось получить назначения подготовки", err)
@@ -582,18 +583,15 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			return
 		}
 		retry := RetryAt(task.Attempt, f, time.Now())
-		if retry == nil && task.Reservation.ImportID != "" {
-			if aborter, ok := api.(interface {
-				AbortImport(context.Context, twitch.Import, string) error
-			}); ok {
-				if err := aborter.AbortImport(save, task.Reservation, f.Message); err != nil {
-					log.WarnContext(save, "collector preparation release unavailable", "import_id", task.Reservation.ImportID, "reason", safeErrorMessage(err, "Не удалось освободить резерв подготовки"))
-				}
-			}
-		}
 		log.ErrorContext(save, "collector task failed", "stage", stage, "reason", f.Message, "retry_at", retry)
 		if e = s.store.Fail(save, task, f.Kind, f.Message, retry); e != nil {
 			log.WarnContext(save, "collector failure state unavailable", errorFields(e)...)
+		} else if retry == nil {
+			// The next worker tick releases the exact persisted failure before
+			// requesting new admissions, including pre-upload generation zero.
+			s.mu.Lock()
+			s.lastFailureSyncAt = time.Time{}
+			s.mu.Unlock()
 		}
 	}
 	if err := guard(ctx); err != nil {
@@ -611,11 +609,11 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		fail(err)
 		return
 	}
+	task.Reservation = imp
 	if err = store.SaveReservation(ctx, task, imp); err != nil {
 		fail(err)
 		return
 	}
-	task.Reservation = imp
 	if imp.MediaState == "ready" || imp.State == "ready" {
 		if err = s.store.Complete(ctx, task, imp.ImportID, imp.SHA256); err != nil {
 			fail(err)
@@ -676,7 +674,7 @@ func hasPreparationCapacity(capacity twitch.FlowCapacity) bool {
 }
 
 // Try another unpinned consumer before postponing a shared physical download.
-// Once an import generation exists its immutable owner is never substituted.
+// A coordinator grant, like an issued upload generation, keeps its owner.
 func (s *Service) reserveSharedImport(ctx context.Context, task domain.Task, api domain.FlowTerex, store domain.FlowStore) (twitch.Import, error) {
 	imp, err := api.ReserveImport(ctx, task)
 	if err == nil || task.Reservation.ImportID != "" {

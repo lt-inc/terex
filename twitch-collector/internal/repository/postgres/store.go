@@ -69,6 +69,7 @@ ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS flow_id tex
 ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS flow_version integer NOT NULL DEFAULT 0;
 ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS reservation jsonb;
 ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS started_at timestamptz;
+ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS failure_synced_at timestamptz;
 CREATE TABLE IF NOT EXISTS twitch_collector.flows(id text PRIMARY KEY,enabled boolean NOT NULL,config jsonb NOT NULL);
 CREATE TABLE IF NOT EXISTS twitch_collector.consumers(clip_id text NOT NULL REFERENCES twitch_collector.clips(clip_id),flow_id text NOT NULL REFERENCES twitch_collector.flows(id),flow_version integer NOT NULL,eligible boolean NOT NULL DEFAULT true,PRIMARY KEY(clip_id,flow_id));
 ALTER TABLE twitch_collector.consumers ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
@@ -413,12 +414,20 @@ func (s *Store) Fail(ctx context.Context, t domain.Task, kind, message string, r
 	if kind == "duplicate" {
 		state = "duplicate"
 	}
+	var reservation []byte
+	var err error
+	if t.Reservation.ImportID != "" {
+		reservation, err = json.Marshal(t.Reservation)
+		if err != nil {
+			return err
+		}
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET state=$3,run_at=COALESCE($4,run_at),last_error=$5,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE `+validLease, t.Clip.ID, t.Token, taskState, retry, message)
+	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET state=$3,run_at=COALESCE($4,run_at),last_error=$5,reservation=COALESCE($6,reservation),failure_synced_at=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE `+validLease, t.Clip.ID, t.Token, taskState, retry, message, reservation)
 	if err != nil {
 		return err
 	}

@@ -13,23 +13,24 @@ import (
 )
 
 type Service struct {
-	resetMu          sync.Mutex
-	resetEpoch       int64
-	resetting        bool
-	checkCancel      context.CancelFunc
-	store            domain.Store
-	twitch           domain.Twitch
-	terex            domain.Terex
-	downloader       domain.Downloader
-	log              *slog.Logger
-	ctx              context.Context
-	mu               sync.Mutex
-	checking         bool
-	lastStarted      time.Time
-	active           map[string]context.CancelCauseFunc
-	gateLogs         map[string]gateLog
-	flowStarted      map[string]time.Time
-	lastAdmissionsAt time.Time
+	resetMu           sync.Mutex
+	resetEpoch        int64
+	resetting         bool
+	checkCancel       context.CancelFunc
+	store             domain.Store
+	twitch            domain.Twitch
+	terex             domain.Terex
+	downloader        domain.Downloader
+	log               *slog.Logger
+	ctx               context.Context
+	mu                sync.Mutex
+	checking          bool
+	lastStarted       time.Time
+	active            map[string]context.CancelCauseFunc
+	gateLogs          map[string]gateLog
+	flowStarted       map[string]time.Time
+	lastAdmissionsAt  time.Time
+	lastFailureSyncAt time.Time
 }
 
 func New(store domain.Store, twitch domain.Twitch, terex domain.Terex, downloader domain.Downloader, logger *slog.Logger) *Service {
