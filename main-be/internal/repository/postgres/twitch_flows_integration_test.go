@@ -99,6 +99,7 @@ func TestTwitchFlowsShareVerifiedMediaAndFencePinnedUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Enabled = false
+	a.Language = "en" // A changed owner must not interrupt another matching consumer.
 	var err error
 	a, err = s.SaveTwitchFlow(ctx, a, false, now.Add(time.Second))
 	if err != nil {
@@ -121,6 +122,7 @@ func TestTwitchFlowsShareVerifiedMediaAndFencePinnedUpload(t *testing.T) {
 		t.Fatal(other, err)
 	}
 	a.Enabled = true
+	a.Language = "ru"
 	a, err = s.SaveTwitchFlow(ctx, a, false, now.Add(4*time.Second))
 	if err != nil {
 		t.Fatal(err)

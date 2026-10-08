@@ -170,7 +170,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	continuing := reservedAt != nil && r.ReservationID != "" && r.UploadGeneration > 0
 	if continuing {
 		var active bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id JOIN twitch_imports i ON i.id=fs.import_id WHERE i.twitch_clip_id=$1 AND NOT i.rejected AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id AND(fs.reserved_at IS NOT NULL OR (`+currentFlowSourceEligible+`)))`, r.Source.ClipID).Scan(&active); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id JOIN twitch_imports i ON i.id=fs.import_id WHERE i.twitch_clip_id=$1 AND NOT i.rejected AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id AND (`+currentFlowSourceEligible+`))`, r.Source.ClipID).Scan(&active); err != nil {
 			return twitch.Import{}, err
 		}
 		if !active {
@@ -194,7 +194,9 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 			return twitch.Import{}, err
 		}
 	}
-	if !sourceMatches(currentFilters, r.Source) || (reservedAt == nil && !sourceEligible(f, r.Source, now)) {
+	// A pinned shared download may finish for another currently eligible flow;
+	// the former owner does not decide that flow's language or source filters.
+	if !continuing && (!sourceMatches(currentFilters, r.Source) || (reservedAt == nil && !sourceEligible(f, r.Source, now))) {
 		return twitch.Import{}, fmt.Errorf("%w: исходник не соответствует фильтрам потока", domain.ErrConflict)
 	}
 	var other string

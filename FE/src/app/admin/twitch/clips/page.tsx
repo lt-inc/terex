@@ -217,6 +217,7 @@ export default function TwitchClipsPage() {
             value={state}
             onChange={(event) => {
               setState(event.target.value);
+              if (["language_mismatch", "language_unknown"].includes(event.target.value)) setShowFiltered(true);
               setOffset(0);
             }}
           >
