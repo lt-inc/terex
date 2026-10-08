@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import DiagnosticsPanel from "@/components/twitch/DiagnosticsPanel";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchCompilations,
@@ -143,6 +144,7 @@ export default function CompilationsPage() {
         </div>
       </div>
       <TwitchNav />
+      {flowID && <DiagnosticsPanel flowID={flowID} timezone={selectedFlow?.timezone} />}
       <label className="flex max-w-lg flex-col gap-1 text-xs text-slate-400">
         Поток
         <select
@@ -169,7 +171,7 @@ export default function CompilationsPage() {
           : ""}
         {selectedFlow?.auto_publish
           ? "Новые автоматические подборки выпускаются по расписанию потока."
-          : "После рендера посмотрите и одобрите конкретную версию в редакторе."}
+          : "Готовая версия допускается автоматически. Назначьте время вручную или включите автопубликацию потока."}
       </p>
       {error && (
         <p role="alert" className="text-sm text-red-400">
@@ -193,15 +195,7 @@ export default function CompilationsPage() {
                   : ""}
               </p>
             )}
-          {automaticResult?.sources && (
-            <p className="mt-2 text-xs">
-              Подходит: {automaticResult.sources.eligible} · не готовы:{" "}
-              {automaticResult.sources.not_ready} · устарели:{" "}
-              {automaticResult.sources.outside_window} · уже использованы:{" "}
-              {automaticResult.sources.already_used} · исключены:{" "}
-              {automaticResult.sources.rejected}
-            </p>
-          )}
+          {automaticResult?.sources && <p className="mt-2 text-xs">Результат последнего запуска: готовых подходящих исходников {automaticResult.sources.eligible}. Актуальная готовность и причины ожидания показаны выше.</p>}
           {automaticResult && !automaticResult.created && (
             <div className="mt-2 flex flex-wrap gap-4">
               {automaticResult.compilation && (
@@ -249,7 +243,7 @@ export default function CompilationsPage() {
                 ? `${durationLabel(item.duration_sec)} · `
                 : ""}
               {clipState(item.state).label} · версия {item.version} ·{" "}
-              {item.approved_at ? "Одобрена" : "Ожидает одобрения"}
+              {item.approved_at ? "Готова · допущена автоматически" : item.state === "ready" ? "Рендер готов · ожидает автоматических проверок" : "Ожидает готового рендера"}
             </p>
             <p className="mt-1 text-xs text-slate-500">
               {new Intl.DateTimeFormat("ru", {
@@ -290,7 +284,7 @@ export default function CompilationsPage() {
                 href={`/admin/clips/${encodeURIComponent(item.clip_id)}`}
                 className="text-indigo-400"
               >
-                Проверить и одобрить →
+                Редактор и расписание →
               </Link>
             </div>
           </article>

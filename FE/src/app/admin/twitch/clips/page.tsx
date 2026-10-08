@@ -39,6 +39,7 @@ export default function TwitchClipsPage() {
     [format, setFormat] = useState(""),
     [broadcaster, setBroadcaster] = useState(""),
     [offset, setOffset] = useState(0);
+  const [showFiltered, setShowFiltered] = useState(false);
   const [busy, setBusy] = useState(""),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -52,9 +53,11 @@ export default function TwitchClipsPage() {
       .then((value) => {
         if (!active) return;
         setFlows(value || []);
-        const selected = new URLSearchParams(window.location.search).get(
-          "flow",
-        );
+        const query = new URLSearchParams(window.location.search);
+        const selected = query.get("flow");
+        setState(query.get("state") || "");
+        setFormat(query.get("format") || "");
+        setShowFiltered(query.get("show_filtered") === "true");
         setFlowID(
           value?.some((flow) => flow.id === selected)
             ? selected!
@@ -93,6 +96,7 @@ export default function TwitchClipsPage() {
           state,
           format,
           broadcaster_id: broadcaster,
+          show_filtered: String(showFiltered),
         });
         if (attempt === requestID.current) {
           setPage(value);
@@ -107,7 +111,7 @@ export default function TwitchClipsPage() {
         if (attempt === requestID.current) setLoading(false);
       }
     },
-    [flowID, offset, q, state, format, broadcaster],
+    [flowID, offset, q, state, format, broadcaster, showFiltered],
   );
   useEffect(() => {
     void load();
@@ -174,7 +178,7 @@ export default function TwitchClipsPage() {
       <TwitchNav />
       <p className="text-sm text-slate-400">
         Исходник скачивается один раз. Shorts и подборки имеют собственные
-        версии, одобрение и расписание. Ниже видно, что происходит и что
+        версии и расписание. Готовые версии допускаются автоматически. Ниже видно, что происходит и что
         требуется дальше.
       </p>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -232,6 +236,13 @@ export default function TwitchClipsPage() {
               "excluded",
               "rejected",
               "used",
+              "language_mismatch",
+              "language_unknown",
+              "source_mismatch",
+              "age_filtered",
+              "duration_filtered",
+              "views_filtered",
+              "too_new",
             ].map((value) => (
               <option key={value} value={value}>
                 {value === "used" ? "Использован" : clipState(value).label}
@@ -284,6 +295,7 @@ export default function TwitchClipsPage() {
           </select>
         </label>
       </div>
+      <label className="flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={showFiltered} onChange={event=>{setShowFiltered(event.target.checked);setOffset(0);}}/>Показывать клипы с другим или неизвестным языком. Метаданные сохраняются для других потоков.</label>
       {selectedFlow && <CapacityPanel flowID={selectedFlow.id} timezone={selectedFlow.timezone} />}
       {error && (
         <p
@@ -460,10 +472,7 @@ export default function TwitchClipsPage() {
                       {item.outputs.map((output) => {
                         const outputState =
                           output.publication_state ||
-                          (output.render_state === "ready" &&
-                          output.approval !== "approved"
-                            ? "pending_approval"
-                            : output.render_state);
+                          output.render_state;
                         return (
                           <div
                             key={`${output.clip_id}:${output.revision_id}`}

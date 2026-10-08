@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"terex/gpu-be/internal/service/renderer"
+	"terex/gpu-be/internal/service/resetgate"
 	"terex/proto/workflow"
 )
 
 type Worker struct {
+	Reset       *resetgate.Gate
 	Coordinator workflow.Coordinator
 	Renderer    *renderer.Service
 	WorkerID    string
@@ -61,6 +63,14 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 	}
 	if l.Render == nil {
 		return fmt.Errorf("coordinator returned no render revision")
+	}
+	if l.Render.Twitch {
+		var release func()
+		ctx, release, err = w.Reset.Begin(ctx, l.Render.Epoch)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
 	q := workflow.LeaseRequest{AttemptID: l.AttemptID, LeaseToken: l.LeaseToken, ExpectedVersion: l.ExpectedVersion}
 	ctx, cancel := context.WithCancelCause(ctx)

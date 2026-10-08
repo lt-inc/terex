@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"log/slog"
 	"sort"
 	"terex/main-be/internal/domain"
 	"terex/proto/twitch"
@@ -91,7 +92,7 @@ func (s *Store) scheduleFlowOutputs(ctx context.Context, now time.Time) error {
 	if _, err = tx.Exec(ctx, `DELETE FROM twitch_publication_slots s USING publications p WHERE p.id=s.publication_id AND(p.status IN('cancelled','on_hold','failed','blocked') OR p.auto_flow_id IS NULL OR EXISTS(SELECT 1 FROM twitch_channel_limits l WHERE l.youtube_channel_id=s.youtube_channel_id AND(s.local_date<>(p.publish_at AT TIME ZONE l.timezone)::date OR s.slot<>to_char(p.publish_at AT TIME ZONE l.timezone,'HH24:MI'))))`); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT o.clip_id,o.config,o.format,COALESCE(p.id,0),r.revision_no,p.auto_hold FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id JOIN accounts a ON a.id=o.account_id LEFT JOIN publications p ON p.clip_id=o.clip_id AND p.account_id=o.account_id WHERE o.auto_eligible AND c.latest_revision_id=o.initial_revision_id AND c.approval<>'rejected' AND r.render_state='ready' AND COALESCE(r.object,'')<>'' AND f.enabled AND f.auto_publish AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=o.youtube_channel_id AND(p.id IS NULL OR(p.auto_flow_id=o.flow_id AND p.auto_hold AND p.policy_hold_reason='calendar_horizon' AND p.started_at IS NULL AND p.status='on_hold')) ORDER BY o.created_at,o.clip_id LIMIT 50`)
+	rows, err := tx.Query(ctx, `SELECT o.clip_id,o.config,o.format,COALESCE(p.id,0),r.revision_no,p.auto_hold FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id JOIN accounts a ON a.id=o.account_id LEFT JOIN publications p ON p.clip_id=o.clip_id AND p.account_id=o.account_id WHERE o.auto_eligible AND c.approval<>'rejected' AND r.render_state='ready' AND COALESCE(r.object,'')<>'' AND f.enabled AND f.auto_publish AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=o.youtube_channel_id AND(p.id IS NULL OR(p.auto_flow_id=o.flow_id AND p.auto_hold AND p.policy_hold_reason='calendar_horizon' AND p.started_at IS NULL AND p.status='on_hold')) ORDER BY o.created_at,o.clip_id LIMIT 50`)
 	if err != nil {
 		return err
 	}
@@ -139,6 +140,18 @@ func (s *Store) scheduleFlowOutputs(ctx context.Context, now time.Time) error {
 			return err
 		}
 		if err = requireTwitchSources(ctx, tx, c.Clip, 0); err != nil {
+			if errors.Is(err, domain.ErrConflict) {
+				continue
+			}
+			return err
+		}
+		if err = requireFlowFiltersTx(ctx, tx, c.Clip, 0); err != nil {
+			if errors.Is(err, domain.ErrConflict) {
+				continue
+			}
+			return err
+		}
+		if err = requireFlowFiltersTx(ctx, tx, c.Clip, 0); err != nil {
 			if errors.Is(err, domain.ErrConflict) {
 				continue
 			}
@@ -229,15 +242,26 @@ func mustLocation(zone string) *time.Location {
 	return loc
 }
 func (s *Store) TickTwitchFlows(ctx context.Context, now time.Time) error {
+	if err := s.autoApproveTwitchReady(ctx, now); err != nil {
+		return err
+	}
 	flows, e := s.ListTwitchFlows(ctx)
 	if e != nil {
 		return e
 	}
 	for _, f := range flows {
 		if f.Enabled && f.CompilationsEnabled {
-			if _, e = s.AutoFlowCompilation(ctx, f.ID, now); e != nil {
-				return e
+			out, err := s.AutoFlowCompilation(ctx, f.ID, now)
+			if err != nil {
+				slog.ErrorContext(ctx, "twitch compilation failed", "flow_id", f.ID, "error", err)
+				continue
 			}
+			eligible, pending := 0, 0
+			if out.Sources != nil {
+				eligible = out.Sources.Eligible
+				pending = out.Sources.NotReady
+			}
+			slog.InfoContext(ctx, "twitch compilation readiness", "flow_id", f.ID, "reason", out.Reason, "eligible", eligible, "ready_duration_sec", out.ReadyDurationSec, "minimum_duration_sec", out.MinimumDurationSec, "missing_duration_sec", out.MissingDurationSec, "selected_count", out.SelectedClips, "pending_count", pending)
 		}
 	}
 	return s.scheduleFlowOutputs(ctx, now)

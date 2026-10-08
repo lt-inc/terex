@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Toggle from "@/components/ui/Toggle";
 import TwitchNav from "@/components/twitch/TwitchNav";
+import ResetPanel from "@/components/twitch/ResetPanel";
 import {
   fetchTwitchSettings,
   fetchTwitchStatus,
@@ -22,7 +23,7 @@ export default function TwitchServiceSettings() {
         fetchTwitchSettings(),
         fetchTwitchStatus(),
       ]);
-      setSettings(value);
+      setSettings({ ...value, compilation_budget_percent: value.compilation_budget_percent ?? 70, admission_mode: value.admission_mode || "shadow" });
       setStatus(current);
       setError("");
     } catch (failure) {
@@ -52,7 +53,9 @@ export default function TwitchServiceSettings() {
       settings.per_channel_daily_downloads > settings.daily_downloads ||
       !Number.isSafeInteger(settings.backlog_limit) ||
       settings.backlog_limit < 1 ||
-      settings.backlog_limit > 1000
+      settings.backlog_limit > 1000 ||
+      !Number.isInteger(settings.compilation_budget_percent) ||
+      settings.compilation_budget_percent! < 0 || settings.compilation_budget_percent! > 100
     ) {
       setError(
         "Проверьте бюджет: 1–100 скачиваний, лимит стримера не выше общего, очередь 1–1000.",
@@ -180,10 +183,13 @@ export default function TwitchServiceSettings() {
           >
             {busy ? "Сохраняем…" : "Сохранить настройки"}
           </button>
+          <label className="flex flex-col gap-1 text-sm">Целевая доля скачиваний для подборок, %<input type="number" className={input} min={0} max={100} value={settings.compilation_budget_percent ?? 70} onChange={event=>setSettings({...settings,compilation_budget_percent:Number(event.target.value)})}/><span className="text-xs text-slate-400">Общий бюджет распределяется по ближайшим выпускам. 70% — ориентир для исходников подборок; неиспользованный остаток доступен Shorts. Один файл для двух форматов расходует одно скачивание.</span></label>
+          <label className="flex flex-col gap-1 text-sm">Режим допуска скачиваний<select className={input} value={settings.admission_mode || "shadow"} onChange={event=>setSettings({...settings,admission_mode:event.target.value as "shadow"|"enforce"})}><option value="shadow">Только расчёт и диагностика</option><option value="enforce">Применять план ближайших выпусков</option></select><span className="text-xs text-slate-400">Сначала проверьте диагностику в режиме расчёта. После включения файлы скачиваются для ближайших выпусков, а не просто по количеству найденных клипов.</span></label>
         </form>
       ) : (
         <p className="text-slate-400">Загружаем настройки…</p>
       )}
+      <ResetPanel />
     </div>
   );
 }

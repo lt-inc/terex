@@ -68,7 +68,7 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 		kind := "import"
 		if res.StatusCode == http.StatusConflict && diagnostic.Code != "" {
 			switch diagnostic.Code {
-			case "calendar_full", "preparation_wait", "stale_for_slot", "storage_low", "storage_status_unknown":
+			case "calendar_full", "preparation_wait", "stale_for_slot", "storage_low", "storage_status_unknown", "twitch_reset":
 				kind = "preparation"
 			case "source_stale", "media_expired":
 				kind = "expired"

@@ -67,6 +67,9 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 		return domain.Revision{}, err
 	}
 	var currentID int64
+	if err = twitchResetClipAllowed(ctx, tx, clipID); err != nil {
+		return domain.Revision{}, err
+	}
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&currentID); err != nil {
 		return domain.Revision{}, mapErr(err)
 	}
@@ -107,7 +110,7 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL,updated_at=now() WHERE publication_id IN (SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, clipID); err != nil {
 		return domain.Revision{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,status='on_hold',version=version+1,metadata=$3,cancel_requested=FALSE,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('cancelled','published','needs_attention')`, clipID, r.ID, spec); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait') THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,metadata=$3,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('cancelled','published','needs_attention')`, clipID, r.ID, spec); err != nil {
 		return domain.Revision{}, err
 	}
 	if rerender {
@@ -147,6 +150,9 @@ func (s *Store) ApproveRevisionWithVersion(ctx context.Context, clipID string, v
 // Manual approval and automatic slot admission use the same validation and
 // publication creation inside one serialized transaction.
 func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version int, now time.Time, publishAt *time.Time, autoFlow string) error {
+	if err := twitchResetClipAllowed(ctx, tx, clipID); err != nil {
+		return err
+	}
 	var err error
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
@@ -166,6 +172,9 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
 		return err
 	}
 	if err = requireTwitchSources(ctx, tx, clipID, rid); err != nil {
+		return err
+	}
+	if err = requireFlowFiltersTx(ctx, tx, clipID, rid); err != nil {
 		return err
 	}
 	if publishAt != nil {
@@ -395,6 +404,9 @@ func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) e
 	if err = lockTwitch(ctx, tx); err != nil {
 		return err
 	}
+	if err = twitchResetClipAllowed(ctx, tx, clipID); err != nil {
+		return err
+	}
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
 		return mapErr(err)
@@ -443,6 +455,9 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	if err = lockTwitch(ctx, tx); err != nil {
 		return err
 	}
+	if err = twitchResetClipAllowed(ctx, tx, clipID); err != nil {
+		return err
+	}
 	var rid int64
 	if err = tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1 FOR UPDATE`, clipID).Scan(&rid); err != nil {
 		return mapErr(err)
@@ -478,7 +493,7 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL)`, clipID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,metadata=$3,status='on_hold',version=version+1,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('published','cancelled','needs_attention')`, clipID, nextID, spec); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,metadata=$3,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait')THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('published','cancelled','needs_attention')`, clipID, nextID, spec); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

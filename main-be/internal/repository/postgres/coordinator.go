@@ -55,9 +55,21 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		} else if !allowed {
 			return out, nil
 		}
-		var jobID string
-		if err = tx.QueryRow(ctx, `SELECT job_id FROM clips WHERE clip_id=$1`, r.ClipID).Scan(&jobID); err != nil {
+		var jobID, sourceKind string
+		if err = tx.QueryRow(ctx, `SELECT c.job_id,j.source_kind FROM clips c JOIN jobs j ON j.job_id=c.job_id WHERE c.clip_id=$1`, r.ClipID).Scan(&jobID, &sourceKind); err != nil {
 			return nil, err
+		}
+		isTwitch := sourceKind == "twitch" || sourceKind == "twitch_compilation"
+		var epoch int64
+		if isTwitch {
+			var resetting bool
+			epoch, resetting, err = twitchResetEpoch(ctx, tx)
+			if err != nil {
+				return nil, err
+			}
+			if resetting {
+				return out, nil
+			}
 		}
 		var source workflow.SourceManifest
 		if err = json.Unmarshal(r.Manifest, &source); err != nil {
@@ -68,7 +80,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 			cues[i] = workflow.Cue{ID: c.ID, Start: c.Start, End: c.End, Text: c.Text}
 		}
 		source.Options.Subtitles = r.SubtitlesEnabled
-		out.Render = &workflow.RenderWork{RevisionID: rid, ClipID: r.ClipID, JobID: jobID, StartSec: r.StartSec, EndSec: r.EndSec, Cues: cues, Source: source, Output: workflow.ObjectRef{Bucket: "clips", Object: r.ClipID + "/revision-" + jsonNumber(rid) + "/" + q.AttemptID + ".mp4"}}
+		out.Render = &workflow.RenderWork{Twitch: isTwitch, Epoch: epoch, RevisionID: rid, ClipID: r.ClipID, JobID: jobID, StartSec: r.StartSec, EndSec: r.EndSec, Cues: cues, Source: source, Output: workflow.ObjectRef{Bucket: "clips", Object: r.ClipID + "/revision-" + jsonNumber(rid) + "/" + q.AttemptID + ".mp4"}}
 		if _, err = tx.Exec(ctx, `UPDATE render_attempts SET worker_id=$2,lease_token=$3,lease_until=$4 WHERE id=$1`, q.AttemptID, q.WorkerID, token, until); err != nil {
 			return nil, err
 		}
@@ -97,6 +109,19 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		}
 		if p.Version != version || p.Status != "queued" {
 			return out, nil
+		}
+		var isTwitch bool
+		if err = tx.QueryRow(ctx, `SELECT j.source_kind IN('twitch','twitch_compilation') FROM clips c JOIN jobs j ON j.job_id=c.job_id WHERE c.clip_id=$1`, p.ClipID).Scan(&isTwitch); err != nil {
+			return nil, err
+		}
+		if isTwitch {
+			_, resetting, e := twitchResetEpoch(ctx, tx)
+			if e != nil {
+				return nil, e
+			}
+			if resetting {
+				return out, nil
+			}
 		}
 		if p.StartedAt == nil && !p.CancelRequested {
 			if allowed, e := enforceUnstartedPolicyTx(ctx, tx, pid, now); e != nil {

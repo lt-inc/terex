@@ -103,7 +103,7 @@ func (s *Service) Reserve(ctx context.Context, r t.ImportRequest) (t.Import, err
 	if out.UploadImportID != "" {
 		uploadID = out.UploadImportID
 	}
-	upload, err := s.Gateway.ReserveUpload(timeout, &workflow.ReserveUploadRequest{ImportID: uploadID, Ref: out.Original})
+	upload, err := s.Gateway.ReserveUpload(timeout, &workflow.ReserveUploadRequest{Epoch: out.Epoch, ImportID: uploadID, Ref: out.Original})
 	if err != nil {
 		return out, err
 	}
@@ -120,9 +120,19 @@ func (s *Service) Reserve(ctx context.Context, r t.ImportRequest) (t.Import, err
 	return out, nil
 }
 func (s *Service) Complete(ctx context.Context, id string, r t.ImportCompleteRequest) (t.Import, error) {
+	if repo, ok := s.Repo.(interface {
+		CheckTwitchEpoch(context.Context, int64) error
+	}); ok {
+		if err := repo.CheckTwitchEpoch(ctx, r.Epoch); err != nil {
+			return t.Import{}, err
+		}
+	}
 	out, err := s.Repo.GetTwitchImport(ctx, id)
 	if err != nil {
 		return out, err
+	}
+	if r.Epoch != out.Epoch {
+		return out, fmt.Errorf("%w: Twitch reset epoch changed", domain.ErrConflict)
 	}
 	if out.UploadGeneration > 0 && r.UploadGeneration != out.UploadGeneration {
 		return out, fmt.Errorf("%w: upload generation changed", domain.ErrConflict)
@@ -149,7 +159,7 @@ func (s *Service) Complete(ctx context.Context, id string, r t.ImportCompleteReq
 	if out.UploadImportID != "" {
 		uploadID = out.UploadImportID
 	}
-	media, err := s.Gateway.VerifyUpload(timeout, &workflow.VerifyUploadRequest{ImportID: uploadID, Ref: out.Original, ExpectedSHA256: strings.ToLower(r.SHA256), ExpectedSizeBytes: r.SizeBytes, ExpectedDurationSec: out.Source.DurationSec})
+	media, err := s.Gateway.VerifyUpload(timeout, &workflow.VerifyUploadRequest{Epoch: out.Epoch, ImportID: uploadID, Ref: out.Original, ExpectedSHA256: strings.ToLower(r.SHA256), ExpectedSizeBytes: r.SizeBytes, ExpectedDurationSec: out.Source.DurationSec})
 	if err != nil {
 		if code := status.Code(err); code == codes.InvalidArgument || code == codes.DataLoss {
 			if out.UploadGeneration == 0 {

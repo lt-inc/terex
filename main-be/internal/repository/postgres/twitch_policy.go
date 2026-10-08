@@ -33,6 +33,19 @@ func waitPreparation(code, message string, now time.Time) *domain.PreparationWai
 // All admission, source attachment and GC callers hold lockTwitch. Reservations
 // therefore protect a real slot, including across collector restarts/aliases.
 func expirePreparationTx(ctx context.Context, tx pgx.Tx, now time.Time) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM twitch_preparation_sources ps USING twitch_preparation_reservations r,twitch_flows f,twitch_imports i,twitch_flow_sources fs WHERE ps.reservation_id=r.id AND r.flow_id=f.id AND ps.import_id=i.id AND fs.flow_id=f.id AND fs.import_id=i.id AND r.state='active' AND r.clip_id IS NULL AND(fs.excluded OR i.rejected OR i.state IN('failed','expired') OR
+ (COALESCE(f.config->>'language','')<>'' AND(COALESCE(i.request->'source'->>'language','')<>f.config->>'language' OR COALESCE(i.request->'source'->>'language_source','')<>'clip')) OR
+ (f.config->>'source_mode'='category' AND COALESCE(i.request->'source'->>'game_id','')<>COALESCE(f.config->>'category_id','')) OR
+ (f.config->>'source_mode'='channels' AND COALESCE(jsonb_array_length(f.config->'broadcaster_ids'),0)>0 AND NOT(f.config->'broadcaster_ids' ? (i.request->'source'->>'broadcaster_id'))) OR
+ COALESCE((i.request->'source'->>'view_count')::bigint,0)<COALESCE((f.config->>'min_views')::bigint,0) OR
+ COALESCE((i.request->'source'->>'duration_sec')::float8,0)<COALESCE((f.config->>'min_duration_sec')::float8,5) OR
+ COALESCE((i.request->'source'->>'duration_sec')::float8,0)>COALESCE((f.config->>'max_duration_sec')::float8,60) OR
+ (i.request->'source'->>'created_at')::timestamptz<$1::timestamptz-make_interval(hours=>COALESCE((f.config->>'window_hours')::int,72)))`, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET state='released',reason='source_filters_changed' WHERE state='active' AND clip_id IS NULL AND NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id)`); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET state='released',reason='policy_changed_or_expired'
  FROM twitch_flows f JOIN twitch_channel_limits l ON l.youtube_channel_id=f.youtube_channel_id
  WHERE r.flow_id=f.id AND r.state='active' AND(r.expires_at<=$1 OR r.slot_at<=$1 OR f.archived OR NOT f.enabled
@@ -122,6 +135,9 @@ func preparationSourceFresh(f twitch.Flow, src twitch.Source, at, now time.Time)
 }
 
 func reservePreparationFormat(ctx context.Context, tx pgx.Tx, f twitch.Flow, id, format string, src twitch.Source, now time.Time) (string, bool, error) {
+	if err := twitchResetAllowed(ctx, tx); err != nil {
+		return "", false, err
+	}
 	// The actual channel/format source identity is shared by OAuth aliases.
 	var duplicate bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses u JOIN twitch_imports i ON i.media_id=u.media_id WHERE i.id=$1 AND u.youtube_channel_id=$2 AND u.format=$3) OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations r ON r.id=ps.reservation_id WHERE ps.import_id=$1 AND r.youtube_channel_id=$2 AND r.format=$3 AND r.state='active' AND r.expires_at>$4)`, id, f.YouTubeChannelID, format, now).Scan(&duplicate); err != nil {
@@ -163,6 +179,11 @@ func reservePreparationFormat(ctx context.Context, tx pgx.Tx, f twitch.Flow, id,
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_sources(reservation_id,import_id,flow_id,duration_sec)VALUES($1,$2,$3,$4)ON CONFLICT DO NOTHING`, b.ID, id, f.ID, math.Ceil(src.DurationSec*30-1e-7)/30)
 			return b.ID, err == nil, err
+		}
+		// Accumulate one nearest release at a time; a full pending batch waits
+		// for its files rather than filling another distant calendar day.
+		if len(batches) > 0 {
+			return "", false, nil
 		}
 	}
 	slots, err := calendarSlotsTx(ctx, tx, f, format, 0, "", now)
@@ -300,6 +321,9 @@ func admitImportConsumersTx(ctx context.Context, tx pgx.Tx, id, owner string, co
 }
 
 func reserveOutputPreparationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, clip, format string, ids []string, now time.Time) (time.Time, error) {
+	if err := twitchResetAllowed(ctx, tx); err != nil {
+		return time.Time{}, err
+	}
 	mode, err := policyMode(ctx, tx)
 	if err != nil {
 		return time.Time{}, err
@@ -316,7 +340,7 @@ func reserveOutputPreparationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, c
 	var reservation string
 	var at time.Time
 	// Prefer the durable batch reserved before downloading.
-	err = tx.QueryRow(ctx, `SELECT r.id,r.slot_at FROM twitch_preparation_reservations r WHERE r.flow_id=$1 AND r.format=$2 AND r.state='active' AND r.expires_at>$3 AND(r.clip_id IS NULL OR r.clip_id=$4) AND NOT EXISTS(SELECT 1 FROM unnest($5::text[]) x WHERE NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=x)) ORDER BY r.slot_at LIMIT 1`, f.ID, format, now, clip, ids).Scan(&reservation, &at)
+	err = tx.QueryRow(ctx, `SELECT r.id,r.slot_at FROM twitch_preparation_reservations r WHERE r.flow_id=$1 AND r.format=$2 AND r.state='active' AND r.expires_at>$3 AND(r.clip_id IS NULL OR r.clip_id=$4) AND($2='compilation' OR NOT EXISTS(SELECT 1 FROM unnest($5::text[]) x WHERE NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=x))) ORDER BY r.slot_at LIMIT 1`, f.ID, format, now, clip, ids).Scan(&reservation, &at)
 	if err != nil && err != pgx.ErrNoRows {
 		return at, err
 	}
@@ -348,6 +372,19 @@ func reserveOutputPreparationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, c
 	}
 	if !preparationSourceFresh(f, twitch.Source{CreatedAt: oldest}, at, now) {
 		return at, waitPreparation("stale_for_slot", "Исходник устареет до даты выпуска", now)
+	}
+	if format == "compilation" {
+		// Transfer all selected ready sources into one slot atomically. Old
+		// waiting batches do not prevent reuse of a shared ready file.
+		if _, err = tx.Exec(ctx, `DELETE FROM twitch_preparation_sources WHERE reservation_id=$1`, reservation); err != nil {
+			return at, err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_sources(reservation_id,import_id,flow_id,duration_sec) SELECT $1,i.id,$2,COALESCE((m.verified->>'duration_sec')::float8,(i.request->'source'->>'duration_sec')::float8) FROM twitch_imports i LEFT JOIN twitch_media m ON m.id=i.media_id WHERE i.id=ANY($3::text[])`, reservation, f.ID, ids); err != nil {
+			return at, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='released',reason='reconciled_into_nearest_compilation' WHERE flow_id=$1 AND format='compilation' AND state='active' AND clip_id IS NULL AND id<>$2`, f.ID, reservation); err != nil {
+			return at, err
+		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET clip_id=NULLIF($2,'') WHERE id=$1`, reservation, clip)
 	return at, err
@@ -427,6 +464,12 @@ func (s *Store) FlowCapacity(ctx context.Context, id string, now time.Time) (twi
 }
 
 func sourcePolicyViolation(ctx context.Context, tx pgx.Tx, clip string, rid int64, at, now time.Time) (*domain.TwitchPolicyViolation, error) {
+	if v, err := flowFilterViolationTx(ctx, tx, clip, rid); err != nil || v != nil {
+		if v != nil {
+			v.PublishAt = at
+		}
+		return v, err
+	}
 	if rid == 0 {
 		if err := tx.QueryRow(ctx, `SELECT latest_revision_id FROM clips WHERE clip_id=$1`, clip).Scan(&rid); err != nil {
 			return nil, err
@@ -492,7 +535,24 @@ func enforceUnstartedPolicyTx(ctx context.Context, tx pgx.Tx, pid int64, now tim
 		return false, err
 	}
 	if mode != "enforce" {
-		return true, nil
+		var clip string
+		var rid int64
+		var started bool
+		if err = tx.QueryRow(ctx, `SELECT clip_id,COALESCE(revision_id,0),started_at IS NOT NULL FROM publications WHERE id=$1`, pid).Scan(&clip, &rid, &started); err != nil {
+			return false, err
+		}
+		if started {
+			return true, nil
+		}
+		v, e := flowFilterViolationTx(ctx, tx, clip, rid)
+		if e != nil {
+			return false, e
+		}
+		if v == nil {
+			return true, nil
+		}
+		v.PublicationID = pid
+		return false, holdPolicyPublication(ctx, tx, *v, now)
 	}
 	v, err := publicationPolicyViolation(ctx, tx, pid, now, false)
 	if err != nil {
@@ -514,15 +574,32 @@ func enforceFirstUploadPolicyTx(ctx context.Context, tx pgx.Tx, pid int64, attem
 	if err != nil {
 		return false, err
 	}
-	if mode != "enforce" {
-		return true, nil
-	}
 	var initiated bool
 	if err = tx.QueryRow(ctx, `SELECT p.cancel_requested OR p.upload_id IS NOT NULL OR EXISTS(SELECT 1 FROM publication_attempts pa WHERE pa.publication_id=p.id AND(COALESCE(pa.checkpoint->>'session_uri','')<>'' OR COALESCE(pa.checkpoint->>'remote_id','')<>'' OR COALESCE((pa.checkpoint->>'final_request_started')::boolean,false))) FROM publications p WHERE p.id=$1`, pid).Scan(&initiated); err != nil {
 		return false, err
 	}
 	if initiated {
 		return true, nil
+	}
+	if mode != "enforce" {
+		var clip string
+		var rid int64
+		if err = tx.QueryRow(ctx, `SELECT clip_id,COALESCE(revision_id,0)FROM publications WHERE id=$1`, pid).Scan(&clip, &rid); err != nil {
+			return false, err
+		}
+		v, e := flowFilterViolationTx(ctx, tx, clip, rid)
+		if e != nil {
+			return false, e
+		}
+		if v == nil {
+			return true, nil
+		}
+		v.PublicationID = pid
+		if err = holdPolicyPublication(ctx, tx, *v, now); err != nil {
+			return false, err
+		}
+		_, err = tx.Exec(ctx, `UPDATE publications SET started_at=NULL WHERE id=$1 AND upload_id IS NULL`, pid)
+		return false, err
 	}
 	v, err := publicationPolicyViolation(ctx, tx, pid, now, true)
 	if err != nil {
@@ -553,7 +630,14 @@ func publicationPolicyViolation(ctx context.Context, tx pgx.Tx, pid int64, now t
 		return nil, err
 	}
 	if override {
-		return nil, nil
+		v, e := flowFilterViolationTx(ctx, tx, clip, rid)
+		if v != nil {
+			v.PublicationID = pid
+			v.Automatic = automatic
+			v.Protected = protected
+			v.PublishAt = at
+		}
+		return v, e
 	}
 	v, err := sourcePolicyViolation(ctx, tx, clip, rid, at, now)
 	if err != nil || v == nil {
@@ -751,6 +835,14 @@ func (s *Store) AbortFlowImport(ctx context.Context, id string, generation int64
 
 // Validate inside the same transaction that assigns the exact revision/date.
 func validatePublicationPolicyTx(ctx context.Context, tx pgx.Tx, pid int64, now time.Time) error {
+	var clip string
+	var rid int64
+	if err := tx.QueryRow(ctx, `SELECT clip_id,COALESCE(revision_id,0)FROM publications WHERE id=$1`, pid).Scan(&clip, &rid); err != nil {
+		return err
+	}
+	if err := requireFlowFiltersTx(ctx, tx, clip, rid); err != nil {
+		return err
+	}
 	mode, err := policyMode(ctx, tx)
 	if err != nil || mode != "enforce" {
 		return err

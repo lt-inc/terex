@@ -71,12 +71,12 @@ func (s *Store) SaveTwitchSettings(ctx context.Context, v twitch.Settings) error
 	return tx.Commit(ctx)
 }
 
-const importCols = `i.id,i.request,i.state,i.original,i.verified,i.upload_expires_at,COALESCE(i.job_id,''),COALESCE(i.clip_id,''),i.rejected,i.created_at,COALESCE(i.error,''),COALESCE(c.latest_revision_id,0),COALESCE(i.media_id,''),i.media_state,i.upload_generation`
+const importCols = `i.id,i.request,i.state,i.original,i.verified,i.upload_expires_at,COALESCE(i.job_id,''),COALESCE(i.clip_id,''),i.rejected,i.created_at,COALESCE(i.error,''),COALESCE(c.latest_revision_id,0),COALESCE(i.media_id,''),i.media_state,i.upload_generation,i.epoch`
 
 func scanImport(row pgx.Row) (twitch.Import, error) {
 	var o twitch.Import
 	var req, original, verified []byte
-	err := row.Scan(&o.ImportID, &req, &o.State, &original, &verified, &o.UploadExpiresAt, &o.JobID, &o.ClipID, &o.Rejected, &o.CreatedAt, &o.Error, &o.RevisionID, &o.MediaID, &o.MediaState, &o.UploadGeneration)
+	err := row.Scan(&o.ImportID, &req, &o.State, &original, &verified, &o.UploadExpiresAt, &o.JobID, &o.ClipID, &o.Rejected, &o.CreatedAt, &o.Error, &o.RevisionID, &o.MediaID, &o.MediaState, &o.UploadGeneration, &o.Epoch)
 	if err != nil {
 		return o, mapErr(err)
 	}
@@ -116,7 +116,7 @@ const currentFlowSourceEligible = `
  COALESCE((i.request->'source'->>'view_count')::bigint,0)>=COALESCE((f.config->>'min_views')::bigint,0)
  AND (i.request->'source'->>'duration_sec')::numeric BETWEEN (f.config->>'min_duration_sec')::numeric AND (f.config->>'max_duration_sec')::numeric
  AND (i.request->'source'->>'created_at')::timestamptz BETWEEN now()-make_interval(hours=>(f.config->>'window_hours')::int) AND now()-make_interval(mins=>COALESCE((f.config->>'min_age_minutes')::int,0))
- AND(COALESCE(f.config->>'language','')='' OR f.config->>'language'=i.request->'source'->>'language')
+ AND(COALESCE(f.config->>'language','')='' OR (f.config->>'language'=i.request->'source'->>'language' AND i.request->'source'->>'language_source'='clip'))
  AND(CASE WHEN f.config->>'source_mode'='category' THEN f.config->>'category_id'=i.request->'source'->>'game_id'
  ELSE COALESCE(f.config->'broadcaster_ids','[]'::jsonb) ? (i.request->'source'->>'broadcaster_id') OR (COALESCE((f.config->>'legacy_length')::boolean,false) AND COALESCE(jsonb_array_length(f.config->'broadcaster_ids'),0)=0) END)`
 
@@ -162,6 +162,9 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	}
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
+		return twitch.Import{}, err
+	}
+	if err = twitchResetRequestAllowed(ctx, tx, r.Epoch); err != nil {
 		return twitch.Import{}, err
 	}
 	existing, err := scanImport(tx.QueryRow(ctx, `SELECT `+importCols+` FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id WHERE EXISTS(SELECT 1 FROM twitch_import_keys k WHERE k.idempotency_key=$1 AND k.import_id=i.id) OR i.twitch_clip_id=$2 ORDER BY EXISTS(SELECT 1 FROM twitch_import_keys k WHERE k.idempotency_key=$1 AND k.import_id=i.id) DESC LIMIT 1`, r.IdempotencyKey, r.Source.ClipID))
@@ -213,7 +216,7 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 		return twitch.Import{}, fmt.Errorf("%w: daily download limit reached", domain.ErrConflict)
 	}
 	id := uuid.NewString()
-	if _, err = tx.Exec(ctx, `INSERT INTO twitch_imports(id,idempotency_key,twitch_clip_id,request,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$5)`, id, r.IdempotencyKey, r.Source.ClipID, mustJSON(r), now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_imports(id,idempotency_key,twitch_clip_id,request,created_at,updated_at,epoch) VALUES($1,$2,$3,$4,$5,$5,$6)`, id, r.IdempotencyKey, r.Source.ClipID, mustJSON(r), now, r.Epoch); err != nil {
 		return twitch.Import{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_download_reservations(import_id,generation,broadcaster_id,created_at)VALUES($1,0,$2,$3)`, id, r.Source.BroadcasterID, now); err != nil {
@@ -229,12 +232,43 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	return out, tx.Commit(ctx)
 }
 func (s *Store) SetTwitchUpload(ctx context.Context, id string, ref workflow.ObjectRef, expires time.Time) error {
-	_, err := s.pool.Exec(ctx, `UPDATE twitch_imports SET state='upload_pending',original=$2,upload_expires_at=$3,error=NULL,updated_at=now() WHERE id=$1 AND state IN ('upload_pending','failed') AND clip_id IS NULL`, id, mustJSON(ref), expires)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
+	if err = twitchResetAllowed(ctx, tx); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE twitch_imports SET state='upload_pending',original=$2,upload_expires_at=$3,error=NULL,updated_at=now() WHERE id=$1 AND state IN ('upload_pending','failed') AND clip_id IS NULL`, id, mustJSON(ref), expires)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return domain.ErrConflict
+	}
+	return tx.Commit(ctx)
 }
 func (s *Store) FailTwitchImport(ctx context.Context, id, message string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE twitch_imports SET state='failed',error=$2,updated_at=now() WHERE id=$1 AND clip_id IS NULL`, id, message)
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
+	if err = twitchResetAllowed(ctx, tx); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE twitch_imports SET state='failed',error=$2,updated_at=now() WHERE id=$1 AND clip_id IS NULL`, id, message)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.VerifiedMedia, now time.Time) (twitch.Import, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -243,6 +277,9 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 	}
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
+		return twitch.Import{}, err
+	}
+	if err = twitchResetAllowed(ctx, tx); err != nil {
 		return twitch.Import{}, err
 	}
 	if _, err = tx.Exec(ctx, `SELECT id FROM twitch_imports WHERE id=$1 FOR UPDATE`, id); err != nil {

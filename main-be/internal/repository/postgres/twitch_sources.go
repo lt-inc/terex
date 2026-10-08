@@ -17,7 +17,7 @@ import (
 )
 
 func sourceMatches(f twitch.Flow, src twitch.Source) bool {
-	if f.Language != "" && f.Language != src.Language {
+	if f.Language != "" && (f.Language != src.Language || src.LanguageSource != "clip") {
 		return false
 	}
 	if f.SourceMode == "category" {
@@ -46,8 +46,12 @@ func attachFlowSource(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twitch.
 	err := tx.QueryRow(ctx, `SELECT id FROM twitch_imports WHERE twitch_clip_id=$1`, src.ClipID).Scan(&id)
 	if err == pgx.ErrNoRows {
 		id = uuid.NewString()
-		r := twitch.ImportRequest{SchemaVersion: 2, IdempotencyKey: "source:" + src.ClipID, Source: src, FlowID: f.ID, FlowVersion: f.Version, AccountID: f.AccountID}
-		if _, err = tx.Exec(ctx, `INSERT INTO twitch_imports(id,idempotency_key,twitch_clip_id,request,state,created_at,updated_at)VALUES($1,$2,$3,$4,'discovered',$5,$5)`, id, r.IdempotencyKey, src.ClipID, mustJSON(r), now); err != nil {
+		epoch, _, e := twitchResetEpoch(ctx, tx)
+		if e != nil {
+			return "", e
+		}
+		r := twitch.ImportRequest{SchemaVersion: 2, IdempotencyKey: "source:" + src.ClipID, Source: src, FlowID: f.ID, FlowVersion: f.Version, AccountID: f.AccountID, Epoch: epoch}
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_imports(id,idempotency_key,twitch_clip_id,request,state,created_at,updated_at,epoch)VALUES($1,$2,$3,$4,'discovered',$5,$5,$6)`, id, r.IdempotencyKey, src.ClipID, mustJSON(r), now, epoch); err != nil {
 			return "", err
 		}
 	} else if err != nil {
@@ -84,6 +88,9 @@ func flowImport(ctx context.Context, q interface {
 	out.FlowID = flow
 	out.AccountID = f.AccountID
 	out.Excluded = excluded
+	if err = q.QueryRow(ctx, `SELECT COALESCE((SELECT primary_format FROM twitch_download_grants WHERE import_id=$1),'')`, id).Scan(&out.PreparationFormat); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 func (s *Store) GetFlowImport(ctx context.Context, id, flow string) (twitch.Import, error) {
@@ -96,6 +103,9 @@ func (s *Store) ObserveTwitchSources(ctx context.Context, r twitch.ObservationRe
 	}
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err = twitchResetRequestAllowed(ctx, tx, r.Epoch); err != nil {
 		return nil, err
 	}
 	f, err := flowByID(ctx, tx, r.FlowID)
@@ -137,6 +147,9 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	if err = lockTwitch(ctx, tx); err != nil {
 		return twitch.Import{}, err
 	}
+	if err = twitchResetRequestAllowed(ctx, tx, r.Epoch); err != nil {
+		return twitch.Import{}, err
+	}
 	f, err := flowByID(ctx, tx, r.FlowID)
 	// A shared download keeps its original reservation even when its owner is
 	// archived. Only an existing reservation may read that historical owner.
@@ -146,6 +159,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	if err != nil {
 		return twitch.Import{}, err
 	}
+	currentFilters := f
 	var pinned []byte
 	var savedVersion int
 	var reservedAt *time.Time
@@ -180,7 +194,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 			return twitch.Import{}, err
 		}
 	}
-	if reservedAt == nil && !sourceEligible(f, r.Source, now) {
+	if !sourceMatches(currentFilters, r.Source) || (reservedAt == nil && !sourceEligible(f, r.Source, now)) {
 		return twitch.Import{}, fmt.Errorf("%w: исходник не соответствует фильтрам потока", domain.ErrConflict)
 	}
 	var other string
@@ -201,6 +215,19 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	out, err := flowImport(ctx, tx, id, f.ID)
 	if err != nil {
 		return out, err
+	}
+	settings, e := readTwitchSettings(ctx, tx)
+	if e != nil {
+		return out, e
+	}
+	if settings.AdmissionMode == "enforce" && out.MediaState != "ready" && !continuing {
+		var granted bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_download_grants WHERE import_id=$1 AND flow_id=$2 AND epoch=$3 AND(state='consumed' OR(state='active' AND expires_at>$4)))`, id, f.ID, r.Epoch, now).Scan(&granted); err != nil {
+			return out, err
+		}
+		if !granted {
+			return out, waitPreparation("allocation_wait", "Ожидает распределения общего бюджета скачиваний", now)
+		}
 	}
 	if r.ReservationID != "" && r.ReservationID != out.ReservationID {
 		return out, domain.ErrConflict
@@ -250,7 +277,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	if (until != nil && until.After(now)) || (schema == 1 && out.UploadExpiresAt != nil && out.UploadExpiresAt.After(now)) {
 		return out, tx.Commit(ctx)
 	}
-	settings, e := readTwitchSettings(ctx, tx)
+	settings, e = readTwitchSettings(ctx, tx)
 	if e != nil {
 		return out, e
 	}
@@ -260,7 +287,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	loc, _ := time.LoadLocation(settings.Timezone)
 	day := now.In(loc).Format("2006-01-02")
 	var total, channel, backlog int
-	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT import_id),count(DISTINCT import_id)FILTER(WHERE broadcaster_id=$3) FROM twitch_download_reservations WHERE(created_at AT TIME ZONE $1)::date=$2::date AND import_id<>$4`, settings.Timezone, day, r.Source.BroadcasterID, id).Scan(&total, &channel); err != nil {
+	if err = tx.QueryRow(ctx, `WITH reserved AS(SELECT import_id,broadcaster_id FROM twitch_download_reservations WHERE(created_at AT TIME ZONE $1)::date=$2::date AND import_id<>$4 UNION SELECT g.import_id,i.request->'source'->>'broadcaster_id' FROM twitch_download_grants g JOIN twitch_imports i ON i.id=g.import_id WHERE(g.created_at AT TIME ZONE $1)::date=$2::date AND g.import_id<>$4 AND g.state<>'released') SELECT count(DISTINCT import_id),count(DISTINCT import_id)FILTER(WHERE broadcaster_id=$3)FROM reserved`, settings.Timezone, day, r.Source.BroadcasterID, id).Scan(&total, &channel); err != nil {
 		return out, err
 	}
 	if total >= settings.DailyDownloads || channel >= settings.PerChannelDailyDownloads {
@@ -296,13 +323,30 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	return out, tx.Commit(ctx)
 }
 func (s *Store) SetFlowUpload(ctx context.Context, id string, generation int64, ref workflow.ObjectRef, expires time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE twitch_imports SET original=$3,upload_expires_at=$4 WHERE id=$1 AND upload_generation=$2 AND media_state<>'ready' AND state='upload_pending'`, id, generation, mustJSON(ref), expires)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
+	if err = twitchResetAllowed(ctx, tx); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE twitch_imports SET original=$3,upload_expires_at=$4 WHERE id=$1 AND upload_generation=$2 AND media_state<>'ready' AND state='upload_pending'`, id, generation, mustJSON(ref), expires)
 	if err == nil && tag.RowsAffected() == 0 {
 		return domain.ErrConflict
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 func storeVerifiedMedia(ctx context.Context, tx pgx.Tx, id string, v *workflow.VerifiedMedia, now time.Time) error {
+	if err := twitchResetAllowed(ctx, tx); err != nil {
+		return err
+	}
 	if err := storageRefsAvailable(ctx, tx, v.Original); err != nil {
 		return err
 	}
@@ -323,6 +367,9 @@ func (s *Store) FinishFlowImport(ctx context.Context, id string, generation int6
 	}
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
+		return twitch.Import{}, err
+	}
+	if err = twitchResetAllowed(ctx, tx); err != nil {
 		return twitch.Import{}, err
 	}
 	out, err := importByID(ctx, tx, id)
@@ -438,7 +485,7 @@ func createFlowShort(ctx context.Context, tx pgx.Tx, id, flow string, now time.T
 	if reservedAt != nil {
 		eligibilityAt = *reservedAt
 	}
-	if !sourceEligible(f, out.Source, eligibilityAt) {
+	if !sourceEligible(f, out.Source, eligibilityAt) || !sourceMatches(current, out.Source) {
 		return nil
 	}
 	if !preparationSourceFresh(current, out.Source, now, now) {

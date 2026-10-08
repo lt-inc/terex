@@ -3,7 +3,9 @@
 The collector discovers and downloads public clips. Terex owns project settings,
 immutable imports, revisions, the review queue, assembly drafts and publication.
 Twitch imports bypass the YouTube download and LLM highlight pipeline. A completed
-render is a draft: the existing operator approval action is required before upload.
+render auto-approves that exact Twitch revision after source checks. Scheduling,
+flow enablement and publication holds remain separate controls; legacy YouTube
+jobs retain manual approval. See [the operator guide](../docs/TWITCH-PREPARATION.ru.md).
 
 ## Configuration
 
@@ -44,7 +46,10 @@ state check. `/healthz` is public.
 | `GET/PATCH /api/imports/{id}` | Read provenance or set `rejected` |
 | `GET/POST /api/compilations` | List or create a draft from pinned source revisions/ranges |
 | `GET/PUT /api/compilations/{id}` | Read or revise assembly; PUT requires `expected_version` |
-| `POST /api/compilations/auto` | Returns `{created, compilation}`; applies configured local hour and once-per-day guard |
+| `POST /api/compilations/auto` | Returns creation/blocking details; flow mode targets the nearest available publication date |
+| `GET /api/twitch/flows/{id}/diagnostics` | Read-only readiness, reasons, shared quota and collector state |
+| `POST /api/twitch/collector/admissions` | Narrow collector token: durable download grants |
+| `POST /api/twitch/reset/preview`, `POST /api/twitch/reset`, `GET /api/twitch/reset` | Operator-only full Twitch reset with preview and durable progress |
 
 Request contracts are in `proto/twitch`; assembly and ingestion contracts are in
 `proto/workflow`. Complete accepts at most 512 MiB and a valid SHA256. GPU ingestion
@@ -59,14 +64,16 @@ Compilation v1 uses 3–10 unique ready imports, pinned source revisions/ranges,
 `landscape_1080p30`, one second between clips and no music. The renderer materializes
 one immutable original and uses the existing revision renderer. The coordinator
 saves normalized duration and output only under the valid render lease. Reorder,
-range edits and metadata edits create another revision and require approval again;
+range edits and metadata edits create another revision; Twitch auto-approval waits
+for that revision to be ready and valid;
 generic revision save/restore retains dependency records. Source rejection holds
 dependent drafts and prevents later approval.
 
-The minute scheduler creates at most one automatic draft per configured local
-date after the configured hour, using the highest-view eligible clips from the
-lookback window that have not appeared in an earlier compilation. Fewer than the
-minimum clips means no draft. It never approves the result.
+The flow scheduler prepares the nearest publication as soon as enough eligible
+ready sources exist, using the full admissible pool, views and configured balance.
+It creates at most one automatic draft per target publication local date.
+Pending downloads do not count toward ready duration. A configurable soft budget
+defaults to 70% for compilations, with shadow admission before enforcement.
 
 The download/backlog limits are checked transactionally. Publication calendar
 limits use the project timezone and one configured YouTube account: approvals,
@@ -86,4 +93,4 @@ visibility. HTTP tests check operator/service isolation and the real collector r
 shape. No real Twitch download or YouTube publication is implied by these checks.
 
 This MVP does not grant content rights or automate legal clearance. The operator
-remains responsible for the selected sources and the final approval decision.
+remains responsible for the selected sources and publication settings.

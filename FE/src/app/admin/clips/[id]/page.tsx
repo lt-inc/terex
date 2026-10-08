@@ -35,6 +35,7 @@ function spec(e: ClipEditor) {
 }
 export default function ClipEditorPage() {
   const { id } = useParams<{ id: string }>();
+  const twitchClip = id.startsWith("twitch-") || id.startsWith("compilation-");
   const router = useRouter();
   const [confirmation, setConfirmation] = useState<{
     kind: "approve" | "restore" | "reload" | "leave";
@@ -135,7 +136,7 @@ export default function ClipEditorPage() {
       setDraft(result);
       setTags((result.hashtags ?? []).join(" "));
       setNotice(
-        "Saved. Future publications are held until this revision is rendered and approved.",
+        twitchClip ? "Сохранено. Будущие публикации ждут готовности нового рендера; версия допускается автоматически." : "Saved. Future publications are held until this revision is rendered and approved.",
       );
     } catch (e) {
       setError(
@@ -208,7 +209,7 @@ export default function ClipEditorPage() {
       setTags((result.hashtags ?? []).join(" "));
       setRestoreID("");
       setNotice(
-        "Previous render restored as a new revision. Review and approve to resume future publications.",
+        twitchClip ? "Предыдущий рендер восстановлен новой версией с автоматическим допуском. Проверьте дату в календаре." : "Previous render restored as a new revision. Review and approve to resume future publications.",
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -282,19 +283,17 @@ export default function ClipEditorPage() {
           >
             {busy ? "Working…" : "Save & render"}
           </button>
-          <button
+          {!twitchClip && <button
             className="bg-emerald-600 disabled:opacity-40 px-3 py-2 rounded-lg text-sm"
             disabled={busy || dirty || saved?.render_state !== "ready"}
             onClick={() => setConfirmation({ kind: "approve" })}
           >
             Approve revision
-          </button>
+          </button>}
         </div>
       </div>
       <p className="text-sm text-slate-400">
-        Saving this variant holds future publications until reapproval. Already
-        started uploads keep their original revision. Subtitle times refer to
-        the source video.
+        {twitchClip ? "Готовая версия Twitch допускается автоматически; публикация зависит от переключателя потока и расписания. Изменения удерживают будущие выпуски до готовности нового рендера. Начатые загрузки сохраняют исходную версию." : "Saving this variant holds future publications until reapproval. Already started uploads keep their original revision. Subtitle times refer to the source video."}
       </p>
       {error && (
         <p role="alert" className="text-red-400 text-sm">

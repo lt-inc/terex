@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"terex/gpu-be/internal/domain"
+	"terex/gpu-be/internal/service/resetgate"
 	"terex/proto/workflow"
 	"time"
 
@@ -53,6 +55,7 @@ type Store interface {
 	Upload(context.Context, domain.ObjectRef, string) error
 }
 type Service struct {
+	Reset  *resetgate.Gate
 	Store  Store
 	Media  Media
 	TmpDir string
@@ -65,6 +68,11 @@ func (s *Service) ReserveUpload(ctx context.Context, q *workflow.ReserveUploadRe
 	if q == nil || !safeID.MatchString(q.ImportID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid import ID")
 	}
+	ctx, release, err := s.Reset.Begin(ctx, q.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	ref := staging(q.ImportID)
 	if q.Ref.Bucket != "" && q.Ref != ref {
 		return nil, status.Error(codes.InvalidArgument, "invalid staging reference")
@@ -80,6 +88,11 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	if q == nil || !safeID.MatchString(q.ImportID) || q.Ref != staging(q.ImportID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid staging reference")
 	}
+	ctx, release, err := s.Reset.Begin(ctx, q.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if q.ExpectedSHA256 != "" && !digest.MatchString(q.ExpectedSHA256) {
 		return nil, status.Error(codes.InvalidArgument, "invalid SHA-256")
 	}
@@ -127,7 +140,11 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	}
 	// Only fully verified bytes reach this content-addressed object. Concurrent
 	// aliases publish identical bytes to the same key; staging URLs cannot write it.
-	ref := domain.ObjectRef{Bucket: Bucket, Object: "verified/sha256/" + hash + ".mp4"}
+	key := "verified/sha256/" + hash + ".mp4"
+	if q.Epoch > 0 {
+		key = fmt.Sprintf("verified/epoch-%d/sha256/%s.mp4", q.Epoch, hash)
+	}
+	ref := domain.ObjectRef{Bucket: Bucket, Object: key}
 	if err = s.Store.Upload(ctx, ref, file); err != nil {
 		return nil, unavailable(ctx, "store verified media", err)
 	}

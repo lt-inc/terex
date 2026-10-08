@@ -29,12 +29,12 @@ func (s *Store) SyncFlows(ctx context.Context, flows []twitch.Flow) error {
 		if ids == nil {
 			ids = []string{}
 		}
-		// New filter choices affect memberships whose upload has not been pinned.
-		// A saved reservation retains its original owner's discovery snapshot.
+		// A download keeps its immutable owner and generation, while current
+		// filters decide whether that owner remains an eligible consumer.
 		if _, err = tx.Exec(ctx, `UPDATE twitch_collector.consumers co SET eligible=(c.view_count >= $2 AND c.created_at<=now()-$3::double precision*interval '1 minute'
- AND c.created_at>=now()-$4::double precision*interval '1 hour' AND c.duration >= $5 AND c.duration <= $6 AND($7='' OR c.language=$7)
+ AND c.created_at>=now()-$4::double precision*interval '1 hour' AND c.duration >= $5 AND c.duration <= $6 AND($7='' OR (c.language=$7 AND c.language_source='clip'))
  AND CASE WHEN $8='category' THEN c.game_id=$9 ELSE(cardinality($10::text[])=0 OR c.broadcaster_id=ANY($10::text[])) END)
- FROM twitch_collector.clips c WHERE co.clip_id=c.clip_id AND co.flow_id=$1 AND NOT EXISTS(SELECT 1 FROM twitch_collector.download_tasks t WHERE t.clip_id=co.clip_id AND t.flow_id=co.flow_id AND t.reservation IS NOT NULL)`, f.ID, f.MinViews, f.MinAgeMinutes, f.WindowHours, f.MinDurationSec, f.MaxDurationSec, f.Language, f.SourceMode, f.CategoryID, ids); err != nil {
+ FROM twitch_collector.clips c WHERE co.clip_id=c.clip_id AND co.flow_id=$1`, f.ID, f.MinViews, f.MinAgeMinutes, f.WindowHours, f.MinDurationSec, f.MaxDurationSec, f.Language, f.SourceMode, f.CategoryID, ids); err != nil {
 			return err
 		}
 		if f.ID == "default" {
@@ -97,9 +97,9 @@ func (s *Store) ObserveFlow(ctx context.Context, f twitch.Flow, clips []domain.C
 		if maxAge <= 0 {
 			maxAge = 72
 		}
-		eligible := c.ViewCount >= f.MinViews && age >= time.Duration(f.MinAgeMinutes)*time.Minute && age <= time.Duration(f.WindowHours)*time.Hour && age <= time.Duration(maxAge)*time.Hour && c.Duration >= f.MinDurationSec && c.Duration <= f.MaxDurationSec && (f.Language == "" || c.Language == f.Language)
+		eligible := c.ViewCount >= f.MinViews && age >= time.Duration(f.MinAgeMinutes)*time.Minute && age <= time.Duration(f.WindowHours)*time.Hour && age <= time.Duration(maxAge)*time.Hour && c.Duration >= f.MinDurationSec && c.Duration <= f.MaxDurationSec && (f.Language == "" || c.Language == f.Language && c.LanguageSource == "clip")
 		if _, err = tx.Exec(ctx, `INSERT INTO twitch_collector.consumers(clip_id,flow_id,flow_version,eligible) VALUES($1,$2,$3,$4)
- ON CONFLICT(clip_id,flow_id) DO UPDATE SET eligible=CASE WHEN EXISTS(SELECT 1 FROM twitch_collector.download_tasks t WHERE t.clip_id=excluded.clip_id AND t.flow_id=excluded.flow_id AND t.reservation IS NOT NULL) THEN twitch_collector.consumers.eligible ELSE excluded.eligible END,
+ ON CONFLICT(clip_id,flow_id) DO UPDATE SET eligible=excluded.eligible,
  flow_version=CASE WHEN EXISTS(SELECT 1 FROM twitch_collector.download_tasks t WHERE t.clip_id=excluded.clip_id) THEN twitch_collector.consumers.flow_version ELSE excluded.flow_version END`, c.ID, f.ID, f.Version, eligible); err != nil {
 			return err
 		}

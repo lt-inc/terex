@@ -20,6 +20,8 @@ type Settings struct {
 	MinDurationSec           float64 `json:"min_duration_sec"`
 	MaxDurationSec           float64 `json:"max_duration_sec"`
 	DailyDownloads           int     `json:"daily_downloads"`
+	CompilationBudgetPercent int     `json:"compilation_budget_percent"`
+	AdmissionMode            string  `json:"admission_mode"`
 	PerChannelDailyDownloads int     `json:"per_channel_daily_downloads"`
 	DailyShorts              int     `json:"daily_shorts"`
 	DailyCompilations        int     `json:"daily_compilations"`
@@ -32,11 +34,14 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{PollIntervalMinutes: 144, WindowHours: 72, First: 100, MinViews: 100, MinAgeMinutes: 60,
-		MinDurationSec: 5, MaxDurationSec: 60, DailyDownloads: 10, PerChannelDailyDownloads: 2,
+		MinDurationSec: 5, MaxDurationSec: 60, DailyDownloads: 10, CompilationBudgetPercent: 70, AdmissionMode: "shadow", PerChannelDailyDownloads: 2,
 		DailyShorts: 5, DailyCompilations: 1, CompilationMinClips: 3, CompilationMaxClips: 10,
 		CompilationHour: 21, BacklogLimit: 40, Timezone: "Asia/Tomsk"}
 }
 func (s Settings) Validate() error {
+	if s.CompilationBudgetPercent < 0 || s.CompilationBudgetPercent > 100 || (s.AdmissionMode != "" && s.AdmissionMode != "shadow" && s.AdmissionMode != "enforce") {
+		return fmt.Errorf("invalid preparation allocation settings")
+	}
 	if s.PollIntervalMinutes < 1 || s.PollIntervalMinutes > 10080 || s.WindowHours < 1 || s.WindowHours > 720 || s.First < 1 || s.First > 100 || s.MinViews < 0 || s.MinAgeMinutes < 0 || s.MinAgeMinutes >= s.WindowHours*60 {
 		return fmt.Errorf("invalid discovery limits")
 	}
@@ -70,6 +75,7 @@ type Source struct {
 	VODOffset        *float64  `json:"vod_offset,omitempty"`
 	GameID           string    `json:"game_id,omitempty"`
 	Language         string    `json:"language,omitempty"`
+	LanguageSource   string    `json:"language_source,omitempty"`
 	ThumbnailURL     string    `json:"thumbnail_url,omitempty"`
 }
 
@@ -125,9 +131,11 @@ type Flow struct {
 }
 
 type CollectorConfig struct {
-	Settings         Settings `json:"settings"`
-	Flows            []Flow   `json:"flows"`
-	BlockedSourceIDs []string `json:"blocked_source_ids,omitempty"`
+	Epoch            int64             `json:"epoch"`
+	Maintenance      *ResetMaintenance `json:"maintenance,omitempty"`
+	Settings         Settings          `json:"settings"`
+	Flows            []Flow            `json:"flows"`
+	BlockedSourceIDs []string          `json:"blocked_source_ids,omitempty"`
 }
 
 // Capacity is advisory. Import reservation repeats admission in the database
@@ -161,6 +169,7 @@ type PreparationWait struct {
 }
 
 type ObservationRequest struct {
+	Epoch       int64    `json:"epoch"`
 	FlowID      string   `json:"flow_id"`
 	FlowVersion int      `json:"flow_version"`
 	Sources     []Source `json:"sources"`
@@ -172,6 +181,7 @@ type Category struct {
 }
 
 type ImportRequest struct {
+	Epoch            int64  `json:"epoch"`
 	SchemaVersion    int    `json:"schema_version"`
 	IdempotencyKey   string `json:"idempotency_key"`
 	Source           Source `json:"source"`
@@ -182,37 +192,40 @@ type ImportRequest struct {
 	UploadGeneration int64  `json:"upload_generation,omitempty"`
 }
 type ImportCompleteRequest struct {
+	Epoch            int64  `json:"epoch"`
 	SHA256           string `json:"sha256"`
 	SizeBytes        int64  `json:"size_bytes"`
 	UploadGeneration int64  `json:"upload_generation,omitempty"`
 }
 type Import struct {
-	ImportID         string        `json:"import_id"`
-	Source           Source        `json:"source"`
-	State            string        `json:"state"`
-	AccountID        int64         `json:"account_id"`
-	JobID            string        `json:"job_id,omitempty"`
-	ClipID           string        `json:"clip_id,omitempty"`
-	RevisionID       int64         `json:"revision_id,omitempty"`
-	UploadURL        string        `json:"upload_url,omitempty"`
-	UploadExpiresAt  *time.Time    `json:"upload_expires_at,omitempty"`
-	Original         msg.ObjectRef `json:"original,omitempty"`
-	SHA256           string        `json:"sha256,omitempty"`
-	DurationSec      float64       `json:"duration_sec,omitempty"`
-	SizeBytes        int64         `json:"size_bytes,omitempty"`
-	Width            int           `json:"width,omitempty"`
-	Height           int           `json:"height,omitempty"`
-	Rejected         bool          `json:"rejected"`
-	Excluded         bool          `json:"excluded"`
-	CreatedAt        time.Time     `json:"created_at"`
-	Error            string        `json:"error,omitempty"`
-	FlowID           string        `json:"flow_id,omitempty"`
-	FlowVersion      int           `json:"flow_version,omitempty"`
-	ReservationID    string        `json:"reservation_id,omitempty"`
-	MediaID          string        `json:"media_id,omitempty"`
-	MediaState       string        `json:"media_state,omitempty"`
-	UploadGeneration int64         `json:"upload_generation,omitempty"`
-	UploadImportID   string        `json:"upload_import_id,omitempty"`
+	Epoch             int64         `json:"epoch"`
+	PreparationFormat string        `json:"preparation_format,omitempty"`
+	ImportID          string        `json:"import_id"`
+	Source            Source        `json:"source"`
+	State             string        `json:"state"`
+	AccountID         int64         `json:"account_id"`
+	JobID             string        `json:"job_id,omitempty"`
+	ClipID            string        `json:"clip_id,omitempty"`
+	RevisionID        int64         `json:"revision_id,omitempty"`
+	UploadURL         string        `json:"upload_url,omitempty"`
+	UploadExpiresAt   *time.Time    `json:"upload_expires_at,omitempty"`
+	Original          msg.ObjectRef `json:"original,omitempty"`
+	SHA256            string        `json:"sha256,omitempty"`
+	DurationSec       float64       `json:"duration_sec,omitempty"`
+	SizeBytes         int64         `json:"size_bytes,omitempty"`
+	Width             int           `json:"width,omitempty"`
+	Height            int           `json:"height,omitempty"`
+	Rejected          bool          `json:"rejected"`
+	Excluded          bool          `json:"excluded"`
+	CreatedAt         time.Time     `json:"created_at"`
+	Error             string        `json:"error,omitempty"`
+	FlowID            string        `json:"flow_id,omitempty"`
+	FlowVersion       int           `json:"flow_version,omitempty"`
+	ReservationID     string        `json:"reservation_id,omitempty"`
+	MediaID           string        `json:"media_id,omitempty"`
+	MediaState        string        `json:"media_state,omitempty"`
+	UploadGeneration  int64         `json:"upload_generation,omitempty"`
+	UploadImportID    string        `json:"upload_import_id,omitempty"`
 }
 type CompilationItemRequest struct {
 	ClipID     string  `json:"clip_id"`

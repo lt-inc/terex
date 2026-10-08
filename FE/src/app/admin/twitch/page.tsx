@@ -260,7 +260,7 @@ export default function TwitchFlowsPage() {
               >
                 {flow.auto_publish
                   ? "Автопубликация новых автоматических выпусков"
-                  : "Публикация после ручного одобрения"}{" "}
+                  : "Время публикации назначается вручную"}{" "}
                 · {flow.timezone}
               </p>
               <dl className="grid grid-cols-2 gap-3 text-xs">

@@ -62,6 +62,7 @@ INSERT INTO twitch_collector.state(id) VALUES(1) ON CONFLICT DO NOTHING;
 INSERT INTO twitch_collector.schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
 ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS game_id text NOT NULL DEFAULT '';
 ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS language text NOT NULL DEFAULT '';
+ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS language_source text NOT NULL DEFAULT '';
 ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS thumbnail_url text NOT NULL DEFAULT '';
 ALTER TABLE twitch_collector.clips ADD COLUMN IF NOT EXISTS error_kind text NOT NULL DEFAULT '';
 ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS flow_id text NOT NULL DEFAULT '';
@@ -97,7 +98,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("provision collector schema before startup: %w", err)
 		}
 	}
-	if _, err = tx.Exec(ctx, migration); err != nil {
+	if _, err = tx.Exec(ctx, migration+resetMigration); err != nil {
 		return fmt.Errorf("collector migration: %w", err)
 	}
 	return tx.Commit(ctx)
@@ -176,9 +177,9 @@ func (s *Store) UpsertClips(ctx context.Context, clips []domain.Clip) error {
 	}
 	defer tx.Rollback(ctx)
 	for _, c := range clips {
-		_, err = tx.Exec(ctx, `INSERT INTO twitch_collector.clips(clip_id,channel_id,broadcaster_id,broadcaster_name,title,view_count,created_at,duration,video_id,vod_offset,game_id,language,thumbnail_url)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(clip_id) DO UPDATE SET view_count=excluded.view_count,title=excluded.title,
- video_id=excluded.video_id,vod_offset=excluded.vod_offset,game_id=excluded.game_id,language=excluded.language,thumbnail_url=excluded.thumbnail_url,observed_at=now()`, c.ID, c.ChannelID, c.BroadcasterID, c.BroadcasterName, c.Title, c.ViewCount, c.CreatedAt, c.Duration, c.VideoID, c.VODOffset, c.GameID, c.Language, c.ThumbnailURL)
+		_, err = tx.Exec(ctx, `INSERT INTO twitch_collector.clips(clip_id,channel_id,broadcaster_id,broadcaster_name,title,view_count,created_at,duration,video_id,vod_offset,game_id,language,thumbnail_url,language_source)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(clip_id) DO UPDATE SET view_count=excluded.view_count,title=excluded.title,
+ video_id=excluded.video_id,vod_offset=excluded.vod_offset,game_id=excluded.game_id,language=excluded.language,language_source=excluded.language_source,thumbnail_url=excluded.thumbnail_url,observed_at=now()`, c.ID, c.ChannelID, c.BroadcasterID, c.BroadcasterName, c.Title, c.ViewCount, c.CreatedAt, c.Duration, c.VideoID, c.VODOffset, c.GameID, c.Language, c.ThumbnailURL, c.LanguageSource)
 		if err != nil {
 			return err
 		}
@@ -186,10 +187,10 @@ func (s *Store) UpsertClips(ctx context.Context, clips []domain.Clip) error {
 	return tx.Commit(ctx)
 }
 
-const clipColumns = `c.clip_id,c.channel_id,c.broadcaster_id,c.broadcaster_name,c.title,c.view_count,c.created_at,c.duration,c.video_id,c.vod_offset,c.state,c.last_error,c.import_id,c.sha256,c.game_id,c.language,c.thumbnail_url`
+const clipColumns = `c.clip_id,c.channel_id,c.broadcaster_id,c.broadcaster_name,c.title,c.view_count,c.created_at,c.duration,c.video_id,c.vod_offset,c.state,c.last_error,c.import_id,c.sha256,c.game_id,c.language,c.thumbnail_url,c.language_source`
 
 func scanClip(row pgx.Row) (c domain.Clip, err error) {
-	err = row.Scan(&c.ID, &c.ChannelID, &c.BroadcasterID, &c.BroadcasterName, &c.Title, &c.ViewCount, &c.CreatedAt, &c.Duration, &c.VideoID, &c.VODOffset, &c.State, &c.LastError, &c.ImportID, &c.SHA256, &c.GameID, &c.Language, &c.ThumbnailURL)
+	err = row.Scan(&c.ID, &c.ChannelID, &c.BroadcasterID, &c.BroadcasterName, &c.Title, &c.ViewCount, &c.CreatedAt, &c.Duration, &c.VideoID, &c.VODOffset, &c.State, &c.LastError, &c.ImportID, &c.SHA256, &c.GameID, &c.Language, &c.ThumbnailURL, &c.LanguageSource)
 	c.URL = "https://clips.twitch.tv/" + c.ID
 	return c, translate(err)
 }
@@ -297,7 +298,7 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 			continue
 		}
 		operation = "create download task"
-		if _, e = tx.Exec(ctx, "INSERT INTO twitch_collector.download_tasks(clip_id,run_at,flow_id,flow_version) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING", c.ID, now, c.FlowID, c.FlowVersion); e != nil {
+		if _, e = tx.Exec(ctx, "INSERT INTO twitch_collector.download_tasks(clip_id,run_at,flow_id,flow_version,epoch) VALUES($1,$2,$3,$4,(SELECT epoch FROM twitch_collector.state WHERE id=1)) ON CONFLICT DO NOTHING", c.ID, now, c.FlowID, c.FlowVersion); e != nil {
 			return 0, e
 		}
 		total++
@@ -326,6 +327,7 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (*domain.Task, e
 	var attempt int
 	var flowID string
 	var flowVersion int
+	var epoch int64
 	var reservation []byte
 	err = tx.QueryRow(ctx, `WITH candidate AS (
  SELECT t.clip_id FROM twitch_collector.download_tasks t JOIN twitch_collector.clips c ON c.clip_id=t.clip_id
@@ -334,7 +336,7 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (*domain.Task, e
  AND ((t.state='queued' AND t.run_at<=now()) OR (t.state='leased' AND t.lease_expires_at<=now()))
  ORDER BY t.run_at,t.clip_id FOR UPDATE OF t SKIP LOCKED LIMIT 1)
  UPDATE twitch_collector.download_tasks t SET state='leased',attempts=attempts+1,lease_token=$1,
- lease_expires_at=now()+$2*interval '1 second',updated_at=now(),started_at=now() FROM candidate WHERE t.clip_id=candidate.clip_id RETURNING t.clip_id,t.attempts,t.flow_id,t.flow_version,t.reservation`, token, lease.Seconds()).Scan(&id, &attempt, &flowID, &flowVersion, &reservation)
+ lease_expires_at=now()+$2*interval '1 second',updated_at=now(),started_at=now() FROM candidate WHERE t.clip_id=candidate.clip_id RETURNING t.clip_id,t.attempts,t.flow_id,t.flow_version,t.reservation,t.epoch`, token, lease.Seconds()).Scan(&id, &attempt, &flowID, &flowVersion, &reservation, &epoch)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}
@@ -351,7 +353,7 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (*domain.Task, e
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	task := &domain.Task{Clip: c, Token: token, Attempt: attempt, FlowID: flowID, FlowVersion: flowVersion}
+	task := &domain.Task{Epoch: epoch, Clip: c, Token: token, Attempt: attempt, FlowID: flowID, FlowVersion: flowVersion}
 	if len(reservation) > 0 {
 		if err = json.Unmarshal(reservation, &task.Reservation); err != nil {
 			return nil, err

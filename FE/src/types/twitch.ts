@@ -17,6 +17,8 @@ export interface TwitchSettings {
   compilation_hour: number;
   backlog_limit: number;
   timezone: string;
+  compilation_budget_percent?: number;
+  admission_mode?: "shadow" | "enforce";
 }
 
 export interface TwitchSource {
@@ -33,6 +35,7 @@ export interface TwitchSource {
   video_id?: string;
   vod_offset?: number | null;
   language?: string;
+  language_source?: string;
   game_id?: string;
   thumbnail_url?: string;
 }
@@ -316,4 +319,44 @@ export interface AutoCompilationResult {
   ready_duration_sec?: number;
   minimum_duration_sec?: number;
   missing_duration_sec?: number;
+  selected_clips?: number;
+}
+
+export interface TwitchFlowDiagnostics {
+  flow_id: string;
+  generated_at: string;
+  compilation: AutoCompilationResult & { selected_clips: number; ready_duration_sec: number; minimum_duration_sec: number; missing_duration_sec: number; minimum_clips: number; scheduled_at: string };
+  capacity: TwitchCapacity;
+  sources: Record<string, number>;
+  competitors: { flow_id: string; name: string; format: string; scheduled: number; preparing: number; nearest_at?: string }[];
+  collector: { available: boolean; message?: string; spent: number; daily_limit: number; remaining: number; timezone: string; compilation_budget_percent: number; admission_mode: string; by_flow: {flow_id: string; name: string; format: string; spent: number}[]; discovery?: {fetched:number;language_matched:number;language_rejected:number;language_unknown:number;page_limit_reached:boolean;checked_at:string;broadcaster_id:string;error?:string}[] };
+  average_duration_sec: number;
+  average_estimated: boolean;
+  estimated_additional_clips: number;
+  expected_clips: number;
+  expected_duration_sec: number;
+  feasibility: string;
+  messages: string[];
+}
+
+export interface TwitchResetPreview {
+  preview_token: string;
+  expires_at: string;
+  confirmation_phrase: string;
+  counts: Record<string, number>;
+  blockers: {code:string;message:string;publication_id?:number}[];
+}
+export interface TwitchResetStatus {
+  id?: string;
+  state: "idle" | "stopping" | "deleting" | "clearing" | "completed" | "failed";
+  epoch?: number;
+  collector_ack?: boolean;
+  gpu_drained?: boolean;
+  counts?: Record<string,number>;
+  deleted_objects?: number;
+  deleted_bytes?: number;
+  remaining_objects?: number;
+  blockers?: {code:string;message:string;publication_id?:number}[];
+  error?: string;
+  updated_at?: string;
 }

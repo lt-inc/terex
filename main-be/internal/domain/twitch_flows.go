@@ -11,6 +11,7 @@ type FlowClipQuery struct {
 	Limit, Offset                   int
 	State, Format, BroadcasterID, Q string
 	CollectorSourceIDs              []string
+	ShowFiltered                    bool
 }
 type FlowClipReason struct {
 	Code          string     `json:"code"`

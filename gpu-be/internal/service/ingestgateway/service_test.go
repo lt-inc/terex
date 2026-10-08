@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"terex/gpu-be/internal/domain"
+	"terex/gpu-be/internal/service/resetgate"
 	"terex/proto/workflow"
 	"testing"
 	"time"
@@ -126,5 +127,16 @@ func TestVerifiedObjectCannotBeOverwrittenByUploadURL(t *testing.T) {
 	_, err = s.VerifyUpload(context.Background(), &workflow.VerifyUploadRequest{ImportID: "../credentials", Ref: staging("../credentials")})
 	if err == nil {
 		t.Fatal("path injection accepted")
+	}
+	s.Reset = resetgate.New()
+	if _, err = s.Reset.SetTwitchMaintenance(context.Background(), &workflow.TwitchMaintenanceRequest{Epoch: 1}); err != nil {
+		t.Fatal(err)
+	}
+	resetMedia, err := s.VerifyUpload(context.Background(), &workflow.VerifyUploadRequest{Epoch: 1, ImportID: "new-import", Ref: staging("new-import")})
+	if err != nil || resetMedia.SHA256 != v.SHA256 || resetMedia.Original.Object != "verified/epoch-1/sha256/"+v.SHA256+".mp4" {
+		t.Fatalf("same hash reused a deleted old epoch object: %+v %v", resetMedia, err)
+	}
+	if _, err = s.VerifyUpload(context.Background(), &workflow.VerifyUploadRequest{ImportID: "late-old-import", Ref: staging("late-old-import")}); err == nil {
+		t.Fatal("old ingestion epoch admitted after reset")
 	}
 }
