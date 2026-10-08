@@ -50,3 +50,25 @@ func TestLanguageSearchDoesNotTrustChannelHintOrStopAtEnglishPage(t *testing.T) 
 		t.Fatalf("incorrect discovery report: %+v", reports)
 	}
 }
+
+func TestCategoryDiscoveryDropsClipsWithoutResolvableLogin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/clips":
+			fmt.Fprint(w, `{"data":[{"id":"Good","broadcaster_id":"42","broadcaster_name":"Streamer","game_id":"1","language":"en","created_at":"2026-10-07T00:00:00Z","duration":20,"view_count":1000},{"id":"Gone","broadcaster_id":"43","broadcaster_name":"Привет Мир","game_id":"1","language":"en","created_at":"2026-10-07T00:00:00Z","duration":20,"view_count":1000}]}`)
+		case "/channels":
+			fmt.Fprint(w, `{"data":[{"broadcaster_id":"42","broadcaster_login":"streamer","broadcaster_language":"en"}]}`)
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	c := New("app", "secret")
+	c.API, c.token, c.expires = server.URL, "cached-app-token", time.Now().Add(time.Hour)
+	end := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	flow := twitch.Flow{ID: "en", SourceMode: "category", CategoryID: "1", MinViews: 10, MinDurationSec: 5, MaxDurationSec: 60}
+	clips, err := c.GetFlowClips(context.Background(), flow, domain.Channel{}, end.Add(-72*time.Hour), end, 1, nil)
+	if err != nil || len(clips) != 1 || clips[0].ID != "Good" || clips[0].BroadcasterName != "streamer" {
+		t.Fatalf("clip without a valid login must be dropped: %+v err=%v", clips, err)
+	}
+}

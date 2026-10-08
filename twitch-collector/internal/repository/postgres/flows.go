@@ -6,7 +6,18 @@ import (
 	"terex/proto/twitch"
 	"terex/twitch-collector/internal/domain"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
+
+// lockFlowConsumers serialises writers of one flow's consumers rows for the rest
+// of the transaction. SyncFlows updates them in bulk while ObserveFlow upserts
+// them one by one; without a shared lock they take row locks in different
+// orders and deadlock.
+func lockFlowConsumers(ctx context.Context, tx pgx.Tx, flowID string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('consumers:'||$1::text))`, flowID)
+	return err
+}
 
 func (s *Store) SyncFlows(ctx context.Context, flows []twitch.Flow) error {
 	tx, err := s.pool.Begin(ctx)
@@ -23,6 +34,9 @@ func (s *Store) SyncFlows(ctx context.Context, flows []twitch.Flow) error {
 			return e
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO twitch_collector.flows(id,enabled,config) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET enabled=excluded.enabled,config=excluded.config`, f.ID, f.Enabled, raw); err != nil {
+			return err
+		}
+		if err = lockFlowConsumers(ctx, tx, f.ID); err != nil {
 			return err
 		}
 		ids := f.BroadcasterIDs
@@ -91,6 +105,9 @@ func (s *Store) ObserveFlow(ctx context.Context, f twitch.Flow, clips []domain.C
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockFlowConsumers(ctx, tx, f.ID); err != nil {
+		return err
+	}
 	for _, c := range clips {
 		age := time.Since(c.CreatedAt)
 		maxAge := f.MaxSourceAgeHours

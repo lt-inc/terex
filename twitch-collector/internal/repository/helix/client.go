@@ -19,6 +19,9 @@ import (
 var loginPattern = regexp.MustCompile(`^[a-z0-9_]{1,25}$`)
 var ClipIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,180}$`)
 
+// LoginPattern is the Twitch login format Terex requires in broadcaster_login.
+var LoginPattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,25}$`)
+
 type Client struct {
 	HTTP                               *http.Client
 	API, OAuth, ClientID, ClientSecret string

@@ -161,6 +161,16 @@ func (c *Client) GetFlowClips(ctx context.Context, flow twitch.Flow, ch domain.C
 				}
 			}
 		}
+		// A broadcaster missing from /channels (deleted or banned) keeps its
+		// display name, which may not be a login. Terex rejects such a source
+		// with HTTP 400 and that aborts the whole check, so drop the clip here.
+		valid := current[:0]
+		for _, v := range current {
+			if LoginPattern.MatchString(v.BroadcasterName) {
+				valid = append(valid, v)
+			}
+		}
+		current = valid
 		out = append(out, current...)
 		eligible := 0
 		for _, v := range out {
