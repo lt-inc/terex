@@ -34,6 +34,9 @@ func (s *Store) PresignInternalPut(ctx context.Context, ref domain.ObjectRef, tt
 func (s *Store) DownloadLimited(ctx context.Context, ref domain.ObjectRef, dest string, limit int64) error {
 	st, err := s.internal.StatObject(ctx, ref.Bucket, ref.Object, mc.StatObjectOptions{})
 	if err != nil {
+		if mc.ToErrorResponse(err).Code == "NoSuchKey" {
+			return domain.ErrObjectNotFound
+		}
 		return err
 	}
 	if st.Size <= 0 || st.Size > limit {

@@ -821,19 +821,26 @@ func (s *Store) AbortFlowImport(ctx context.Context, id string, generation int64
 	if out.MediaState == "ready" {
 		return tx.Commit(ctx)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE twitch_imports SET state='failed',media_state='failed',error=$2,upload_claim_until=NULL,updated_at=$3 WHERE id=$1 AND upload_generation=$4 AND media_state<>'ready'`, id, reason, now, generation); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM twitch_preparation_sources WHERE import_id=$1 AND reservation_id IN(SELECT id FROM twitch_preparation_reservations WHERE state='active')`, id); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE twitch_download_grants SET state='released' WHERE import_id=$1 AND state='active'`, id); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET state='released',reason='source_failed' WHERE r.state='active' AND NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id)`); err != nil {
+	if err = abortFlowImportTx(ctx, tx, id, generation, reason, now); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func abortFlowImportTx(ctx context.Context, tx pgx.Tx, id string, generation int64, reason string, now time.Time) error {
+	if _, err := tx.Exec(ctx, `UPDATE twitch_imports SET state='failed',media_state='failed',error=$2,upload_claim_until=NULL,updated_at=$3 WHERE id=$1 AND upload_generation=$4 AND media_state<>'ready'`, id, reason, now, generation); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM twitch_preparation_sources WHERE import_id=$1 AND reservation_id IN(SELECT id FROM twitch_preparation_reservations WHERE state='active')`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE twitch_download_grants SET state='released' WHERE import_id=$1 AND state='active'`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET state='released',reason='source_failed' WHERE r.state='active' AND NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id)`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Validate inside the same transaction that assigns the exact revision/date.

@@ -31,9 +31,19 @@ func (c *Client) FlowCapacity(ctx context.Context, id string) (twitch.FlowCapaci
 
 func (c *Client) AbortImport(ctx context.Context, imp twitch.Import, reason string) error {
 	return c.request(ctx, http.MethodPost, "/api/imports/"+url.PathEscape(imp.ImportID)+"/abort", map[string]any{
-		"upload_generation": imp.UploadGeneration,
-		"reason":            reason,
+		"epoch":              imp.Epoch,
+		"admission_sequence": imp.AdmissionSequence,
+		"upload_generation":  imp.UploadGeneration,
+		"reason":             reason,
 	}, nil)
+}
+func (c *Client) AbortFailedImport(ctx context.Context, f domain.FailedImport) error {
+	return c.request(ctx, http.MethodPost, "/api/imports/"+url.PathEscape(f.Reservation.ImportID)+"/abort", twitch.AbortImportRequest{Epoch: f.Reservation.Epoch, AdmissionSequence: f.Reservation.AdmissionSequence, UploadGeneration: f.Reservation.UploadGeneration, FailureToken: f.FailureToken, Reason: f.Reason}, nil)
+}
+func (c *Client) RevalidateImport(ctx context.Context, id string, q twitch.RevalidateImportRequest) (twitch.RevalidationReceipt, error) {
+	var out twitch.RevalidationReceipt
+	err := c.request(ctx, http.MethodPost, "/api/imports/"+url.PathEscape(id)+"/revalidate", q, &out)
+	return out, err
 }
 func (c *Client) Observe(ctx context.Context, q twitch.ObservationRequest) ([]twitch.Import, error) {
 	var out struct {
@@ -51,12 +61,13 @@ func (c *Client) ReserveImport(ctx context.Context, t domain.Task) (twitch.Impor
 		title = string(r[:100])
 	}
 	q := twitch.ImportRequest{Epoch: t.Epoch, SchemaVersion: 2, IdempotencyKey: "twitch:" + t.Clip.ID, FlowID: t.FlowID, FlowVersion: t.FlowVersion, ReservationID: t.Reservation.ReservationID, UploadGeneration: t.Reservation.UploadGeneration, Source: twitch.Source{
-		Platform: "twitch", ClipID: t.Clip.ID, BroadcasterID: t.Clip.BroadcasterID, BroadcasterLogin: t.Clip.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + t.Clip.ID, CreatedAt: t.Clip.CreatedAt, ObservedAt: time.Now().UTC(), ViewCount: t.Clip.ViewCount, DurationSec: t.Clip.Duration, VideoID: t.Clip.VideoID, VODOffset: t.Clip.VODOffset, GameID: t.Clip.GameID, Language: t.Clip.Language, LanguageSource: t.Clip.LanguageSource, ThumbnailURL: t.Clip.ThumbnailURL}}
+		Platform: "twitch", ClipID: t.Clip.ID, BroadcasterID: t.Clip.BroadcasterID, BroadcasterLogin: t.Clip.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + t.Clip.ID, CreatedAt: t.Clip.CreatedAt, ObservedAt: t.Clip.ObservedAt, ViewCount: t.Clip.ViewCount, DurationSec: t.Clip.Duration, VideoID: t.Clip.VideoID, VODOffset: t.Clip.VODOffset, GameID: t.Clip.GameID, Language: t.Clip.Language, LanguageSource: t.Clip.LanguageSource, ThumbnailURL: t.Clip.ThumbnailURL}}
 	if t.Reservation.Source.ClipID == t.Clip.ID {
 		// Use the metadata admitted by the coordinator, retaining its observation
 		// time. main-be still checks current flow filters and source freshness.
 		q.Source = t.Reservation.Source
 	}
+	q.AdmissionSequence = t.Reservation.AdmissionSequence
 	var out twitch.Import
 	err := c.request(ctx, "POST", "/api/imports", q, &out)
 	if err == nil && out.ImportID == "" {
@@ -68,6 +79,16 @@ func (c *Client) ReserveImport(ctx context.Context, t domain.Task) (twitch.Impor
 	return out, err
 }
 func (c *Client) UploadImport(ctx context.Context, imp twitch.Import, file domain.Download, guard func(context.Context) error) error {
+	if err := c.PutImport(ctx, imp, file, guard); err != nil {
+		return err
+	}
+	if err := guard(ctx); err != nil {
+		return err
+	}
+	_, err := c.CompleteImport(ctx, imp, domain.UploadedMedia{SHA256: file.SHA256, SizeBytes: file.Size, Phase: "uploaded"})
+	return err
+}
+func (c *Client) PutImport(ctx context.Context, imp twitch.Import, file domain.Download, guard func(context.Context) error) error {
 	if err := guard(ctx); err != nil {
 		return err
 	}
@@ -98,9 +119,15 @@ func (c *Client) UploadImport(ctx context.Context, imp twitch.Import, file domai
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return &domain.Failure{Kind: "upload", Message: fmt.Sprintf("Source upload failed (HTTP %d)", res.StatusCode), HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 403 || res.StatusCode == 429 || res.StatusCode >= 500}
 	}
-	if err = guard(ctx); err != nil {
-		return err
-	}
+	return nil
+}
+func (c *Client) CompleteImport(ctx context.Context, imp twitch.Import, media domain.UploadedMedia) (twitch.Import, error) {
 	var completed twitch.Import
-	return c.request(ctx, "POST", "/api/imports/"+url.PathEscape(imp.ImportID)+"/complete", twitch.ImportCompleteRequest{Epoch: imp.Epoch, SHA256: file.SHA256, SizeBytes: file.Size, UploadGeneration: imp.UploadGeneration}, &completed)
+	err := c.request(ctx, "POST", "/api/imports/"+url.PathEscape(imp.ImportID)+"/complete", twitch.ImportCompleteRequest{Epoch: imp.Epoch, SHA256: media.SHA256, SizeBytes: media.SizeBytes, UploadGeneration: imp.UploadGeneration}, &completed)
+	return completed, err
+}
+func (c *Client) ImportStatus(ctx context.Context, id string) (twitch.Import, error) {
+	var out twitch.Import
+	err := c.request(ctx, http.MethodGet, "/api/imports/"+url.PathEscape(id), nil, &out)
+	return out, err
 }

@@ -151,12 +151,23 @@ func (d *Downloader) Download(ctx context.Context, id string, expected float64) 
 	probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer probeCancel()
 	data, err := runner(probeCtx, d.FFprobe, []string{"-v", "error", "-show_streams", "-show_format", "-of", "json", path}, dir)
+	var result *domain.Download
 	if err != nil {
-		return nil, &domain.Failure{Kind: "invalid", Message: "video inspection failed"}
-	}
-	result, err := inspect(data, expected)
-	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(probeCtx.Err(), context.DeadlineExceeded) || errors.Is(err, exec.ErrNotFound) {
+			// The bytes are quarantined, never marked ready from this fallback.
+			// gpu-be independently probes and decodes them before accepting media.
+			result = &domain.Download{ProbeDeferred: true}
+		} else {
+			return nil, &domain.Failure{Kind: "invalid", Code: "invalid_media", Message: "video inspection failed: invalid media"}
+		}
+	} else {
+		result, err = inspect(data, expected)
+		if err != nil {
+			return nil, err
+		}
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -211,7 +222,7 @@ func inspect(data []byte, expected float64) (*domain.Download, error) {
 		return invalid()
 	}
 	var duration float64
-	const durationBoundarySlackSec = 0.25
+	const durationBoundarySlackSec = 0.05
 	if _, err := fmt.Sscan(probe.Format.Duration, &duration); err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 5-durationBoundarySlackSec || duration > twitch.MaxClipDurationSec+durationBoundarySlackSec {
 		return invalid()
 	}

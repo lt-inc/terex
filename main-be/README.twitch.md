@@ -7,6 +7,14 @@ render auto-approves that exact Twitch revision after source checks. Scheduling,
 flow enablement and publication holds remain separate controls; legacy YouTube
 jobs retain manual approval. See [the operator guide](../docs/TWITCH-PREPARATION.ru.md).
 
+Windowed discovery, measured growth, durable verification retries and the cached
+staging dashboard are documented in [recovery and monitoring](../docs/TWITCH-RECOVERY-GROWTH.ru.md).
+
+Collector-only API additions: `GET /api/twitch/flows/{id}/observation-candidates`
+(up to 200 candidates for metadata refresh), `POST /api/imports/{id}/revalidate`
+(epoch/sequence/generation/failure-token fenced), and fenced import aborts.
+These capabilities do not allow changing flows, accounts or publications.
+
 ## Configuration
 
 The executable requires `DATABASE_URL`, `ADMIN_USERNAME`, `ADMIN_PASSWORD` and

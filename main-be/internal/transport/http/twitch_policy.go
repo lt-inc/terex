@@ -3,6 +3,7 @@ package http
 import (
 	"github.com/go-chi/chi/v5"
 	"net/http"
+	"terex/proto/twitch"
 )
 
 func (a *API) twitchFlowCapacity(w http.ResponseWriter, r *http.Request) {
@@ -48,14 +49,11 @@ func (a *API) restoreTwitchFlow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 func (a *API) abortTwitchImport(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		UploadGeneration int64  `json:"upload_generation"`
-		Reason           string `json:"reason"`
-	}
+	var req twitch.AbortImportRequest
 	if !decode(w, r, &req) {
 		return
 	}
-	if e := a.Twitch.AbortImport(r.Context(), chi.URLParam(r, "id"), req.UploadGeneration, req.Reason); e != nil {
+	if e := a.Twitch.AbortImportFenced(r.Context(), chi.URLParam(r, "id"), req); e != nil {
 		fail(w, e)
 		return
 	}

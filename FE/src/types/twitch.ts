@@ -21,6 +21,25 @@ export interface TwitchSettings {
   admission_mode?: "shadow" | "enforce";
 }
 
+export interface TwitchClipGrowth {
+  state: "warming" | "measured" | "counter_reset" | "stale";
+  delta_views?: number;
+  interval_sec?: number;
+  views_per_hour?: number;
+  observed_at?: string;
+  anomalous?: boolean;
+}
+
+export interface TwitchDiscoveryCoverage {
+	 as_of?: string;
+	 refresh_clips?: number;
+  windows_total: number;
+  windows_completed: number;
+  requests: number;
+  complete: boolean;
+  reason?: string;
+}
+
 export interface TwitchSource {
   platform: string;
   clip_id: string;
@@ -38,6 +57,7 @@ export interface TwitchSource {
   language_source?: string;
   game_id?: string;
   thumbnail_url?: string;
+  growth?: TwitchClipGrowth;
 }
 
 export interface TwitchChannel {
@@ -123,6 +143,7 @@ export interface TwitchFlow {
   category_name?: string;
   language?: string;
   poll_interval_minutes: number;
+  ranking_mode?: "views" | "growth";
   window_hours: number;
   min_views: number;
   min_age_minutes: number;
@@ -329,7 +350,7 @@ export interface TwitchFlowDiagnostics {
   capacity: TwitchCapacity;
   sources: Record<string, number>;
   competitors: { flow_id: string; name: string; format: string; scheduled: number; preparing: number; nearest_at?: string }[];
-  collector: { available: boolean; message?: string; spent: number; daily_limit: number; remaining: number; timezone: string; compilation_budget_percent: number; admission_mode: string; by_flow: {flow_id: string; name: string; format: string; spent: number}[]; discovery?: {fetched:number;language_matched:number;language_rejected:number;language_unknown:number;page_limit_reached:boolean;checked_at:string;broadcaster_id:string;error?:string}[] };
+  collector: { available: boolean; message?: string; spent: number; daily_limit: number; remaining: number; timezone: string; compilation_budget_percent: number; admission_mode: string; by_flow: {flow_id: string; name: string; format: string; spent: number}[]; discovery?: {fetched:number;language_matched:number;language_rejected:number;language_unknown:number;page_limit_reached:boolean;checked_at:string;broadcaster_id:string;error?:string;coverage?:TwitchDiscoveryCoverage}[] };
   average_duration_sec: number;
   average_estimated: boolean;
   estimated_additional_clips: number;

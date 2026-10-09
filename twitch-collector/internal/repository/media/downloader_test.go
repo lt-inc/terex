@@ -41,6 +41,21 @@ func TestDownloaderCanonicalAndInspected(t *testing.T) {
 	if _, err = d.Download(context.Background(), "https://evil.example", 20); err == nil {
 		t.Fatal("arbitrary URL accepted")
 	}
+	previous := d.Run
+	d.Run = func(ctx context.Context, bin string, args []string, dir string) ([]byte, error) {
+		if bin == "probe" {
+			return nil, context.DeadlineExceeded
+		}
+		return previous(ctx, bin, args, dir)
+	}
+	quarantined, err := d.Download(context.Background(), "Valid_Clip", 20)
+	if err != nil || !quarantined.ProbeDeferred || len(quarantined.SHA256) != 64 {
+		t.Fatal("probe timeout discarded downloaded bytes", quarantined, err)
+	}
+	if _, err = os.Stat(quarantined.Path); err != nil {
+		t.Fatal("quarantine source missing", err)
+	}
+	quarantined.Cleanup()
 }
 func TestGuardActuallyCancelsOversizedProcess(t *testing.T) {
 	d := New("yt", "probe", t.TempDir())

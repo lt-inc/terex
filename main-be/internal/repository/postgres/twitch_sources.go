@@ -42,6 +42,11 @@ func attachFlowSource(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twitch.
 	if !sourceMatches(matchConfig, src) {
 		return "", fmt.Errorf("%w: исходник не соответствует источникам потока", domain.ErrInvalid)
 	}
+	var growthErr error
+	src, growthErr = recordTwitchGrowthTx(ctx, tx, f, src, now)
+	if growthErr != nil {
+		return "", growthErr
+	}
 	var id string
 	err := tx.QueryRow(ctx, `SELECT id FROM twitch_imports WHERE twitch_clip_id=$1`, src.ClipID).Scan(&id)
 	if err == pgx.ErrNoRows {
@@ -88,7 +93,7 @@ func flowImport(ctx context.Context, q interface {
 	out.FlowID = flow
 	out.AccountID = f.AccountID
 	out.Excluded = excluded
-	if err = q.QueryRow(ctx, `SELECT COALESCE((SELECT primary_format FROM twitch_download_grants WHERE import_id=$1),'')`, id).Scan(&out.PreparationFormat); err != nil {
+	if err = q.QueryRow(ctx, `SELECT COALESCE((SELECT primary_format FROM twitch_download_grants WHERE import_id=$1),''),COALESCE((SELECT sequence FROM twitch_download_grants WHERE import_id=$1),0),COALESCE((SELECT revalidation->>'failure_token' FROM twitch_imports WHERE id=$1),'')`, id).Scan(&out.PreparationFormat, &out.AdmissionSequence, &out.RevalidationToken); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -168,13 +173,19 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 		return twitch.Import{}, pinErr
 	}
 	continuing := reservedAt != nil && r.ReservationID != "" && r.UploadGeneration > 0
+	if !continuing && !currentFilters.Enabled {
+		return twitch.Import{}, waitPreparation("flow_paused", "Поток приостановлен; скачивание продолжится после включения", now.Add(time.Minute))
+	}
+	if !continuing && currentFilters.Version != r.FlowVersion {
+		return twitch.Import{}, waitPreparation("flow_version_changed", "Настройки потока изменились: исходник ожидает повторной проверки по текущим фильтрам", now.Add(time.Minute))
+	}
 	if continuing {
 		var active bool
 		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id JOIN twitch_imports i ON i.id=fs.import_id WHERE i.twitch_clip_id=$1 AND NOT i.rejected AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id AND (`+currentFlowSourceEligible+`))`, r.Source.ClipID).Scan(&active); err != nil {
 			return twitch.Import{}, err
 		}
 		if !active {
-			return twitch.Import{}, fmt.Errorf("%w: нет активных потребителей исходника", domain.ErrConflict)
+			return twitch.Import{}, waitPreparation("source_filtered", "Нет активного потока, которому исходник подходит по текущим фильтрам", now.Add(time.Minute))
 		}
 	}
 	if reservedAt != nil && savedVersion == r.FlowVersion {
@@ -187,7 +198,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 		f = snapshot
 	}
 	if f.Version != r.FlowVersion || (!f.Enabled && !continuing) {
-		return twitch.Import{}, fmt.Errorf("%w: поток остановлен или его настройки изменились", domain.ErrConflict)
+		return twitch.Import{}, waitPreparation("flow_version_changed", "Настройки потока изменились; требуется повторная проверка исходника", now.Add(time.Minute))
 	}
 	if !continuing {
 		if err = confirmedFlow(ctx, tx, f); err != nil {
@@ -197,7 +208,10 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	// A pinned shared download may finish for another currently eligible flow;
 	// the former owner does not decide that flow's language or source filters.
 	if !continuing && (!sourceMatches(currentFilters, r.Source) || (reservedAt == nil && !sourceEligible(f, r.Source, now))) {
-		return twitch.Import{}, fmt.Errorf("%w: исходник не соответствует фильтрам потока", domain.ErrConflict)
+		if r.Source.CreatedAt.Before(now.Add(-time.Duration(f.WindowHours)*time.Hour)) || !preparationSourceFresh(f, r.Source, now, now) {
+			return twitch.Import{}, waitPreparation("source_stale", "Клип устарел для текущего окна публикации и повторно не скачивается", now.Add(time.Minute))
+		}
+		return twitch.Import{}, waitPreparation("source_filtered", "Исходник не соответствует текущим языку, источникам, просмотрам или длительности потока", now.Add(time.Minute))
 	}
 	var other string
 	err = tx.QueryRow(ctx, `SELECT i.twitch_clip_id FROM twitch_import_keys k JOIN twitch_imports i ON i.id=k.import_id WHERE k.idempotency_key=$1`, r.IdempotencyKey).Scan(&other)
@@ -223,8 +237,11 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 		return out, e
 	}
 	if settings.AdmissionMode == "enforce" && out.MediaState != "ready" && !continuing {
+		if r.AdmissionSequence == 0 && out.RevalidationToken != "" {
+			return out, fmt.Errorf("%w: admission sequence is required after revalidation", domain.ErrConflict)
+		}
 		var granted bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_download_grants WHERE import_id=$1 AND flow_id=$2 AND epoch=$3 AND(state='consumed' OR(state='active' AND expires_at>$4)))`, id, f.ID, r.Epoch, now).Scan(&granted); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_download_grants WHERE import_id=$1 AND flow_id=$2 AND epoch=$3 AND($5::bigint=0 OR sequence=$5) AND(state='consumed' OR(state='active' AND expires_at>$4)))`, id, f.ID, r.Epoch, now, r.AdmissionSequence).Scan(&granted); err != nil {
 			return out, err
 		}
 		if !granted {

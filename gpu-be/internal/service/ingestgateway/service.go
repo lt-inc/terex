@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"terex/gpu-be/internal/domain"
 	"terex/gpu-be/internal/service/resetgate"
+	"terex/proto/twitch"
 	"terex/proto/workflow"
 	"time"
 
@@ -109,6 +110,9 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "source.mp4")
 	if err = s.Store.DownloadLimited(ctx, q.Ref, file, MaxBytes); err != nil {
+		if errors.Is(err, domain.ErrObjectNotFound) {
+			return nil, status.Error(codes.NotFound, "staging upload is absent")
+		}
 		return nil, unavailable(ctx, "download verification", err)
 	}
 	f, err := os.Open(file)
@@ -129,7 +133,7 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	if err != nil {
 		return nil, invalidMedia(ctx, "probe media", err)
 	}
-	if p.Width <= 0 || p.Height <= 0 || p.DurationSec <= 0 || p.DurationSec > 61 || math.IsNaN(p.DurationSec) || math.IsInf(p.DurationSec, 0) {
+	if p.Width <= 0 || p.Height <= 0 || p.DurationSec < 5-0.05 || p.DurationSec > twitch.MaxClipDurationSec+0.05 || math.IsNaN(p.DurationSec) || math.IsInf(p.DurationSec, 0) {
 		return nil, status.Error(codes.InvalidArgument, "file lacks valid video stream or bounded duration")
 	}
 	if q.ExpectedDurationSec > 0 && (math.IsNaN(q.ExpectedDurationSec) || math.IsInf(q.ExpectedDurationSec, 0) || math.Abs(p.DurationSec-q.ExpectedDurationSec) > 2) {

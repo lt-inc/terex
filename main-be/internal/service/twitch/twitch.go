@@ -161,6 +161,9 @@ func (s *Service) Complete(ctx context.Context, id string, r t.ImportCompleteReq
 	}
 	media, err := s.Gateway.VerifyUpload(timeout, &workflow.VerifyUploadRequest{Epoch: out.Epoch, ImportID: uploadID, Ref: out.Original, ExpectedSHA256: strings.ToLower(r.SHA256), ExpectedSizeBytes: r.SizeBytes, ExpectedDurationSec: out.Source.DurationSec})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return out, &domain.PreparationWaitError{PreparationWait: t.PreparationWait{Code: "upload_missing", Message: "Временный файл отсутствует в хранилище; требуется повторная загрузка"}}
+		}
 		if code := status.Code(err); code == codes.InvalidArgument || code == codes.DataLoss {
 			if out.UploadGeneration == 0 {
 				_ = s.Repo.FailTwitchImport(ctx, id, "Media verification failed; check the file and retry")

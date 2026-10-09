@@ -240,6 +240,7 @@ export default function TwitchFlowsPage() {
               <p className="text-xs text-slate-400">
                 Проверка каждые {flow.poll_interval_minutes} мин · от{" "}
                 {flow.min_views} просмотров · за последние {flow.window_hours} ч
+                {" "}· рейтинг: {flow.ranking_mode === "growth" ? "рост просмотров" : "просмотры"}
               </p>
               <p className="text-sm text-slate-300">
                 {[

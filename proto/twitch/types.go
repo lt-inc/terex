@@ -66,22 +66,23 @@ func (s Settings) Validate() error {
 }
 
 type Source struct {
-	Platform         string    `json:"platform"`
-	ClipID           string    `json:"clip_id"`
-	BroadcasterID    string    `json:"broadcaster_id"`
-	BroadcasterLogin string    `json:"broadcaster_login"`
-	Title            string    `json:"title"`
-	URL              string    `json:"url"`
-	CreatedAt        time.Time `json:"created_at"`
-	ObservedAt       time.Time `json:"observed_at"`
-	ViewCount        int       `json:"view_count"`
-	DurationSec      float64   `json:"duration_sec"`
-	VideoID          string    `json:"video_id,omitempty"`
-	VODOffset        *float64  `json:"vod_offset,omitempty"`
-	GameID           string    `json:"game_id,omitempty"`
-	Language         string    `json:"language,omitempty"`
-	LanguageSource   string    `json:"language_source,omitempty"`
-	ThumbnailURL     string    `json:"thumbnail_url,omitempty"`
+	Platform         string      `json:"platform"`
+	ClipID           string      `json:"clip_id"`
+	BroadcasterID    string      `json:"broadcaster_id"`
+	BroadcasterLogin string      `json:"broadcaster_login"`
+	Title            string      `json:"title"`
+	URL              string      `json:"url"`
+	CreatedAt        time.Time   `json:"created_at"`
+	ObservedAt       time.Time   `json:"observed_at"`
+	ViewCount        int         `json:"view_count"`
+	DurationSec      float64     `json:"duration_sec"`
+	VideoID          string      `json:"video_id,omitempty"`
+	VODOffset        *float64    `json:"vod_offset,omitempty"`
+	GameID           string      `json:"game_id,omitempty"`
+	Language         string      `json:"language,omitempty"`
+	LanguageSource   string      `json:"language_source,omitempty"`
+	ThumbnailURL     string      `json:"thumbnail_url,omitempty"`
+	Growth           *ClipGrowth `json:"growth,omitempty"`
 }
 
 // Flow pins one publication destination. Discovery is shared; output decisions
@@ -104,6 +105,7 @@ type Flow struct {
 	CategoryID                string     `json:"category_id,omitempty"`
 	CategoryName              string     `json:"category_name,omitempty"`
 	Language                  string     `json:"language,omitempty"`
+	RankingMode               string     `json:"ranking_mode"`
 	PollIntervalMinutes       int        `json:"poll_interval_minutes"`
 	WindowHours               int        `json:"window_hours"`
 	MinViews                  int        `json:"min_views"`
@@ -186,15 +188,16 @@ type Category struct {
 }
 
 type ImportRequest struct {
-	Epoch            int64  `json:"epoch"`
-	SchemaVersion    int    `json:"schema_version"`
-	IdempotencyKey   string `json:"idempotency_key"`
-	Source           Source `json:"source"`
-	AccountID        int64  `json:"account_id,omitempty"`
-	FlowID           string `json:"flow_id,omitempty"`
-	FlowVersion      int    `json:"flow_version,omitempty"`
-	ReservationID    string `json:"reservation_id,omitempty"`
-	UploadGeneration int64  `json:"upload_generation,omitempty"`
+	AdmissionSequence int64  `json:"admission_sequence,omitempty"`
+	Epoch             int64  `json:"epoch"`
+	SchemaVersion     int    `json:"schema_version"`
+	IdempotencyKey    string `json:"idempotency_key"`
+	Source            Source `json:"source"`
+	AccountID         int64  `json:"account_id,omitempty"`
+	FlowID            string `json:"flow_id,omitempty"`
+	FlowVersion       int    `json:"flow_version,omitempty"`
+	ReservationID     string `json:"reservation_id,omitempty"`
+	UploadGeneration  int64  `json:"upload_generation,omitempty"`
 }
 type ImportCompleteRequest struct {
 	Epoch            int64  `json:"epoch"`
@@ -203,6 +206,8 @@ type ImportCompleteRequest struct {
 	UploadGeneration int64  `json:"upload_generation,omitempty"`
 }
 type Import struct {
+	AdmissionSequence int64         `json:"admission_sequence,omitempty"`
+	RevalidationToken string        `json:"revalidation_token,omitempty"`
 	Epoch             int64         `json:"epoch"`
 	PreparationFormat string        `json:"preparation_format,omitempty"`
 	ImportID          string        `json:"import_id"`

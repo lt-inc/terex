@@ -23,7 +23,7 @@ func (s *Store) ResetTwitchPool(ctx context.Context, epoch int64) error {
 	if epoch <= current {
 		return tx.Commit(ctx)
 	}
-	for _, q := range []string{`DELETE FROM twitch_collector.download_tasks`, `DELETE FROM twitch_collector.consumers`, `DELETE FROM twitch_collector.clips`, `UPDATE twitch_collector.flows SET enabled=false`, `UPDATE twitch_collector.channels SET last_checked_at=NULL,last_error=''`} {
+	for _, q := range []string{`DELETE FROM twitch_collector.discovery_progress`, `DELETE FROM twitch_collector.download_tasks`, `DELETE FROM twitch_collector.consumers`, `DELETE FROM twitch_collector.clips`, `UPDATE twitch_collector.flows SET enabled=false`, `UPDATE twitch_collector.channels SET last_checked_at=NULL,last_error=''`} {
 		if _, err = tx.Exec(ctx, q); err != nil {
 			return err
 		}

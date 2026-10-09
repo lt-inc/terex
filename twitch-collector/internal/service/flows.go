@@ -98,6 +98,7 @@ func (s *Service) startFlowCheck(id string, force bool) error {
 	return nil
 }
 func discoverySettings(g twitch.Settings, f twitch.Flow) twitch.Settings {
+	g.PollIntervalMinutes = f.PollIntervalMinutes
 	g.WindowHours = f.WindowHours
 	g.MinViews = f.MinViews
 	g.MinAgeMinutes = f.MinAgeMinutes
@@ -130,7 +131,7 @@ func clipSource(c domain.Clip) twitch.Source {
 	if r := []rune(title); len(r) > 100 {
 		title = string(r[:100])
 	}
-	return twitch.Source{Platform: "twitch", ClipID: c.ID, BroadcasterID: c.BroadcasterID, BroadcasterLogin: c.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + c.ID, CreatedAt: c.CreatedAt, ObservedAt: time.Now().UTC(), ViewCount: c.ViewCount, DurationSec: c.Duration, VideoID: c.VideoID, VODOffset: c.VODOffset, GameID: c.GameID, Language: c.Language, LanguageSource: c.LanguageSource, ThumbnailURL: c.ThumbnailURL}
+	return twitch.Source{Platform: "twitch", ClipID: c.ID, BroadcasterID: c.BroadcasterID, BroadcasterLogin: c.BroadcasterName, Title: title, URL: "https://clips.twitch.tv/" + c.ID, CreatedAt: c.CreatedAt, ObservedAt: c.ObservedAt, ViewCount: c.ViewCount, DurationSec: c.Duration, VideoID: c.VideoID, VODOffset: c.VODOffset, GameID: c.GameID, Language: c.Language, LanguageSource: c.LanguageSource, ThumbnailURL: c.ThumbnailURL, Growth: c.Growth}
 }
 func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
@@ -205,6 +206,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 		}
 		flows = append(flows[start:], flows[:start]...)
 	}
+	windowResults, windowed := s.discoverWindowed(ctx, cfg, flows, catalogue, only, force, started)
 	for _, flow := range flows {
 		if !flow.Enabled || (only != "" && only != flow.ID) {
 			continue
@@ -251,6 +253,9 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 			for _, id := range flow.BroadcasterIDs {
 				ch, exists := catalogue[id]
 				if !exists {
+					if windowed {
+						continue
+					} // The bounded pass already attempted resolution.
 					ch, err = helix.ResolveBroadcaster(ctx, id)
 					if err == nil {
 						ch, err = s.store.CreateChannel(ctx, ch)
@@ -269,7 +274,18 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 		}
 		all := []domain.Clip{}
 		for _, ch := range targets {
-			clips, e := helix.GetFlowClips(ctx, flow, ch, started.Add(-time.Duration(flow.WindowHours)*time.Hour), started, cfg.Settings.DailyDownloads*2, flowKnown)
+			var clips []domain.Clip
+			var e error
+			if windowed {
+				if result := windowResults[discoveryKey(flow.ID, discoveryTarget(flow, ch))]; result != nil {
+					clips = result.clips
+					if len(clips) == 0 {
+						e = result.err
+					}
+				}
+			} else {
+				clips, e = helix.GetFlowClips(ctx, flow, ch, started.Add(-time.Duration(flow.WindowHours)*time.Hour), started, cfg.Settings.DailyDownloads*2, flowKnown)
+			}
 			if e != nil {
 				message = safeErrorMessage(e, "Twitch недоступен")
 				log.WarnContext(ctx, "collector source check failed", errorFields(e)...)
@@ -337,9 +353,22 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 				observationFailed = true
 				break
 			}
+			for _, imp := range imports {
+				for n := range all {
+					if all[n].ID == imp.Source.ClipID {
+						all[n].Growth = imp.Source.Growth
+					}
+				}
+			}
 		}
 		if observationFailed {
 			continue
+		}
+		if windowed {
+			if e := s.saveDiscoveryProgress(ctx, flow.ID, windowResults); e != nil {
+				log.WarnContext(ctx, "collector discovery progress unavailable", "reason", safeErrorMessage(e, "progress unavailable"))
+				continue
+			}
 		}
 		if capacityAPI, ok := api.(interface {
 			FlowCapacity(context.Context, string) (twitch.FlowCapacity, error)
@@ -372,7 +401,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 				matching = append(matching, c)
 			}
 		}
-		selected := Select(matching, discoverySettings(cfg.Settings, flow), started)
+		selected := SelectRanked(matching, discoverySettings(cfg.Settings, flow), flow.RankingMode, started)
 		lists = append(lists, selected)
 		log.InfoContext(ctx, "collector flow check finished", "fetched", len(all), "eligible", len(selected))
 	}
@@ -449,6 +478,7 @@ func (s *Service) flowWorkerOnce(ctx context.Context, api domain.FlowTerex) {
 		s.logGate(ctx, "worker", "Не удалось обновить состояние потоков", err)
 		return
 	}
+	s.reconcileRevalidations(ctx, api, cfg.Epoch)
 	s.reconcileFailedImports(ctx, api, cfg.Epoch)
 	if cfg.Settings.AdmissionMode == "enforce" {
 		if _, err = s.queueAdmissions(ctx, cfg); err != nil {
@@ -583,8 +613,26 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			return
 		}
 		retry := RetryAt(task.Attempt, f, time.Now())
+		if f.Code == "flow_version_changed" {
+			retry = nil
+		}
+		if f.Code == "invalid_media" && task.Uploaded != nil {
+			if durable, ok := store.(interface {
+				ClearUploaded(context.Context, domain.Task) error
+			}); ok {
+				_ = durable.ClearUploaded(save, task)
+			}
+			task.Uploaded = nil
+		}
 		log.ErrorContext(save, "collector task failed", "stage", stage, "reason", f.Message, "retry_at", retry)
-		if e = s.store.Fail(save, task, f.Kind, f.Message, retry); e != nil {
+		if durable, ok := s.store.(interface {
+			FailWithCode(context.Context, domain.Task, string, string, string, *time.Time) error
+		}); ok {
+			e = durable.FailWithCode(save, task, f.Kind, f.Message, f.Code, retry)
+		} else {
+			e = s.store.Fail(save, task, f.Kind, f.Message, retry)
+		}
+		if e != nil {
 			log.WarnContext(save, "collector failure state unavailable", errorFields(e)...)
 		} else if retry == nil {
 			// The next worker tick releases the exact persisted failure before
@@ -596,6 +644,63 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 	}
 	if err := guard(ctx); err != nil {
 		fail(err)
+		return
+	}
+	// A quarantined upload survives collector restarts. Retry verification for
+	// this exact generation before considering another download or upload.
+	if task.Uploaded != nil {
+		stage = "verification"
+		staged, ok := api.(stagedImportAPI)
+		if !ok {
+			fail(&domain.Failure{Kind: "import", Message: "Durable import verification unavailable", Retryable: true})
+			return
+		}
+		if stageStore, ok := store.(interface {
+			SetTaskStage(context.Context, domain.Task, string) error
+		}); ok {
+			if e := stageStore.SetTaskStage(ctx, task, "verifying"); e != nil {
+				fail(e)
+				return
+			}
+		}
+		completed, e := staged.ImportStatus(ctx, task.Reservation.ImportID)
+		if e != nil {
+			fail(e)
+			return
+		}
+		if completed.Epoch != task.Epoch || completed.UploadGeneration != task.Reservation.UploadGeneration {
+			fail(&domain.Failure{Kind: "expired", Code: "upload_generation_changed", Message: "Загрузка уже заменена новой попыткой или сбросом"})
+			return
+		}
+		if completed.MediaState != "ready" && completed.State != "ready" {
+			completed, e = staged.CompleteImport(ctx, task.Reservation, *task.Uploaded)
+		}
+		if e != nil {
+			var remote *domain.Failure
+			if errors.As(e, &remote) && remote.Code == "upload_missing" {
+				if durable, ok := store.(interface {
+					ClearUploaded(context.Context, domain.Task) error
+				}); ok {
+					if x := durable.ClearUploaded(ctx, task); x != nil {
+						fail(x)
+						return
+					}
+				}
+				task.Uploaded = nil
+				e = &domain.Failure{Kind: "upload", Code: "upload_missing", Message: remote.Message, Retryable: true}
+			}
+			fail(e)
+			return
+		}
+		if e = guard(ctx); e != nil {
+			fail(e)
+			return
+		}
+		if e = s.store.Complete(ctx, task, completed.ImportID, task.Uploaded.SHA256); e != nil {
+			fail(e)
+			return
+		}
+		log.InfoContext(ctx, "collector import verification resumed", "import_id", completed.ImportID, "generation", task.Reservation.UploadGeneration)
 		return
 	}
 	var err error
@@ -629,6 +734,9 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		return
 	}
 	defer file.Cleanup()
+	if file.ProbeDeferred {
+		log.WarnContext(ctx, "collector local probe deferred", "import_id", imp.ImportID, "reason_code", "probe_unavailable", "reason", "Временная проверка перенесена на GPU; файл остаётся в карантине до полной проверки")
+	}
 	stage = "import"
 	log.InfoContext(ctx, "collector upload started", "import_id", imp.ImportID, "size_bytes", file.Size)
 	stageStore, hasStage := store.(interface {
@@ -639,6 +747,55 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			fail(err)
 			return
 		}
+	}
+	if staged, ok := api.(stagedImportAPI); ok {
+		durable, ok := store.(interface {
+			SaveUploaded(context.Context, domain.Task, domain.UploadedMedia) error
+		})
+		if !ok {
+			fail(errors.New("durable upload state unavailable"))
+			return
+		}
+		media := domain.UploadedMedia{SHA256: file.SHA256, SizeBytes: file.Size, Phase: "uploading"}
+		if err = durable.SaveUploaded(ctx, task, media); err != nil {
+			fail(err)
+			return
+		}
+		task.Uploaded = &media
+		if err = staged.PutImport(ctx, imp, *file, guard); err != nil {
+			fail(err)
+			return
+		}
+		media.Phase = "uploaded"
+		if err = durable.SaveUploaded(ctx, task, media); err != nil {
+			fail(err)
+			return
+		}
+		stage = "verification"
+		if hasStage {
+			if err = stageStore.SetTaskStage(ctx, task, "verifying"); err != nil {
+				fail(err)
+				return
+			}
+		}
+		if err = guard(ctx); err != nil {
+			fail(err)
+			return
+		}
+		if _, err = staged.CompleteImport(ctx, imp, media); err != nil {
+			fail(err)
+			return
+		}
+		if err = guard(ctx); err != nil {
+			fail(err)
+			return
+		}
+		if err = s.store.Complete(ctx, task, imp.ImportID, file.SHA256); err != nil {
+			fail(err)
+			return
+		}
+		log.InfoContext(ctx, "collector import completed", "import_id", imp.ImportID, "stage", "complete")
+		return
 	}
 	uploadGuards := 0
 	if err = api.UploadImport(ctx, imp, *file, func(c context.Context) error {
@@ -737,6 +894,9 @@ func (s *Service) ClipStatuses(ctx context.Context, flow string, ids []string) (
 }
 
 func (s *Service) RetryClip(ctx context.Context, id string) error {
+	if _, ok := s.terex.(domain.FlowTerex); ok {
+		return s.retryFlowClip(ctx, id)
+	}
 	store, ok := s.store.(interface {
 		RetryClip(context.Context, string) error
 	})

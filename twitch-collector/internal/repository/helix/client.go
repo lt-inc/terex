@@ -23,16 +23,22 @@ var ClipIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,180}$`)
 var LoginPattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,25}$`)
 
 type Client struct {
-	HTTP                               *http.Client
-	API, OAuth, ClientID, ClientSecret string
-	mu                                 sync.Mutex
-	token                              string
-	expires                            time.Time
-	discoveries                        map[string]domain.DiscoveryReport
+	HTTP                                                   *http.Client
+	API, OAuth, ClientID, ClientSecret                     string
+	mu                                                     sync.Mutex
+	token                                                  string
+	expires                                                time.Time
+	discoveries                                            map[string]domain.DiscoveryReport
+	limitMu                                                sync.Mutex
+	nextRequest, rateReset                                 time.Time
+	rateRemaining                                          int
+	rateKnown                                              bool
+	DiscoveryMaxRequests, DiscoveryRPS, DiscoveryRateFloor int
+	channelCache                                           map[string]channelMetadata
 }
 
 func New(id, secret string) *Client {
-	return &Client{HTTP: &http.Client{Timeout: 15 * time.Second}, API: "https://api.twitch.tv/helix", OAuth: "https://id.twitch.tv/oauth2/token", ClientID: id, ClientSecret: secret}
+	return &Client{HTTP: &http.Client{Timeout: 15 * time.Second}, API: "https://api.twitch.tv/helix", OAuth: "https://id.twitch.tv/oauth2/token", ClientID: id, ClientSecret: secret, DiscoveryMaxRequests: discoveryEnv("TWITCH_DISCOVERY_MAX_REQUESTS", 120, 1), DiscoveryRPS: discoveryEnv("TWITCH_DISCOVERY_RPS", 5, 1), DiscoveryRateFloor: discoveryEnv("TWITCH_DISCOVERY_RATE_REMAINING_FLOOR", 50, 0)}
 }
 func (c *Client) Ready() bool { return c.ClientID != "" && c.ClientSecret != "" }
 func Login(input string) (string, error) {
@@ -89,6 +95,9 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 }
 func (c *Client) get(ctx context.Context, path string, values url.Values, out any) error {
 	for attempt := 0; attempt < 2; attempt++ {
+		if err := c.beforeMetadata(ctx); err != nil {
+			return err
+		}
 		token, err := c.accessToken(ctx)
 		if err != nil {
 			return err
@@ -102,6 +111,12 @@ func (c *Client) get(ctx context.Context, path string, values url.Values, out an
 		res, err := c.HTTP.Do(req)
 		if err != nil {
 			return &domain.Failure{Kind: "network", Message: "Twitch metadata request unavailable"}
+		}
+		c.observeRate(res.Header)
+		if res.StatusCode == http.StatusTooManyRequests {
+			c.rememberRateLimit(res.Header)
+			res.Body.Close()
+			return c.rateFailure()
 		}
 		if res.StatusCode == 401 && attempt == 0 {
 			res.Body.Close()
@@ -171,7 +186,7 @@ func (c *Client) GetClips(ctx context.Context, ch domain.Channel, start, end tim
 		if !ClipIDPattern.MatchString(v.ID) || v.BroadcasterID != ch.BroadcasterID {
 			continue
 		}
-		out = append(out, domain.Clip{ID: v.ID, ChannelID: ch.ID, BroadcasterID: v.BroadcasterID, BroadcasterName: ch.Login, Title: v.Title, ViewCount: v.Views, CreatedAt: v.Created, Duration: v.Duration, VideoID: v.VideoID, VODOffset: v.Offset, URL: "https://clips.twitch.tv/" + v.ID, State: "discovered"})
+		out = append(out, domain.Clip{ID: v.ID, ChannelID: ch.ID, BroadcasterID: v.BroadcasterID, BroadcasterName: ch.Login, Title: v.Title, ViewCount: v.Views, CreatedAt: v.Created, ObservedAt: time.Now().UTC(), Duration: v.Duration, VideoID: v.VideoID, VODOffset: v.Offset, URL: "https://clips.twitch.tv/" + v.ID, State: "discovered"})
 	}
 	return out, nil
 }

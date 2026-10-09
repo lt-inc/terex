@@ -94,6 +94,7 @@ func scanImport(row pgx.Row) (twitch.Import, error) {
 	o.Source, o.AccountID = r.Source, r.AccountID
 	o.FlowID, o.ReservationID = r.FlowID, r.ReservationID
 	o.FlowVersion = r.FlowVersion
+	o.AdmissionSequence = r.AdmissionSequence
 	if o.UploadGeneration > 0 {
 		o.UploadImportID = fmt.Sprintf("%s-g%d", o.ImportID, o.UploadGeneration)
 	}

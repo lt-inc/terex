@@ -29,27 +29,29 @@ type Channel struct {
 }
 
 type Clip struct {
-	ID              string    `json:"id"`
-	ChannelID       string    `json:"channel_id"`
-	BroadcasterID   string    `json:"broadcaster_id"`
-	BroadcasterName string    `json:"broadcaster_name"`
-	Title           string    `json:"title"`
-	ViewCount       int       `json:"view_count"`
-	CreatedAt       time.Time `json:"created_at"`
-	Duration        float64   `json:"duration"`
-	VideoID         string    `json:"video_id,omitempty"`
-	VODOffset       *float64  `json:"vod_offset,omitempty"`
-	URL             string    `json:"url"`
-	State           string    `json:"state"`
-	LastError       string    `json:"last_error,omitempty"`
-	ImportID        string    `json:"import_id,omitempty"`
-	SHA256          string    `json:"sha256,omitempty"`
-	GameID          string    `json:"game_id,omitempty"`
-	Language        string    `json:"language,omitempty"`
-	LanguageSource  string    `json:"language_source,omitempty"`
-	ThumbnailURL    string    `json:"thumbnail_url,omitempty"`
-	FlowID          string    `json:"flow_id,omitempty"`
-	FlowVersion     int       `json:"flow_version,omitempty"`
+	ID              string             `json:"id"`
+	ChannelID       string             `json:"channel_id"`
+	BroadcasterID   string             `json:"broadcaster_id"`
+	BroadcasterName string             `json:"broadcaster_name"`
+	Title           string             `json:"title"`
+	ViewCount       int                `json:"view_count"`
+	CreatedAt       time.Time          `json:"created_at"`
+	Duration        float64            `json:"duration"`
+	VideoID         string             `json:"video_id,omitempty"`
+	VODOffset       *float64           `json:"vod_offset,omitempty"`
+	URL             string             `json:"url"`
+	State           string             `json:"state"`
+	LastError       string             `json:"last_error,omitempty"`
+	ImportID        string             `json:"import_id,omitempty"`
+	SHA256          string             `json:"sha256,omitempty"`
+	GameID          string             `json:"game_id,omitempty"`
+	Language        string             `json:"language,omitempty"`
+	LanguageSource  string             `json:"language_source,omitempty"`
+	ThumbnailURL    string             `json:"thumbnail_url,omitempty"`
+	FlowID          string             `json:"flow_id,omitempty"`
+	FlowVersion     int                `json:"flow_version,omitempty"`
+	ObservedAt      time.Time          `json:"observed_at,omitempty"`
+	Growth          *twitch.ClipGrowth `json:"growth,omitempty"`
 }
 
 type Task struct {
@@ -60,13 +62,19 @@ type Task struct {
 	FlowID      string
 	FlowVersion int
 	Reservation twitch.Import
+	Uploaded    *UploadedMedia
 }
 
 type FailedImport struct {
-	ClipID      string
-	Reservation twitch.Import
-	Reason      string
-	FailedAt    time.Time
+	ClipID       string
+	Reservation  twitch.Import
+	Reason       string
+	FailedAt     time.Time
+	FailureToken string
+	ErrorCode    string
+	FlowID       string
+	FlowVersion  int
+	Uploaded     *UploadedMedia
 }
 
 type ClipStatus struct {
@@ -80,17 +88,18 @@ type ClipStatus struct {
 
 // DiscoveryReport describes a bounded metadata search, never a download queue.
 type DiscoveryReport struct {
-	FlowID           string    `json:"flow_id"`
-	BroadcasterID    string    `json:"broadcaster_id,omitempty"`
-	Language         string    `json:"language,omitempty"`
-	Fetched          int       `json:"fetched"`
-	LanguageMatched  int       `json:"language_matched"`
-	LanguageRejected int       `json:"language_rejected"`
-	LanguageUnknown  int       `json:"language_unknown"`
-	Pages            int       `json:"pages"`
-	PageLimitReached bool      `json:"page_limit_reached"`
-	CheckedAt        time.Time `json:"checked_at"`
-	Error            string    `json:"error,omitempty"`
+	FlowID           string                    `json:"flow_id"`
+	BroadcasterID    string                    `json:"broadcaster_id,omitempty"`
+	Language         string                    `json:"language,omitempty"`
+	Fetched          int                       `json:"fetched"`
+	LanguageMatched  int                       `json:"language_matched"`
+	LanguageRejected int                       `json:"language_rejected"`
+	LanguageUnknown  int                       `json:"language_unknown"`
+	Pages            int                       `json:"pages"`
+	PageLimitReached bool                      `json:"page_limit_reached"`
+	CheckedAt        time.Time                 `json:"checked_at"`
+	Error            string                    `json:"error,omitempty"`
+	Coverage         *twitch.DiscoveryCoverage `json:"coverage,omitempty"`
 }
 
 // Flow interfaces keep the v1 adapter available during a rolling deployment.
@@ -116,28 +125,30 @@ type FlowTwitch interface {
 }
 
 type Status struct {
-	Running          bool       `json:"running"`
-	Paused           bool       `json:"paused"`
-	CredentialsReady bool       `json:"credentials_ready"`
-	LastCheckAt      *time.Time `json:"last_check_at,omitempty"`
-	LastError        string     `json:"last_error,omitempty"`
-	BlockReason      string     `json:"block_reason,omitempty"`
-	Channels         int        `json:"channels"`
-	Queued           int        `json:"queued"`
-	Downloading      int        `json:"downloading"`
-	Imported         int        `json:"imported"`
-	Failed           int        `json:"failed"`
+	Runtime          *twitch.RuntimeWork `json:"runtime,omitempty"`
+	Running          bool                `json:"running"`
+	Paused           bool                `json:"paused"`
+	CredentialsReady bool                `json:"credentials_ready"`
+	LastCheckAt      *time.Time          `json:"last_check_at,omitempty"`
+	LastError        string              `json:"last_error,omitempty"`
+	BlockReason      string              `json:"block_reason,omitempty"`
+	Channels         int                 `json:"channels"`
+	Queued           int                 `json:"queued"`
+	Downloading      int                 `json:"downloading"`
+	Imported         int                 `json:"imported"`
+	Failed           int                 `json:"failed"`
 }
 
 type Download struct {
-	Path     string
-	Size     int64
-	SHA256   string
-	Duration float64
-	Width    int
-	Height   int
-	HasAudio bool
-	Cleanup  func()
+	Path          string
+	Size          int64
+	SHA256        string
+	Duration      float64
+	Width         int
+	Height        int
+	HasAudio      bool
+	Cleanup       func()
+	ProbeDeferred bool
 }
 
 type Failure struct {
