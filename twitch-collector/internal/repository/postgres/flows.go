@@ -14,6 +14,15 @@ import (
 // of the transaction. SyncFlows updates them in bulk while ObserveFlow upserts
 // them one by one; without a shared lock they take row locks in different
 // orders and deadlock.
+//
+// NOTE (do not "simplify" this away): every writer that touches
+// twitch_collector.consumers for a flow (SyncFlows, ObserveFlow,
+// SyncExclusions) MUST take this lock first, inside a transaction. A bare
+// pool.Exec UPDATE on consumers bypasses it and brings back PostgreSQL 40P01
+// "deadlock detected" in production (seen as stage=verification collector
+// task failures, retried 5-30 min later). Hold only one flow's lock per
+// transaction unless you always acquire several in one fixed order.
+// Regression test: flows_lock_test.go.
 func lockFlowConsumers(ctx context.Context, tx pgx.Tx, flowID string) error {
 	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('consumers:'||$1::text))`, flowID)
 	return err
@@ -233,11 +242,31 @@ func (s *Store) SyncExclusions(ctx context.Context, cfg twitch.CollectorConfig) 
 		if excluded == nil {
 			excluded = []string{}
 		}
-		if _, err := s.pool.Exec(ctx, `UPDATE twitch_collector.consumers SET excluded=(clip_id=ANY($2::text[]) OR clip_id=ANY($3::text[])) WHERE flow_id=$1`, f.ID, excluded, blocked); err != nil {
+		if err := s.syncFlowExclusions(ctx, f.ID, excluded, blocked); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// syncFlowExclusions takes the per-flow consumers lock, like SyncFlows and
+// ObserveFlow, and holds only that one lock per transaction so concurrent
+// syncs cannot form a lock cycle across flows. It used to be a plain
+// pool.Exec without the lock, which deadlocked against SyncFlows; keep the
+// transaction and the lock (see lockFlowConsumers).
+func (s *Store) syncFlowExclusions(ctx context.Context, flowID string, excluded, blocked []string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockFlowConsumers(ctx, tx, flowID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE twitch_collector.consumers SET excluded=(clip_id=ANY($2::text[]) OR clip_id=ANY($3::text[])) WHERE flow_id=$1`, flowID, excluded, blocked); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) RetryClip(ctx context.Context, id string) error {
