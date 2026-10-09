@@ -66,7 +66,7 @@ func TestSyncFlowsAndObserveFlowDoNotDeadlock(t *testing.T) {
 	}
 
 	const rounds = 40
-	errs := make(chan error, 3*rounds)
+	errs := make(chan error, 4*rounds)
 	var wg sync.WaitGroup
 	run := func(fn func() error) {
 		defer wg.Done()
@@ -76,8 +76,10 @@ func TestSyncFlowsAndObserveFlowDoNotDeadlock(t *testing.T) {
 			}
 		}
 	}
-	wg.Add(3)
+	cfg := twitch.CollectorConfig{Flows: []twitch.Flow{f}}
+	wg.Add(4)
 	go run(func() error { return s.SyncFlows(ctx, []twitch.Flow{f}) })
+	go run(func() error { return s.SyncExclusions(ctx, cfg) })
 	go run(func() error { return s.ObserveFlow(ctx, f, asc) })
 	go run(func() error { return s.ObserveFlow(ctx, f, desc) })
 	wg.Wait()
