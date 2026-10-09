@@ -14,6 +14,7 @@ export const defaultTwitchFlow = (): TwitchFlow => ({
   broadcaster_ids: [],
   channel_inputs: [],
   language: "",
+  ranking_mode: "views",
   poll_interval_minutes: 144,
   window_hours: 72,
   min_views: 100,
@@ -54,6 +55,8 @@ export function validateTwitchFlow(
       return "Выберите подключённый и подтверждённый YouTube-канал.";
   }
   if (step == null || step === 1) {
+    if (flow.ranking_mode && !["views", "growth"].includes(flow.ranking_mode))
+      return "Выберите рейтинг по просмотрам или по росту.";
     if (
       flow.source_mode === "channels" &&
       !(flow.channel_inputs?.length || flow.broadcaster_ids.length) &&
@@ -82,9 +85,9 @@ export function validateTwitchFlow(
       !Number.isFinite(flow.max_duration_sec) ||
       flow.min_duration_sec <= 0 ||
       flow.min_duration_sec > flow.max_duration_sec ||
-      flow.max_duration_sec > 60
+      flow.max_duration_sec > 180
     )
-      return "Длительность клипа: больше 0 и не более 60 секунд; минимум не выше максимума.";
+      return "Длительность клипа: больше 0 и не более 180 секунд; минимум не выше максимума.";
   }
   if (step == null || step === 2) {
     if (!flow.shorts_enabled && !flow.compilations_enabled)

@@ -97,7 +97,6 @@ func (a *API) twitchFlowClips(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 func (a *API) actFlowSource(w http.ResponseWriter, r *http.Request) {
-	var retrySource *twitch.Import
 	if chi.URLParam(r, "action") == "retry" {
 		source, e := a.Twitch.FlowImport(r.Context(), chi.URLParam(r, "sourceID"), chi.URLParam(r, "id"))
 		if e != nil {
@@ -127,7 +126,14 @@ func (a *API) actFlowSource(w http.ResponseWriter, r *http.Request) {
 				fail(w, domain.ErrConflict)
 				return
 			}
-			retrySource = &source
+			// The collector owns the failed task identity. Its revalidation call
+			// fences the coordinator before the local task can be reactivated.
+			if e = a.Collector.call(r.Context(), http.MethodPost, "clips/"+url.PathEscape(source.Source.ClipID)+"/retry", nil, nil); e != nil {
+				fail(w, e)
+				return
+			}
+			writeJSON(w, 200, map[string]bool{"ok": true})
+			return
 		}
 	}
 	excluded := true
@@ -142,21 +148,9 @@ func (a *API) actFlowSource(w http.ResponseWriter, r *http.Request) {
 			excluded = *q.Excluded
 		}
 	}
-	var generation []int64
-	if retrySource != nil {
-		generation = []int64{retrySource.UploadGeneration}
-	}
-	if e := a.Twitch.ActSource(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "sourceID"), chi.URLParam(r, "action"), excluded, generation...); e != nil {
+	if e := a.Twitch.ActSource(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "sourceID"), chi.URLParam(r, "action"), excluded); e != nil {
 		fail(w, e)
 		return
-	}
-	// Fence old uploads in the database before the collector can claim the
-	// reset task. A failed enqueue can safely be retried with the same identity.
-	if retrySource != nil {
-		if e := a.Collector.call(r.Context(), http.MethodPost, "clips/"+url.PathEscape(retrySource.Source.ClipID)+"/retry", nil, nil); e != nil {
-			fail(w, e)
-			return
-		}
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

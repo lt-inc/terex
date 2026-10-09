@@ -474,6 +474,15 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                     Речь может отличаться.
                   </span>
                 </label>
+                <label className="flex flex-col gap-1 text-sm">
+                  Как выбирать лучшие клипы
+                  <select className={input} value={flow.ranking_mode || "views"} onChange={(event) => change("ranking_mode", event.target.value as "views" | "growth")}>
+                    <option value="views">По накопленным просмотрам</option>
+                    <option value="growth">По измеренному росту просмотров</option>
+                  </select>
+                  <span className="text-xs text-slate-400">При выборе роста сначала идут клипы с достоверной скоростью, затем клипы без истории — по просмотрам. Порядок применяется к скачиванию и выбору подборки; баланс стримеров сохраняется.</span>
+                </label>
+                <p className="text-xs text-slate-400">Период поиска делится на равные окна не длиннее 8 часов. Свежие окна проверяются отдельно от старой выдачи. Если бюджет Twitch исчерпан, коллектор продолжит поиск с сохранённой позиции на следующей проверке.</p>
                 <div className="grid gap-4 sm:grid-cols-2">
                   {numberField(
                     "poll_interval_minutes",
@@ -503,13 +512,13 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                     "min_duration_sec",
                     "Минимальная длина клипа, секунд",
                     1,
-                    60,
+                    180,
                   )}
                   {numberField(
                     "max_duration_sec",
                     "Максимальная длина клипа, секунд",
                     1,
-                    60,
+                    180,
                   )}
                 </div>
               </>

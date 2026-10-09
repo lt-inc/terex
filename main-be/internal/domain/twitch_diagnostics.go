@@ -31,17 +31,18 @@ type TwitchDiagnosticCollector struct {
 	Discovery                []TwitchDiagnosticDiscovery     `json:"discovery"`
 }
 type TwitchDiagnosticDiscovery struct {
-	FlowID           string    `json:"flow_id"`
-	BroadcasterID    string    `json:"broadcaster_id,omitempty"`
-	Language         string    `json:"language,omitempty"`
-	Fetched          int       `json:"fetched"`
-	LanguageMatched  int       `json:"language_matched"`
-	LanguageRejected int       `json:"language_rejected"`
-	LanguageUnknown  int       `json:"language_unknown"`
-	Pages            int       `json:"pages"`
-	PageLimitReached bool      `json:"page_limit_reached"`
-	CheckedAt        time.Time `json:"checked_at"`
-	Error            string    `json:"error,omitempty"`
+	FlowID           string                    `json:"flow_id"`
+	BroadcasterID    string                    `json:"broadcaster_id,omitempty"`
+	Language         string                    `json:"language,omitempty"`
+	Fetched          int                       `json:"fetched"`
+	LanguageMatched  int                       `json:"language_matched"`
+	LanguageRejected int                       `json:"language_rejected"`
+	LanguageUnknown  int                       `json:"language_unknown"`
+	Pages            int                       `json:"pages"`
+	PageLimitReached bool                      `json:"page_limit_reached"`
+	CheckedAt        time.Time                 `json:"checked_at"`
+	Error            string                    `json:"error,omitempty"`
+	Coverage         *twitch.DiscoveryCoverage `json:"coverage,omitempty"`
 }
 type TwitchDiagnosticCompetitor struct {
 	FlowID    string     `json:"flow_id"`

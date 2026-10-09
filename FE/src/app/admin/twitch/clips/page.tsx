@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import TwitchNav from "@/components/twitch/TwitchNav";
 import CapacityPanel from "@/components/twitch/CapacityPanel";
+import GrowthBadge from "@/components/twitch/GrowthBadge";
 import ConfirmAction from "@/components/ui/ConfirmAction";
 import PreviewModal, {
   type PreviewTarget,
@@ -408,6 +409,7 @@ export default function TwitchClipsPage() {
                     {durationLabel(source.duration_sec)} ·{" "}
                     {source.language || "язык неизвестен"}
                   </p>
+                  <GrowthBadge growth={source.growth} pollMinutes={selectedFlow?.poll_interval_minutes} />
                   {selectedFlow && <p className="mt-1 text-xs text-amber-200">Крайний срок выпуска: {new Intl.DateTimeFormat("ru", { timeZone: selectedFlow.timezone, dateStyle: "short", timeStyle: "short" }).format(new Date(new Date(source.created_at).getTime() + selectedFlow.max_source_age_hours * 3600000))} · максимум {selectedFlow.max_source_age_hours} ч от создания. В подборке каждый исходник должен укладываться в срок.</p>}
                   <p className="mt-1 text-xs text-slate-500">
                     Создан:{" "}

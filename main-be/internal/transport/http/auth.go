@@ -32,11 +32,15 @@ func collectorRoute(r *http.Request) bool {
 		id := strings.TrimSuffix(strings.TrimPrefix(p, "/api/twitch/flows/"), "/capacity")
 		return r.Method == http.MethodGet && id != "" && !strings.Contains(id, "/")
 	}
+	if strings.HasPrefix(p, "/api/twitch/flows/") && strings.HasSuffix(p, "/observation-candidates") {
+		id := strings.TrimSuffix(strings.TrimPrefix(p, "/api/twitch/flows/"), "/observation-candidates")
+		return r.Method == http.MethodGet && id != "" && !strings.Contains(id, "/")
+	}
 	if p == "/api/imports" {
 		return r.Method == http.MethodGet || r.Method == http.MethodPost
 	}
 	if strings.HasPrefix(p, "/api/imports/") {
-		return r.Method == http.MethodGet || (r.Method == http.MethodPost && (strings.HasSuffix(p, "/complete") || strings.HasSuffix(p, "/abort")))
+		return r.Method == http.MethodGet || (r.Method == http.MethodPost && (strings.HasSuffix(p, "/complete") || strings.HasSuffix(p, "/abort") || strings.HasSuffix(p, "/revalidate")))
 	}
 	return false
 }

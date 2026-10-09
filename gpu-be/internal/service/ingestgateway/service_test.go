@@ -64,7 +64,7 @@ func TestImportVerificationRejectsInvalidBytes(t *testing.T) {
 	}{
 		{"digest", strings.Repeat("0", 64), Probe{DurationSec: 10, Width: 640, Height: 480}, false},
 		{"audio-only", "", Probe{DurationSec: 10}, false},
-		{"long", "", Probe{DurationSec: 70, Width: 640, Height: 480}, false},
+		{"long", "", Probe{DurationSec: 180.06, Width: 640, Height: 480}, false},
 		{"truncated", "", Probe{DurationSec: 10, Width: 640, Height: 480}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestStorageOutageRemainsRetryable(t *testing.T) {
 }
 func TestVerifiedObjectCannotBeOverwrittenByUploadURL(t *testing.T) {
 	st := &fakeStore{data: []byte("fake-video")}
-	s := Service{Store: st, Media: fakeMedia{probe: Probe{DurationSec: 10, Width: 640, Height: 480}}, TmpDir: t.TempDir()}
+	s := Service{Store: st, Media: fakeMedia{probe: Probe{DurationSec: 180.04, Width: 640, Height: 480}}, TmpDir: t.TempDir()}
 	u, err := s.ReserveUpload(context.Background(), &workflow.ReserveUploadRequest{ImportID: "import-1"})
 	if err != nil {
 		t.Fatal(err)

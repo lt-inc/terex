@@ -130,7 +130,7 @@ func (c *Client) GetFlowClips(ctx context.Context, flow twitch.Flow, ch domain.C
 			if language == "" || language == "other" {
 				languageSource = "unknown"
 			}
-			current = append(current, domain.Clip{ID: v.ID, ChannelID: ch.ID, BroadcasterID: v.BroadcasterID, BroadcasterName: v.BroadcasterName, Title: v.Title, ViewCount: v.Views, CreatedAt: v.Created, Duration: v.Duration, VideoID: v.VideoID, VODOffset: v.Offset, GameID: v.GameID, Language: language, LanguageSource: languageSource, ThumbnailURL: v.Thumbnail, URL: "https://clips.twitch.tv/" + v.ID, State: "discovered"})
+			current = append(current, domain.Clip{ID: v.ID, ChannelID: ch.ID, BroadcasterID: v.BroadcasterID, BroadcasterName: v.BroadcasterName, Title: v.Title, ViewCount: v.Views, CreatedAt: v.Created, ObservedAt: time.Now().UTC(), Duration: v.Duration, VideoID: v.VideoID, VODOffset: v.Offset, GameID: v.GameID, Language: language, LanguageSource: languageSource, ThumbnailURL: v.Thumbnail, URL: "https://clips.twitch.tv/" + v.ID, State: "discovered"})
 			if !bseen[v.BroadcasterID] {
 				broadcasters.Add("broadcaster_id", v.BroadcasterID)
 				bseen[v.BroadcasterID] = true

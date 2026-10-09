@@ -25,9 +25,12 @@ export function authMode(config: AdminAccessConfig): AuthMode | null {
 
 export function serviceBearerRoute(pathname: string, method: string): boolean {
   return (pathname === "/api/twitch/settings" && method === "GET")
+    || (pathname === "/api/twitch/collector-config" && method === "GET")
+    || (["/api/twitch/observations", "/api/twitch/collector/admissions", "/api/twitch/reset/collector-ack"].includes(pathname) && method === "POST")
+    || (/^\/api\/twitch\/flows\/[^/]+\/(capacity|observation-candidates)$/.test(pathname) && method === "GET")
     || (pathname === "/api/imports" && ["GET", "POST"].includes(method))
     || (/^\/api\/imports\/[^/]+$/.test(pathname) && method === "GET")
-    || (/^\/api\/imports\/[^/]+\/complete$/.test(pathname) && method === "POST");
+    || (/^\/api\/imports\/[^/]+\/(complete|abort|revalidate)$/.test(pathname) && method === "POST");
 }
 
 function equalSecret(actual: string, expected: string): boolean {

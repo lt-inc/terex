@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"terex/main-be/internal/config"
+	"terex/main-be/internal/repository/collector"
 	"terex/main-be/internal/repository/gpuclient"
 	"terex/main-be/internal/repository/postgres"
 	"terex/main-be/internal/repository/youtube"
@@ -24,6 +25,7 @@ import (
 	"terex/main-be/internal/service/publish"
 	"terex/main-be/internal/service/storagelifecycle"
 	twitchservice "terex/main-be/internal/service/twitch"
+	"terex/main-be/internal/service/twitchmonitor"
 	"terex/main-be/internal/service/twitchreset"
 	workflowservice "terex/main-be/internal/service/workflow"
 	tamqp "terex/main-be/internal/transport/amqp"
@@ -97,6 +99,7 @@ func run() error {
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
 
 	twitchSvc := &twitchservice.Service{Repo: store, Gateway: gpu.IngestGateway(), Gpu: gpu}
+	monitorSvc := &twitchmonitor.Service{Repo: store, Flows: store, Diagnostics: twitchSvc, Collector: collector.NewMonitoring(cfg.CollectorURL, cfg.CollectorToken), AppURL: cfg.AppPublicURL}
 	storageSvc := storagelifecycle.New(store, gpu.StorageGateway(), cfg.TwitchCleanupEnabled)
 	resetSvc := twitchreset.New(store, storageSvc, gpu.ResetGateway())
 	storageSvc.ConfigurePressure(cfg.TwitchStoragePrometheusURL, cfg.TwitchStorageMinFreeBytes, cfg.TwitchStorageMinFreePercent)
@@ -112,6 +115,8 @@ func run() error {
 	go cron.Every(ctx, "monitor", cfg.MonitorInterval, mon)
 	go cron.Every(ctx, "publish", cfg.PublishInterval, pubMgr)
 	go cron.Every(ctx, "twitch compilation", time.Minute, twitchSvc)
+	go cron.Every(ctx, "twitch monitoring", time.Minute, monitorSvc)
+	go cron.Every(ctx, "twitch growth cleanup", time.Hour, cron.Func(func(ctx context.Context) error { return store.CleanupTwitchGrowth(ctx, time.Now().UTC()) }))
 	go cron.Every(ctx, "twitch storage cleanup", cfg.TwitchCleanupInterval, storageSvc)
 	go cron.Every(ctx, "twitch storage pressure", time.Minute, cron.Func(storageSvc.PressureTick))
 	go cron.Every(ctx, "twitch reset", cfg.TwitchResetInterval, cron.Func(resetSvc.Tick))

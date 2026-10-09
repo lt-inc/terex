@@ -68,11 +68,16 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 		kind := "import"
 		if res.StatusCode == http.StatusConflict && diagnostic.Code != "" {
 			switch diagnostic.Code {
-			case "calendar_full", "preparation_wait", "allocation_wait", "stale_for_slot", "storage_low", "storage_status_unknown", "twitch_reset":
+			case "calendar_full", "preparation_wait", "allocation_wait", "stale_for_slot", "storage_low", "storage_status_unknown", "twitch_reset", "flow_paused", "source_filtered":
 				kind = "preparation"
 			case "source_stale", "media_expired":
 				kind = "expired"
+			case "flow_version_changed":
+				kind = "revalidation"
 			}
+		}
+		if res.StatusCode == http.StatusBadRequest && strings.Contains(message, "media verification failed") {
+			diagnostic.Code = "invalid_media"
 		}
 		if res.StatusCode == 409 && (strings.Contains(message, "лимит скачивания") || strings.Contains(message, "очередь проверки заполнена")) {
 			kind = "quota"

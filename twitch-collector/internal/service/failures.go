@@ -23,7 +23,14 @@ func (s *Service) releaseFailedImport(ctx context.Context, api domain.FlowTerex,
 	if !ok || !canAbort || failure.Reservation.ImportID == "" {
 		return
 	}
-	err := aborter.AbortImport(ctx, failure.Reservation, failure.Reason)
+	var err error
+	if fenced, ok := api.(interface {
+		AbortFailedImport(context.Context, domain.FailedImport) error
+	}); ok {
+		err = fenced.AbortFailedImport(ctx, failure)
+	} else {
+		err = aborter.AbortImport(ctx, failure.Reservation, failure.Reason)
+	}
 	var remote *domain.Failure
 	obsolete := errors.As(err, &remote) && (remote.HTTPStatus == 404 || remote.HTTPStatus == 409 && remote.Code != "twitch_reset")
 	if err != nil && !obsolete {

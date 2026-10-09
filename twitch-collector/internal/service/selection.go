@@ -4,6 +4,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"terex/proto/twitch"
 	"time"
 
 	"terex/twitch-collector/internal/domain"
@@ -12,6 +13,9 @@ import (
 // Select gives each channel a first choice before selecting a second choice.
 // Reservation limits are also enforced atomically by the repository.
 func Select(clips []domain.Clip, settings domain.Settings, now time.Time) []domain.Clip {
+	return SelectRanked(clips, settings, "views", now)
+}
+func SelectRanked(clips []domain.Clip, settings domain.Settings, mode string, now time.Time) []domain.Clip {
 	s := settings
 	eligible := make([]domain.Clip, 0, len(clips))
 	seen := map[string]bool{}
@@ -27,6 +31,15 @@ func Select(clips []domain.Clip, settings domain.Settings, now time.Time) []doma
 		eligible = append(eligible, c)
 	}
 	sort.Slice(eligible, func(i, j int) bool {
+		if mode == "growth" {
+			a, b := twitch.MeasuredGrowth(eligible[i].Growth, s.PollIntervalMinutes, now), twitch.MeasuredGrowth(eligible[j].Growth, s.PollIntervalMinutes, now)
+			if a != b {
+				return a
+			}
+			if a && eligible[i].Growth.ViewsPerHour != eligible[j].Growth.ViewsPerHour {
+				return eligible[i].Growth.ViewsPerHour > eligible[j].Growth.ViewsPerHour
+			}
+		}
 		if eligible[i].ViewCount != eligible[j].ViewCount {
 			return eligible[i].ViewCount > eligible[j].ViewCount
 		}

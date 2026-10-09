@@ -448,6 +448,8 @@ func (s *Store) ClearTwitchReset(ctx context.Context, id string, now time.Time) 
 	}
 	queries := []string{
 		`UPDATE twitch_reset_runs SET state='clearing' WHERE id=$1`,
+		`DELETE FROM twitch_monitoring_snapshots`,
+		`DELETE FROM twitch_view_samples`,
 		`DELETE FROM twitch_storage_pins`,
 		`DELETE FROM twitch_storage_references`,
 		`DELETE FROM twitch_source_uses`,

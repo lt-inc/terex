@@ -49,6 +49,9 @@ func scanFlow(row pgx.Row) (twitch.Flow, error) {
 	if err = json.Unmarshal(b, &f); err != nil {
 		return f, err
 	}
+	if f.RankingMode == "" {
+		f.RankingMode = "views"
+	}
 	f.Version = version
 	f.Archived = archived
 	f.ScheduleHorizonHours = horizon
@@ -98,6 +101,9 @@ func (s *Store) ListTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
 	return out, rows.Err()
 }
 func validateFlow(f twitch.Flow) error {
+	if f.RankingMode != "views" && f.RankingMode != "growth" {
+		return fmt.Errorf("%w: рейтинг клипов должен быть views или growth", domain.ErrInvalid)
+	}
 	if f.ScheduleHorizonHours < 1 || f.ScheduleHorizonHours > 168 || f.MaxSourceAgeHours < 1 || f.MaxSourceAgeHours > 720 {
 		return fmt.Errorf("%w: горизонт календаря 1–168 часов, возраст клипа 1–720 часов", domain.ErrInvalid)
 	}
@@ -170,6 +176,9 @@ func confirmedFlow(ctx context.Context, tx pgx.Tx, f twitch.Flow) error {
 	return nil
 }
 func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, now time.Time) (twitch.Flow, error) {
+	if f.RankingMode == "" {
+		f.RankingMode = "views"
+	}
 	if f.ScheduleHorizonHours == 0 {
 		f.ScheduleHorizonHours = 48
 	}
