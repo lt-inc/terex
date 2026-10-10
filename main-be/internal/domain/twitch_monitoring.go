@@ -18,6 +18,8 @@ type TwitchCollectorStatus struct {
 	Running          bool                `json:"running"`
 	Paused           bool                `json:"paused"`
 	CredentialsReady bool                `json:"credentials_ready"`
+	ConfigAvailable  bool                `json:"config_available"`
+	ConfigObservedAt *time.Time          `json:"config_observed_at,omitempty"`
 	LastCheckAt      *time.Time          `json:"last_check_at,omitempty"`
 	LastError        string              `json:"last_error,omitempty"`
 	BlockReason      string              `json:"block_reason,omitempty"`
@@ -35,9 +37,18 @@ type TwitchCollectorMonitoring interface {
 }
 
 type TwitchMonitoringSnapshot struct {
-	CollectorStatus TwitchCollectorStatus `json:"collector_status"`
-	Counts          []twitch.StageCount   `json:"counts"`
-	ActiveTasks     []twitch.ActiveTask   `json:"active_tasks"`
-	ActiveTotal     int                   `json:"active_total"`
-	Discovery       []json.RawMessage     `json:"discovery"`
+	CollectorStatus     TwitchCollectorStatus     `json:"collector_status"`
+	CollectorObservedAt *time.Time                `json:"collector_observed_at,omitempty"`
+	Counts              []twitch.StageCount       `json:"counts"`
+	ActiveTasks         []twitch.ActiveTask       `json:"active_tasks"`
+	ActiveTotal         int                       `json:"active_total"`
+	Discovery           []json.RawMessage         `json:"discovery"`
+	DiagnosticsErrors   []TwitchMonitoringFailure `json:"diagnostics_errors"`
+}
+
+type TwitchMonitoringFailure struct {
+	Component string `json:"component"`
+	FlowID    string `json:"flow_id,omitempty"`
+	FlowName  string `json:"flow_name,omitempty"`
+	Message   string `json:"message"`
 }

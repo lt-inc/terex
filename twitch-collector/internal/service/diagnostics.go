@@ -9,13 +9,14 @@ import (
 )
 
 func (s *Service) FlowDiagnostics(ctx context.Context, id string) (domain.FlowDiagnostics, error) {
-	api, ok := s.terex.(domain.FlowTerex)
-	if !ok {
+	if _, ok := s.terex.(domain.FlowTerex); !ok {
 		return domain.FlowDiagnostics{}, errors.New("flow diagnostics unavailable")
 	}
-	cfg, err := api.CollectorConfig(ctx)
-	if err != nil {
-		return domain.FlowDiagnostics{}, err
+	s.mu.Lock()
+	config := s.configObservation
+	s.mu.Unlock()
+	if config.err != nil || config.observedAt.IsZero() || time.Since(config.observedAt) > configFreshness {
+		return domain.FlowDiagnostics{}, errors.New("flow diagnostics unavailable: no recent Terex settings observation")
 	}
 	repo, ok := s.store.(interface {
 		FlowDiagnostics(context.Context, string, twitch.Settings, time.Time) (domain.FlowDiagnostics, error)
@@ -23,7 +24,7 @@ func (s *Service) FlowDiagnostics(ctx context.Context, id string) (domain.FlowDi
 	if !ok {
 		return domain.FlowDiagnostics{}, errors.New("flow diagnostics unavailable")
 	}
-	out, err := repo.FlowDiagnostics(ctx, id, cfg.Settings, time.Now().UTC())
+	out, err := repo.FlowDiagnostics(ctx, id, config.settings, time.Now().UTC())
 	if err != nil {
 		return out, err
 	}

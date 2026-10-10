@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"github.com/jackc/pgx/v5"
 	"terex/proto/twitch"
 	"time"
 )
@@ -86,10 +87,7 @@ func (s *Store) SaveTwitchMonitoring(ctx context.Context, scope, key string, epo
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err = lockTwitch(ctx, tx); err != nil {
-		return err
-	}
-	if err = twitchResetRequestAllowed(ctx, tx, epoch); err != nil {
+	if err = lockMonitoringEpoch(ctx, tx, epoch); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO twitch_monitoring_snapshots(scope,key,epoch,generated_at,payload)VALUES($1,$2,$3,$4,$5)
@@ -106,10 +104,7 @@ func (s *Store) CleanupTwitchMonitoring(ctx context.Context, epoch int64) error 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err = lockTwitch(ctx, tx); err != nil {
-		return err
-	}
-	if err = twitchResetRequestAllowed(ctx, tx, epoch); err != nil {
+	if err = lockMonitoringEpoch(ctx, tx, epoch); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `DELETE FROM twitch_monitoring_snapshots WHERE epoch<>$1 OR(scope='flow' AND NOT EXISTS(SELECT 1 FROM twitch_flows f WHERE f.id=key AND NOT f.archived))`, epoch)
@@ -117,4 +112,19 @@ func (s *Store) CleanupTwitchMonitoring(ctx context.Context, epoch int64) error 
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// Monitoring changes only disposable snapshots. A shared reset-control row lock
+// excludes epoch changes without queueing behind expensive work admission on the
+// global Twitch advisory lock. Reset updates this row before removing snapshots.
+func lockMonitoringEpoch(ctx context.Context, tx pgx.Tx, epoch int64) error {
+	var current int64
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT epoch,active FROM twitch_reset_control WHERE id=1 FOR SHARE`).Scan(&current, &active); err != nil {
+		return err
+	}
+	if active || current != epoch {
+		return waitPreparation("twitch_reset", "Снимок мониторинга ожидает окончания сброса или нового расчёта", time.Now().UTC())
+	}
+	return nil
 }

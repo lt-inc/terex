@@ -19,6 +19,7 @@ type TwitchDiagnosticCollectorClip struct {
 }
 type TwitchDiagnosticCollector struct {
 	Available                bool                            `json:"available"`
+	ObservedAt               *time.Time                      `json:"observed_at,omitempty"`
 	Message                  string                          `json:"message,omitempty"`
 	Spent                    int                             `json:"spent"`
 	Remaining                int                             `json:"remaining"`

@@ -126,6 +126,8 @@ type FlowTwitch interface {
 
 type Status struct {
 	Runtime          *twitch.RuntimeWork `json:"runtime,omitempty"`
+	ConfigObservedAt *time.Time          `json:"config_observed_at,omitempty"`
+	ConfigAvailable  bool                `json:"config_available"`
 	Running          bool                `json:"running"`
 	Paused           bool                `json:"paused"`
 	CredentialsReady bool                `json:"credentials_ready"`
