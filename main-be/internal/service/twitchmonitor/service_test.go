@@ -12,8 +12,9 @@ import (
 )
 
 type snapshotRepo struct {
-	work  twitch.RuntimeWork
-	saved map[string]json.RawMessage
+	work      twitch.RuntimeWork
+	saved     map[string]json.RawMessage
+	saveError func(string, any) error
 }
 
 func (r *snapshotRepo) TwitchRuntimeWork(context.Context, time.Time) (twitch.RuntimeWork, error) {
@@ -22,6 +23,11 @@ func (r *snapshotRepo) TwitchRuntimeWork(context.Context, time.Time) (twitch.Run
 func (r *snapshotRepo) SaveTwitchMonitoring(ctx context.Context, scope, key string, _ int64, _ time.Time, v any) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if r.saveError != nil {
+		if err := r.saveError(scope, v); err != nil {
+			return err
+		}
 	}
 	raw, err := json.Marshal(v)
 	r.saved[scope+"/"+key] = raw
@@ -40,6 +46,12 @@ type monitorDiagnostics struct{}
 
 func (monitorDiagnostics) Diagnostics(_ context.Context, id string) (domain.TwitchFlowDiagnostics, error) {
 	return domain.TwitchFlowDiagnostics{FlowID: id, Sources: map[string]int{"ready": 2}}, nil
+}
+
+type monitorDiagnosticsFunc func(context.Context, string) (domain.TwitchFlowDiagnostics, error)
+
+func (f monitorDiagnosticsFunc) Diagnostics(ctx context.Context, id string) (domain.TwitchFlowDiagnostics, error) {
+	return f(ctx, id)
 }
 
 type monitorCollector struct {
@@ -140,5 +152,48 @@ func TestFlowCollectorFailureDoesNotHideOtherFlows(t *testing.T) {
 		if flow.Sources["ready"] != 2 || flow.Collector.Available != (id == "b") || (flow.Collector.ObservedAt != nil) != (id == "b") {
 			t.Fatalf("wrong component freshness for %s: %+v", id, flow)
 		}
+	}
+}
+
+func TestDiagnosticBudgetPreservesProgressAndContinuesWithNextFlow(t *testing.T) {
+	c := &monitorCollector{status: domain.TwitchCollectorStatus{Runtime: &twitch.RuntimeWork{Epoch: 3}}}
+	s, r := monitorFixture(c)
+	var attempted []string
+	s.Diagnostics = monitorDiagnosticsFunc(func(ctx context.Context, id string) (domain.TwitchFlowDiagnostics, error) {
+		attempted = append(attempted, id)
+		if len(attempted) == 1 {
+			<-ctx.Done()
+			return domain.TwitchFlowDiagnostics{}, ctx.Err()
+		}
+		return monitorDiagnostics{}.Diagnostics(ctx, id)
+	})
+	r.saveError = func(scope string, v any) error {
+		if scope == "system" {
+			for _, failure := range v.(domain.TwitchMonitoringSnapshot).DiagnosticsErrors {
+				if failure.Component == "flow_batch" {
+					return errors.New("final snapshot write could not acquire a database connection")
+				}
+			}
+		}
+		return nil
+	}
+	// Five seconds remain reserved for writes; this leaves one second for reads.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	if s.Tick(ctx) == nil {
+		t.Fatal("exhausted diagnostics budget must be reported")
+	}
+	var out domain.TwitchMonitoringSnapshot
+	if err := json.Unmarshal(r.saved["system/current"], &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(attempted) != 1 || len(out.DiagnosticsErrors) != 1 || out.DiagnosticsErrors[0].FlowID != "a" || out.DiagnosticsErrors[0].Component != "flow_main" {
+		t.Fatalf("progressive failure observation was lost before failed final save: %+v; calls=%v", out, attempted)
+	}
+	if err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(attempted) != 3 || attempted[1] != "b" || attempted[2] != "a" {
+		t.Fatalf("next cycle starved unvisited flow: %v", attempted)
 	}
 }

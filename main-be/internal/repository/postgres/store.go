@@ -24,6 +24,12 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Frequent OLTP backlog predicates trigger expensive LLVM compilation on
+	// staging, monopolizing the small pool. Keep JIT off for these application
+	// sessions by default while honoring an explicitly supplied DSN setting.
+	if _, explicit := cfg.ConnConfig.RuntimeParams["jit"]; !explicit {
+		cfg.ConnConfig.RuntimeParams["jit"] = "off"
+	}
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer() // a span per SQL query
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
