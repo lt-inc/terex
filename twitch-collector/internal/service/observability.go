@@ -10,8 +10,9 @@ import (
 )
 
 type gateLog struct {
-	reason string
-	at     time.Time
+	reason     string
+	at         time.Time
+	observedAt time.Time
 }
 
 func settingsBlockReason(cfg domain.Settings, err error, credentialsReady bool) string {
@@ -37,10 +38,12 @@ func (s *Service) logGate(ctx context.Context, component, reason string, err err
 	s.mu.Lock()
 	previous, exists := s.gateLogs[component]
 	if exists && previous.reason == reason && (reason == "" || now.Sub(previous.at) < 5*time.Minute) {
+		previous.observedAt = now
+		s.gateLogs[component] = previous
 		s.mu.Unlock()
 		return false
 	}
-	s.gateLogs[component] = gateLog{reason: reason, at: now}
+	s.gateLogs[component] = gateLog{reason: reason, at: now, observedAt: now}
 	s.mu.Unlock()
 	if reason == "" {
 		if exists && previous.reason != "" {

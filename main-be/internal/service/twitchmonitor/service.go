@@ -1,5 +1,6 @@
-// Package twitchmonitor builds bounded, read-only snapshots for Grafana. Failed
-// reads preserve the previous timestamp so missing data never appears as zero.
+// Package twitchmonitor builds bounded, read-only snapshots for Grafana. Each
+// component publishes its own successful observations; unavailable components
+// are identified explicitly and never contribute fabricated zero counts.
 package twitchmonitor
 
 import (
@@ -10,7 +11,9 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"terex/main-be/internal/domain"
+	"terex/proto/twitch"
 	"time"
 )
 
@@ -23,6 +26,8 @@ type Service struct {
 	Diagnostics Diagnostics
 	Collector   domain.TwitchCollectorMonitoring
 	AppURL      string
+	flowMu      sync.Mutex
+	nextFlowID  string
 }
 
 func (s *Service) Tick(ctx context.Context) error {
@@ -33,22 +38,162 @@ func (s *Service) Tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	flows, err := s.Flows.ListTwitchFlows(ctx)
-	if err != nil {
+	prepareTasks(work.ActiveTasks, s.AppURL)
+	out := domain.TwitchMonitoringSnapshot{
+		CollectorStatus: domain.TwitchCollectorStatus{LastError: "Данные main-be обновлены; данные collector ещё не получены"},
+		Counts:          work.Counts, ActiveTasks: work.ActiveTasks, ActiveTotal: work.ActiveTotal,
+		Discovery: []json.RawMessage{}, DiagnosticsErrors: []domain.TwitchMonitoringFailure{},
+	}
+	// Persist the main queues before any remote/expensive diagnostics. Even a
+	// subsequent timeout must not hide a successful main runtime observation.
+	if err = s.Repo.SaveTwitchMonitoring(ctx, "system", "current", work.Epoch, now, out); err != nil {
 		return err
 	}
-	status, err := s.Collector.Status(ctx)
+	// Reserve the final five seconds for persisting partial-data explanations.
+	// Keep the original parent cancellation: shutdown must still stop writes.
+	deadline, _ := ctx.Deadline()
+	diagnosticCtx, diagnosticCancel := context.WithDeadline(ctx, deadline.Add(-5*time.Second))
+	defer diagnosticCancel()
+	var failures []error
+	addFailure := func(component, flowID, flowName string, e error) {
+		failures = append(failures, fmt.Errorf("monitor %s %s: %w", component, flowID, e))
+		out.DiagnosticsErrors = append(out.DiagnosticsErrors, domain.TwitchMonitoringFailure{
+			Component: component, FlowID: flowID, FlowName: flowName, Message: e.Error(),
+		})
+	}
+	status, statusErr := s.Collector.Status(diagnosticCtx)
+	if statusErr == nil && (status.Runtime == nil || status.Runtime.Epoch != work.Epoch) {
+		statusErr = errors.New("collector monitoring epoch is unavailable or changed")
+	}
+	if statusErr != nil {
+		status = domain.TwitchCollectorStatus{LastError: statusErr.Error()}
+		addFailure("collector_status", "", "", statusErr)
+	} else {
+		status.Available = true
+		observedAt := time.Now().UTC()
+		out.CollectorObservedAt = &observedAt
+		out.Counts = append(out.Counts, status.Runtime.Counts...)
+		out.ActiveTotal += status.Runtime.ActiveTotal
+		out.ActiveTasks = append(out.ActiveTasks, status.Runtime.ActiveTasks...)
+		prepareTasks(out.ActiveTasks, s.AppURL)
+		if len(out.ActiveTasks) > 100 {
+			out.ActiveTasks = out.ActiveTasks[:100]
+		}
+	}
+	status.Runtime = nil
+	out.CollectorStatus = status
+	if err = s.Repo.SaveTwitchMonitoring(ctx, "system", "current", work.Epoch, now, out); err != nil {
+		return errors.Join(append(failures, err)...)
+	}
+	flows, err := s.Flows.ListTwitchFlows(diagnosticCtx)
 	if err != nil {
-		return fmt.Errorf("monitor collector status: %w", err)
+		addFailure("flow_list", "", "", err)
 	}
-	if status.Runtime == nil || status.Runtime.Epoch != work.Epoch {
-		return errors.New("collector monitoring epoch is unavailable or changed")
+	flows = s.orderedFlows(flows)
+	for i, flow := range flows {
+		if diagnosticCtx.Err() != nil {
+			addFailure("flow_batch", flow.ID, flow.Name, fmt.Errorf("В этом цикле не опрошено %d потоков: исчерпан бюджет диагностики; следующий цикл начнёт с этого потока", len(flows)-i))
+			break
+		}
+		s.flowMu.Lock()
+		s.nextFlowID = flows[(i+1)%len(flows)].ID
+		s.flowMu.Unlock()
+		func() {
+			// Keep reads sequential and bound each flow. Rotate the starting
+			// flow next cycle when the total budget cannot cover the whole list.
+			flowCtx, flowCancel := context.WithTimeout(diagnosticCtx, 5*time.Second)
+			defer flowCancel()
+			d, e := s.Diagnostics.Diagnostics(flowCtx, flow.ID)
+			if e != nil {
+				addFailure("flow_main", flow.ID, flow.Name, e)
+				return
+			}
+			d.Collector.Available = false
+			d.Collector.ObservedAt = nil
+			d.Collector.Message = "Данные main-be обновлены; состояние скачивания collector недоступно"
+			if statusErr != nil {
+				d.Collector.Message = statusErr.Error()
+			}
+			payload := struct {
+				domain.TwitchFlowDiagnostics
+				FlowName string `json:"flow_name"`
+			}{d, flow.Name}
+			// Save main eligibility/capacity before enriching it with collector data.
+			if e = s.Repo.SaveTwitchMonitoring(flowCtx, "flow", flow.ID, work.Epoch, now, payload); e != nil {
+				addFailure("flow_save", flow.ID, flow.Name, e)
+				return
+			}
+			if statusErr != nil {
+				// One failed status request should not repeat its remote timeout
+				// for every flow. Their main diagnostics remain independently fresh.
+				return
+			}
+			collector, e := s.Collector.Diagnostics(flowCtx, flow.ID)
+			if e != nil {
+				addFailure("flow_collector", flow.ID, flow.Name, e)
+				d.Collector.Message = e.Error()
+			} else {
+				Enrich(&d, collector)
+				observedAt := time.Now().UTC()
+				d.Collector.ObservedAt = &observedAt
+				for _, r := range collector.Discovery {
+					raw, marshalErr := json.Marshal(struct {
+						domain.TwitchDiagnosticDiscovery
+						FlowName   string    `json:"flow_name"`
+						ObservedAt time.Time `json:"observed_at"`
+					}{r, flow.Name, observedAt})
+					if marshalErr != nil {
+						addFailure("flow_discovery", flow.ID, flow.Name, marshalErr)
+						continue
+					}
+					out.Discovery = append(out.Discovery, raw)
+				}
+			}
+			payload.TwitchFlowDiagnostics = d
+			if e = s.Repo.SaveTwitchMonitoring(flowCtx, "flow", flow.ID, work.Epoch, now, payload); e != nil {
+				addFailure("flow_save", flow.ID, flow.Name, e)
+			}
+		}()
+		// Publish completed observations/errors progressively. A later pool
+		// timeout must not erase every flow result collected earlier this cycle.
+		flushCtx, flushCancel := context.WithTimeout(ctx, 2*time.Second)
+		err = s.Repo.SaveTwitchMonitoring(flushCtx, "system", "current", work.Epoch, now, out)
+		flushCancel()
+		if err != nil {
+			addFailure("snapshot_save", flow.ID, flow.Name, err)
+		}
 	}
-	work.Counts = append(work.Counts, status.Runtime.Counts...)
-	work.ActiveTotal += status.Runtime.ActiveTotal
-	work.ActiveTasks = append(work.ActiveTasks, status.Runtime.ActiveTasks...)
-	sort.SliceStable(work.ActiveTasks, func(i, j int) bool {
-		a, b := work.ActiveTasks[i], work.ActiveTasks[j]
+	if err = s.Repo.SaveTwitchMonitoring(ctx, "system", "current", work.Epoch, now, out); err != nil {
+		failures = append(failures, err)
+	}
+	if err = s.Repo.CleanupTwitchMonitoring(ctx, work.Epoch); err != nil {
+		failures = append(failures, err)
+	}
+	slog.DebugContext(ctx, "twitch monitoring snapshot refreshed", "epoch", work.Epoch, "flows", len(flows), "active_total", out.ActiveTotal, "collector_available", status.Available, "diagnostic_failures", len(out.DiagnosticsErrors))
+	return errors.Join(failures...)
+}
+
+func (s *Service) orderedFlows(flows []twitch.Flow) []twitch.Flow {
+	active := make([]twitch.Flow, 0, len(flows))
+	for _, flow := range flows {
+		if !flow.Archived {
+			active = append(active, flow)
+		}
+	}
+	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
+	s.flowMu.Lock()
+	next := s.nextFlowID
+	s.flowMu.Unlock()
+	start := sort.Search(len(active), func(i int) bool { return active[i].ID >= next })
+	if start == len(active) {
+		start = 0
+	}
+	return append(active[start:], active[:start]...)
+}
+
+func prepareTasks(tasks []twitch.ActiveTask, appURL string) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		a, b := tasks[i], tasks[j]
 		if (a.StartedAt != nil) != (b.StartedAt != nil) {
 			return a.StartedAt != nil
 		}
@@ -57,61 +202,11 @@ func (s *Service) Tick(ctx context.Context) error {
 		}
 		return a.ClipID < b.ClipID
 	})
-	if len(work.ActiveTasks) > 100 {
-		work.ActiveTasks = work.ActiveTasks[:100]
-	}
-	for i := range work.ActiveTasks {
-		if strings.HasPrefix(work.ActiveTasks[i].TerexURL, "/") {
-			work.ActiveTasks[i].TerexURL = strings.TrimRight(s.AppURL, "/") + work.ActiveTasks[i].TerexURL
+	for i := range tasks {
+		if strings.HasPrefix(tasks[i].TerexURL, "/") {
+			tasks[i].TerexURL = strings.TrimRight(appURL, "/") + tasks[i].TerexURL
 		}
 	}
-	out := domain.TwitchMonitoringSnapshot{CollectorStatus: status, Counts: work.Counts, ActiveTasks: work.ActiveTasks, ActiveTotal: work.ActiveTotal, Discovery: []json.RawMessage{}}
-	var failures []error
-	for _, flow := range flows {
-		if flow.Archived {
-			continue
-		}
-		d, e := s.Diagnostics.Diagnostics(ctx, flow.ID)
-		if e != nil {
-			failures = append(failures, e)
-			continue
-		}
-		collector, e := s.Collector.Diagnostics(ctx, flow.ID)
-		if e != nil {
-			failures = append(failures, e)
-			continue
-		}
-		Enrich(&d, collector)
-		for _, r := range collector.Discovery {
-			raw, _ := json.Marshal(struct {
-				domain.TwitchDiagnosticDiscovery
-				FlowName string `json:"flow_name"`
-			}{r, flow.Name})
-			out.Discovery = append(out.Discovery, raw)
-		}
-		payload := struct {
-			domain.TwitchFlowDiagnostics
-			FlowName string `json:"flow_name"`
-		}{d, flow.Name}
-		if e = s.Repo.SaveTwitchMonitoring(ctx, "flow", flow.ID, work.Epoch, now, payload); e != nil {
-			failures = append(failures, e)
-		}
-	}
-	// A partial sample does not refresh system/current: dashboard freshness makes
-	// the gap visible while successful per-flow samples can still advance.
-	if len(failures) > 0 {
-		return errors.Join(failures...)
-	}
-	status.Runtime = nil
-	out.CollectorStatus = status
-	if err = s.Repo.SaveTwitchMonitoring(ctx, "system", "current", work.Epoch, now, out); err != nil {
-		return err
-	}
-	if err = s.Repo.CleanupTwitchMonitoring(ctx, work.Epoch); err != nil {
-		return err
-	}
-	slog.DebugContext(ctx, "twitch monitoring snapshot refreshed", "epoch", work.Epoch, "flows", len(flows), "active_total", work.ActiveTotal)
-	return nil
 }
 
 // Enrich uses the same classifications for API diagnostics and cached panels.
@@ -145,6 +240,7 @@ func Enrich(out *domain.TwitchFlowDiagnostics, collector domain.TwitchDiagnostic
 		out.Sources[state]++
 	}
 	out.Collector.Available = true
+	out.Collector.Message = collector.Message
 	out.Collector.Discovery = collector.Discovery
 	if out.EstimatedAdditionalClips > out.Collector.Remaining && out.Feasibility == "needs_sources" {
 		out.Feasibility = "budget_insufficient"

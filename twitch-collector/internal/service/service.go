@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -32,6 +31,7 @@ type Service struct {
 	lastAdmissionsAt   time.Time
 	lastFailureSyncAt  time.Time
 	lastRevalidationAt time.Time
+	configObservation  configObservation
 }
 
 func New(store domain.Store, twitch domain.Twitch, terex domain.Terex, downloader domain.Downloader, logger *slog.Logger) *Service {
@@ -64,7 +64,7 @@ func (s *Service) scheduleOnce(ctx context.Context) {
 		s.scheduleFlows(ctx)
 		return
 	}
-	cfg, err := s.terex.Settings(ctx)
+	cfg, err := s.settings(ctx)
 	reason := settingsBlockReason(cfg, err, s.twitch.Ready())
 	if reason != "" {
 		if s.logGate(ctx, "scheduler", reason, err) {
@@ -132,7 +132,7 @@ func (s *Service) check(parent context.Context) {
 			s.log.WarnContext(ctx, "collector check result could not be saved", errorFields(err)...)
 		}
 	}()
-	cfg, err := s.terex.Settings(ctx)
+	cfg, err := s.settings(ctx)
 	if err != nil {
 		message = "Terex settings unavailable"
 		s.log.WarnContext(ctx, message, errorFields(err)...)
@@ -194,7 +194,7 @@ func (s *Service) check(parent context.Context) {
 		return
 	}
 	// Refresh the global gate after metadata requests, which can take time.
-	current, e := s.terex.Settings(ctx)
+	current, e := s.settings(ctx)
 	if reason := settingsBlockReason(current, e, true); reason != "" {
 		message = reason
 		return
@@ -262,37 +262,31 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 	}
 	s.mu.Lock()
 	out.Running = s.checking
+	config := s.configObservation
+	workerGate := s.gateLogs["worker"]
 	s.mu.Unlock()
 	out.CredentialsReady = s.twitch.Ready()
-	if api, ok := s.terex.(domain.FlowTerex); ok {
-		cfg, e := api.CollectorConfig(ctx)
-		out.BlockReason = flowBlockReason(cfg, e, out.CredentialsReady)
-		out.Paused = e != nil || !cfg.Settings.Enabled
-		if e != nil {
-			out.LastError = out.BlockReason
-		}
-		if out.BlockReason == "" {
-			pending, e := s.terex.PendingCount(ctx)
-			if e != nil {
-				out.BlockReason = "Не удалось проверить очередь Terex"
-			} else if pending >= cfg.Settings.BacklogLimit {
-				out.BlockReason = fmt.Sprintf("Ожидают обработки %d источников; предел %d", pending, cfg.Settings.BacklogLimit)
-			}
-		}
-		return out, nil
+	// Monitoring must never call back into main-be: pending imports can be an
+	// expensive query, and a stalled backend must not hide local queue progress.
+	if !config.observedAt.IsZero() {
+		at := config.observedAt
+		out.ConfigObservedAt = &at
 	}
-	cfg, e := s.terex.Settings(ctx)
-	out.Paused = e != nil || !cfg.Enabled
-	out.BlockReason = settingsBlockReason(cfg, e, out.CredentialsReady)
-	if e != nil {
-		out.LastError = out.BlockReason
-	} else if out.BlockReason == "" {
-		pending, e := s.terex.PendingCount(ctx)
-		if e != nil {
-			out.BlockReason = "Terex backlog unavailable"
-		} else if pending >= cfg.BacklogLimit {
-			out.BlockReason = "Terex backlog limit reached; review or reject pending sources"
-		}
+	out.ConfigAvailable = config.err == nil && !config.observedAt.IsZero() && time.Since(config.observedAt) <= configFreshness
+	out.Paused = !out.ConfigAvailable || !config.settings.Enabled || config.maintenance
+	out.BlockReason = config.reason
+	if config.err != nil {
+		out.LastError = config.reason
+	}
+	if config.observedAt.IsZero() {
+		out.BlockReason = "Настройки Terex ещё не получены; ожидание первого цикла коллектора"
+	} else if !out.ConfigAvailable && config.err == nil {
+		out.BlockReason = "Нет свежих настроек Terex; показано только локальное состояние коллектора"
+	} else if out.BlockReason == "" && time.Since(workerGate.observedAt) <= configFreshness {
+		out.BlockReason = workerGate.reason
+	}
+	if !out.CredentialsReady {
+		out.BlockReason = "Не заданы TWITCH_CLIENT_ID и TWITCH_CLIENT_SECRET"
 	}
 	return out, nil
 }
@@ -308,7 +302,7 @@ func (s *Service) worker(ctx context.Context) {
 				s.flowWorkerOnce(ctx, api)
 				continue
 			}
-			cfg, err := s.terex.Settings(ctx)
+			cfg, err := s.settings(ctx)
 			if reason := settingsBlockReason(cfg, err, s.twitch.Ready()); reason != "" {
 				s.logGate(ctx, "worker", reason, err)
 				continue
@@ -339,7 +333,7 @@ func (s *Service) guard(ctx context.Context, task domain.Task) error {
 	return s.guardTarget(ctx, task, 0)
 }
 func (s *Service) guardTarget(ctx context.Context, task domain.Task, target int64) error {
-	cfg, err := s.terex.Settings(ctx)
+	cfg, err := s.settings(ctx)
 	if err != nil {
 		return domain.ErrPaused
 	}
@@ -464,7 +458,7 @@ func (s *Service) process(parent context.Context, task domain.Task, cfg domain.S
 		failure(&domain.Failure{Kind: "duplicate", Message: "identical source video already imported"})
 		return
 	}
-	current, err := s.terex.Settings(ctx)
+	current, err := s.settings(ctx)
 	if err != nil || !current.Enabled {
 		deferTask("Terex settings unavailable or collector paused")
 		return

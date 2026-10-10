@@ -47,7 +47,7 @@ func syncFlowConfig(ctx context.Context, store domain.FlowStore, cfg twitch.Coll
 
 func (s *Service) scheduleFlows(ctx context.Context) {
 	api := s.terex.(domain.FlowTerex)
-	cfg, err := api.CollectorConfig(ctx)
+	cfg, err := s.collectorConfig(ctx, api)
 	if err == nil {
 		if skip, e := s.handleReset(ctx, cfg); skip || e != nil {
 			return
@@ -165,7 +165,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 		message = "Twitch flow discovery is unavailable"
 		return
 	}
-	cfg, err := api.CollectorConfig(ctx)
+	cfg, err := s.collectorConfig(ctx, api)
 	if message = flowBlockReason(cfg, err, s.twitch.Ready()); message != "" {
 		s.logGate(ctx, "discovery", message, err)
 		return
@@ -458,7 +458,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 }
 
 func (s *Service) flowWorkerOnce(ctx context.Context, api domain.FlowTerex) {
-	cfg, err := api.CollectorConfig(ctx)
+	cfg, err := s.collectorConfig(ctx, api)
 	if err == nil {
 		if skip, e := s.handleReset(ctx, cfg); skip || e != nil {
 			return
@@ -514,7 +514,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 	log := s.log.With("clip_id", task.Clip.ID, "source_id", task.Clip.ID, "flow_id", task.FlowID, "attempt", task.Attempt)
 	stage := "reservation"
 	guard := func(c context.Context) error {
-		cfg, e := api.CollectorConfig(c)
+		cfg, e := s.collectorConfig(c, api)
 		if e != nil || !cfg.Settings.Enabled || cfg.Maintenance != nil || task.Epoch != cfg.Epoch {
 			return domain.ErrPaused
 		}
@@ -588,7 +588,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		if f.Kind == "quota" {
 			retry := time.Now().Add(time.Minute)
 			if !strings.Contains(f.Message, "очередь") {
-				cfg, err := api.CollectorConfig(save)
+				cfg, err := s.collectorConfig(save, api)
 				tz := "Asia/Tomsk"
 				if err == nil {
 					tz = cfg.Settings.Timezone

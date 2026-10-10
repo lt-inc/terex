@@ -87,7 +87,7 @@ func (s *Service) retryFlowClip(ctx context.Context, id string) error {
 	if !ok || !ready || !configured {
 		return domain.ErrConflict
 	}
-	cfg, err := flows.CollectorConfig(ctx)
+	cfg, err := s.collectorConfig(ctx, flows)
 	if err != nil {
 		return err
 	}
