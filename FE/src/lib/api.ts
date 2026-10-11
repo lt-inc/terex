@@ -97,8 +97,8 @@ export const updateSubJob = (
 export async function deleteSubJob(id: string) {
   await request(`/sub_jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
-export const fetchAccountsList = () =>
-  request<AccountRecord[]>("/accounts/list");
+export const fetchAccountsList = (signal?: AbortSignal) =>
+  request<AccountRecord[]>("/accounts/list", { signal });
 export const updateAccount = (id: number, data: Partial<AccountRecord>) =>
   request<AccountRecord>(`/accounts/${id}`, json("PATCH", data));
 export async function deleteAccount(id: number) {
@@ -209,9 +209,10 @@ export async function approveClip(id: string, version?: number) {
 export async function rejectClip(id: string) {
   await request(`/clips/${encodeURIComponent(id)}/reject`, { method: "POST" });
 }
-export async function fetchClipEditor(id: string): Promise<ClipEditor> {
+export async function fetchClipEditor(id: string, signal?: AbortSignal): Promise<ClipEditor> {
   const data = await request<ClipEditor>(
     `/clips/${encodeURIComponent(id)}/editor`,
+    { signal },
   );
   return {
     ...data,
@@ -237,8 +238,8 @@ export const saveClipEditor = (id: string, data: ClipEditor) =>
       subtitles_enabled: data.subtitles_enabled,
     }),
   );
-export const fetchPublications = (filters: Record<string, string>) =>
-  request<PublicationEvent[]>(`/publications?${new URLSearchParams(filters)}`);
+export const fetchPublications = (filters: Record<string, string>, signal?: AbortSignal) =>
+  request<PublicationEvent[]>(`/publications?${new URLSearchParams(filters)}`, { signal });
 export const updatePublication = (
   id: number,
   data: { version: number; publish_at: string; timezone: string; freshness_override?: boolean },
@@ -307,8 +308,8 @@ export const saveSubJobTargets = (
     json("PUT", { expected_version: version, targets }),
   );
 
-export const fetchTwitchSettings = () =>
-  request<TwitchSettings>("/twitch/settings");
+export const fetchTwitchSettings = (signal?: AbortSignal) =>
+  request<TwitchSettings>("/twitch/settings", { signal });
 export const saveTwitchSettings = (settings: TwitchSettings) =>
   request<TwitchSettings>("/twitch/settings", json("PUT", settings));
 export const fetchTwitchChannels = () =>
@@ -326,27 +327,28 @@ export const archiveTwitchChannel = (id: string) =>
   });
 export const fetchTwitchClips = () =>
   request<TwitchClip[]>("/twitch/clips?limit=100");
-export const fetchTwitchStatus = () =>
-  request<TwitchCollectorStatus>("/twitch/status");
+export const fetchTwitchStatus = (signal?: AbortSignal) =>
+  request<TwitchCollectorStatus>("/twitch/status", { signal });
 export const checkTwitchNow = () =>
   request<{ accepted: boolean }>("/twitch/check", json("POST", {}));
-export const fetchImports = (state = "", flowID = "") => {
+export const fetchImports = (state = "", flowID = "", signal?: AbortSignal) => {
   const query = new URLSearchParams();
   if (state) query.set("state", state);
   if (flowID) query.set("flow_id", flowID);
-  return request<ImportedClip[]>(`/imports${query.size ? `?${query}` : ""}`);
+  return request<ImportedClip[]>(`/imports${query.size ? `?${query}` : ""}`, { signal });
 };
 export const rejectImport = (id: string) =>
   request<ImportedClip>(
     `/imports/${encodeURIComponent(id)}`,
     json("PATCH", { rejected: true }),
   );
-export const fetchCompilations = (flowID = "") =>
+export const fetchCompilations = (flowID = "", signal?: AbortSignal) =>
   request<Compilation[]>(
     `/compilations${flowID ? `?flow_id=${encodeURIComponent(flowID)}` : ""}`,
+    { signal },
   );
-export const fetchCompilation = (id: string) =>
-  request<Compilation>(`/compilations/${encodeURIComponent(id)}`);
+export const fetchCompilation = (id: string, signal?: AbortSignal) =>
+  request<Compilation>(`/compilations/${encodeURIComponent(id)}`, { signal });
 export const createCompilation = (spec: CompilationRequest) =>
   request<Compilation>("/compilations", json("POST", spec));
 export const saveCompilation = (
@@ -374,8 +376,8 @@ function normalizeFlow(flow: TwitchFlow): TwitchFlow {
     compilation_slots: flow.compilation_slots || [],
   };
 }
-export const fetchTwitchFlows = (includeArchived = false) =>
-  request<TwitchFlow[] | null>(`/twitch/flows${includeArchived ? "?include_archived=true" : ""}`).then((flows) =>
+export const fetchTwitchFlows = (includeArchived = false, signal?: AbortSignal) =>
+  request<TwitchFlow[] | null>(`/twitch/flows${includeArchived ? "?include_archived=true" : ""}`, { signal }).then((flows) =>
     (flows || []).map(normalizeFlow),
   );
 export const fetchTwitchFlow = (id: string) =>
@@ -405,9 +407,11 @@ export const previewTwitchMetadata = (data: TwitchMetadataPreviewRequest) =>
 export const fetchTwitchFlowClips = (
   id: string,
   filters: Record<string, string>,
+  signal?: AbortSignal,
 ) =>
   request<TwitchFlowClipPage>(
     `/twitch/flows/${encodeURIComponent(id)}/clips?${new URLSearchParams({ limit: "50", ...filters })}`,
+    { signal },
   ).then((page) => ({ ...page, items: page.items || [] }));
 export const actTwitchFlowClip = (
   flowID: string,
@@ -449,7 +453,7 @@ export const cleanupTwitchStorage = (execute: boolean) =>
 export const keepTwitchMaterial = (kind: "imports" | "clips", id: string, keep: boolean) =>
   request<{ keep: boolean }>(`/twitch/${kind}/${encodeURIComponent(id)}/retention`, json("POST", { keep }));
 
-export const fetchTwitchDiagnostics = (id: string) => request<TwitchFlowDiagnostics>(`/twitch/flows/${encodeURIComponent(id)}/diagnostics`);
+export const fetchTwitchDiagnostics = (id: string, signal?: AbortSignal) => request<TwitchFlowDiagnostics>(`/twitch/flows/${encodeURIComponent(id)}/diagnostics`, { signal });
 export const previewTwitchReset = () => request<TwitchResetPreview>("/twitch/reset/preview",json("POST",{}));
 export const startTwitchReset = (preview_token: string, confirmation: string) => request<TwitchResetStatus>("/twitch/reset",json("POST",{preview_token,confirmation}));
-export const fetchTwitchReset = () => request<TwitchResetStatus>("/twitch/reset");
+export const fetchTwitchReset = (signal?: AbortSignal) => request<TwitchResetStatus>("/twitch/reset", { signal });

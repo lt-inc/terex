@@ -103,6 +103,12 @@ func errorFields(err error) []any {
 	var failure *domain.Failure
 	if errors.As(err, &failure) {
 		fields = append(fields, "error_kind", failure.Kind, "err", failure.Message)
+		if failure.Code != "" {
+			fields = append(fields, "reason_code", failure.Code)
+		}
+		if failure.Operation != "" {
+			fields = append(fields, "operation", failure.Operation, "duration_ms", failure.DurationMS)
+		}
 		if failure.HTTPStatus != 0 {
 			fields = append(fields, "http_status", failure.HTTPStatus)
 		}

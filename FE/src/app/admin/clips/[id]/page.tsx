@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Toggle from "@/components/ui/Toggle";
@@ -58,6 +58,8 @@ export default function ClipEditorPage() {
   const [customTags, setCustomTags] = useState("");
   const [metadataPreview, setMetadataPreview] = useState<{ fingerprint: string; result: TwitchMetadataPreview } | null>(null);
   const [metadataError, setMetadataError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const pending = useRef<AbortController | null>(null);
   const generatedMetadata = draft?.metadata_snapshot?.schema_version === 1;
   const metadataFingerprint = generatedMetadata ? JSON.stringify({
     id, revision_id: draft?.revision_id, title: draft?.title,
@@ -75,19 +77,27 @@ export default function ClipEditorPage() {
     spec({ ...draft, hashtags: generatedMetadata ? draft.hashtags : parsedTags }) !== spec(saved)
   );
   const load = useCallback(async () => {
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
+    setLoading(true);
     setError("");
     try {
-      const e = await fetchClipEditor(id);
+      const e = await fetchClipEditor(id, controller.signal);
+      if (controller.signal.aborted) return;
       setSaved(e);
       setDraft(e);
       setTags((e.hashtags ?? []).join(" "));
       setCustomTags((e.metadata_snapshot?.settings.custom_hashtags || []).join(" "));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (!controller.signal.aborted) {setLoading(false); pending.current = null;}
     }
   }, [id]);
   useEffect(() => {
     load();
+    return () => pending.current?.abort();
   }, [load]);
   useEffect(() => {
     if (!draft?.metadata_snapshot || !generatedMetadata) return;
@@ -118,33 +128,6 @@ export default function ClipEditorPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metadataFingerprint]);
   useEffect(() => {
-    if (
-      !saved ||
-      !["pending", "queued", "rendering"].includes(saved.render_state)
-    )
-      return;
-    let active = true;
-    const timer = setInterval(() => {
-      fetchClipEditor(id)
-        .then((e) => {
-          if (!active) return;
-          setSaved(e);
-          if (!dirty) {
-            setDraft(e);
-            setTags((e.hashtags ?? []).join(" "));
-            setCustomTags((e.metadata_snapshot?.settings.custom_hashtags || []).join(" "));
-          }
-        })
-        .catch((e) => {
-          if (active) setError(e.message);
-        });
-    }, 3000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [id, saved?.render_state, dirty]);
-  useEffect(() => {
     if (!dirty) return;
     function warn(e: BeforeUnloadEvent) {
       e.preventDefault();
@@ -153,9 +136,11 @@ export default function ClipEditorPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
   function change<K extends keyof ClipEditor>(key: K, value: ClipEditor[K]) {
+    if (busy || loading) return;
     setDraft((d) => (d ? { ...d, [key]: value } : d));
   }
   function cueChange(id: string, patch: Partial<SubtitleCue>) {
+    if (busy || loading) return;
     setDraft((d) =>
       d
         ? {
@@ -166,7 +151,7 @@ export default function ClipEditorPage() {
     );
   }
   async function save() {
-    if (!draft) return;
+    if (!draft || busy || loading || pending.current) return;
     if (generatedMetadata && (!currentMetadataPreview || currentMetadataPreview.errors?.length)) {
       setError(metadataError || currentMetadataPreview?.errors?.join(" ") || "Дождитесь проверки итогового описания.");
       return;
@@ -201,7 +186,7 @@ export default function ClipEditorPage() {
     }
   }
   async function approve() {
-    if (!saved || dirty) return;
+    if (!saved || dirty || busy || loading || pending.current) return;
     setBusy(true);
     setError("");
     try {
@@ -221,7 +206,7 @@ export default function ClipEditorPage() {
     }
   }
   async function retryRender() {
-    if (!saved) return;
+    if (!saved || busy || loading || pending.current) return;
     setBusy(true);
     setError("");
     try {
@@ -245,7 +230,7 @@ export default function ClipEditorPage() {
     });
   }
   async function restore() {
-    if (!saved || !restoreID || dirty) return;
+    if (!saved || !restoreID || dirty || busy || loading || pending.current) return;
     setBusy(true);
     setError("");
     try {
@@ -275,8 +260,8 @@ export default function ClipEditorPage() {
           ← Clips
         </Link>
         <p className="my-4 text-red-400">{error || "Loading clip…"}</p>
-        <button className={button} onClick={load}>
-          Retry
+        <button className={button} disabled={loading} onClick={load}>
+          {loading ? "Loading…" : "Retry"}
         </button>
       </div>
     );
@@ -319,30 +304,31 @@ export default function ClipEditorPage() {
         <div className="flex gap-2 flex-wrap">
           <button
             className={button}
-            disabled={busy}
+            disabled={busy || loading}
             onClick={() => {
               if (dirty) setConfirmation({ kind: "reload" });
               else load();
             }}
           >
-            Reload
+            {loading ? "Loading…" : "Reload"}
           </button>
           <button
             className="bg-indigo-600 disabled:opacity-40 px-3 py-2 rounded-lg text-sm"
-            disabled={busy || !dirty || (generatedMetadata && (!currentMetadataPreview || !!currentMetadataPreview.errors?.length))}
+            disabled={busy || loading || !dirty || (generatedMetadata && (!currentMetadataPreview || !!currentMetadataPreview.errors?.length))}
             onClick={save}
           >
             {busy ? "Working…" : twitchClip ? "Сохранить изменения" : "Save & render"}
           </button>
           {!twitchClip && <button
             className="bg-emerald-600 disabled:opacity-40 px-3 py-2 rounded-lg text-sm"
-            disabled={busy || dirty || saved?.render_state !== "ready"}
+            disabled={busy || loading || dirty || saved?.render_state !== "ready"}
             onClick={() => setConfirmation({ kind: "approve" })}
           >
             Approve revision
           </button>}
         </div>
       </div>
+      <p className="text-xs text-slate-400">Автообновление выключено. После рендера нажмите Reload. При ошибке загруженная версия и ваши правки сохраняются.</p>
       <p className="text-sm text-slate-400">
         {twitchClip ? "Готовая версия Twitch допускается автоматически; публикация зависит от потока и расписания. Только правки монтажа требуют рендера. Название, вступление и хештеги готовой версии сохраняются с тем же видеофайлом. Начатые загрузки сохраняют исходную версию." : "Saving this variant holds future publications until reapproval. Already started uploads keep their original revision. Subtitle times refer to the source video."}
       </p>
@@ -361,7 +347,7 @@ export default function ClipEditorPage() {
       )}
       {["failed", "waiting_worker"].includes(saved?.render_state ?? "") && (
         <button
-          disabled={busy || dirty || draft.source_available === false}
+          disabled={busy || loading || dirty || draft.source_available === false}
           className={button}
           onClick={retryRender}
         >
@@ -374,7 +360,7 @@ export default function ClipEditorPage() {
             "Original source is unavailable. You can update metadata; boundaries and subtitles are disabled."}
         </p>
       )}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+      <fieldset disabled={busy || loading} className="grid min-w-0 grid-cols-1 xl:grid-cols-2 gap-5">
         <section className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-slate-300">
             Source and boundaries
@@ -665,7 +651,7 @@ export default function ClipEditorPage() {
             ))}
           </div>
         </section>
-      </div>
+      </fieldset>
       <PreviewModal
         target={preview}
         onClose={() => setPreview(null)}

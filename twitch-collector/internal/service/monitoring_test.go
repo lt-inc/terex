@@ -64,4 +64,10 @@ func TestMonitoringReadsLocalStateAndDoesNotRefreshOldConfig(t *testing.T) {
 			t.Fatal("diagnostics presented absent or stale config as current")
 		}
 	}
+	// A failed refresh does not mean the still-fresh snapshot stopped work.
+	svc.configObservation = configObservation{observedAt: time.Now(), settings: settings(), err: &domain.Failure{Kind: "network", Code: "terex_timeout", Message: "Terex timeout"}}
+	status, err := svc.Status(ctx)
+	if err != nil || status.Paused || status.BlockReason != "" || status.LastError == "" {
+		t.Fatalf("fresh cached configuration falsely reported as blocked: %+v err=%v", status, err)
+	}
 }

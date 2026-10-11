@@ -56,7 +56,8 @@ func (s *Service) fetchCollectorConfig(ctx context.Context, api domain.FlowTerex
 		s.mu.Lock()
 		if sequence >= s.configObservation.sequence {
 			s.configObservation.err = err
-			s.configObservation.reason = flowBlockReason(cfg, err, s.twitch != nil && s.twitch.Ready())
+			// The last confirmed snapshot remains usable until its freshness
+			// deadline. Report the failed refresh separately from that state.
 		}
 		s.mu.Unlock()
 		return cfg, err
@@ -72,6 +73,7 @@ func (s *Service) fetchCollectorConfig(ctx context.Context, api domain.FlowTerex
 		s.configObservation = observation
 	}
 	s.mu.Unlock()
+	s.log.DebugContext(ctx, "collector config refreshed", "epoch", cfg.Epoch, "flows", len(cfg.Flows), "duration_ms", time.Since(started).Milliseconds())
 	return cfg, err
 }
 

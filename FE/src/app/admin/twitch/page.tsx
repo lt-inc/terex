@@ -28,43 +28,37 @@ export default function TwitchFlowsPage() {
     [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
-  const refreshing = useRef(false);
-  const load = useCallback(async (initial = false) => {
-    if (refreshing.current) return;
-    refreshing.current = true;
-    if (initial) setLoading(true);
+  const requestID = useRef(0);
+  const pending = useRef<AbortController | null>(null);
+  const load = useCallback(async () => {
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
+    const attempt = ++requestID.current;
+    setLoading(true);
     try {
       const results = await Promise.allSettled([
-        fetchTwitchFlows(includeArchived),
-        fetchAccountsList(),
-        fetchTwitchStatus(),
+        fetchTwitchFlows(includeArchived, controller.signal),
+        fetchAccountsList(controller.signal),
+        fetchTwitchStatus(controller.signal),
       ]);
-      if (results[0].status === "rejected") throw results[0].reason;
-      setFlows(results[0].value ?? []);
+      if (attempt !== requestID.current) return;
+      if (results[0].status === "fulfilled") setFlows(results[0].value ?? []);
       if (results[1].status === "fulfilled")
         setAccounts(results[1].value ?? []);
       if (results[2].status === "fulfilled") setStatus(results[2].value);
-      setError(
-        results[2].status === "rejected"
-          ? `Collector недоступен: ${results[2].reason instanceof Error ? results[2].reason.message : String(results[2].reason)}`
-          : "",
-      );
+      const labels = ["Потоки", "Аккаунты", "Collector"];
+      setError(results.flatMap((result, index) => result.status === "rejected" ? [`${labels[index]}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []).join(" · "));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (attempt === requestID.current) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      setLoading(false);
-      refreshing.current = false;
+      if (attempt === requestID.current) {setLoading(false); pending.current = null;}
     }
   }, [includeArchived]);
   useEffect(() => {
-    void load(true);
+    void load();
+    return () => {requestID.current++; pending.current?.abort();};
   }, [load]);
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible" && !busy) void load();
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [load, busy]);
   async function action(flow: TwitchFlow, kind: "check" | "pause" | "archive" | "restore") {
     setBusy(flow.id);
     setError("");
@@ -73,7 +67,7 @@ export default function TwitchFlowsPage() {
       if (kind === "check") {
         await checkTwitchFlow(flow.id);
         setNotice(
-          `Проверка «${flow.name}» запрошена. Результаты обновляются каждые 10 секунд.`,
+          `Проверка «${flow.name}» запрошена. Нажмите «Обновить», чтобы увидеть результат после завершения.`,
         );
       } else if (kind === "archive") {
         await archiveTwitchFlow(flow.id);
@@ -104,7 +98,7 @@ export default function TwitchFlowsPage() {
           <button
             className={button}
             disabled={loading || !!busy}
-            onClick={() => void load(true)}
+            onClick={() => void load()}
           >
             Обновить
           </button>
@@ -117,6 +111,7 @@ export default function TwitchFlowsPage() {
         </div>
       </div>
       <TwitchNav />
+      <p className="text-xs text-slate-400">Автообновление выключено. «Обновить» запрашивает текущие потоки и состояние collector; при ошибке предыдущие данные сохраняются. Готовность каждого потока обновляется своей кнопкой.</p>
       <label className="flex items-center gap-2 text-sm text-slate-300">
         <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
         Показать архивированные потоки

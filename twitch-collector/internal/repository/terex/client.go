@@ -28,6 +28,7 @@ func New(base, token string) *Client {
 	return &Client{Base: strings.TrimRight(base, "/"), Token: token, HTTP: &http.Client{Timeout: 3 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (c *Client) request(ctx context.Context, method, path string, in, out any) error {
+	started := time.Now()
 	var data []byte
 	var err error
 	if in != nil {
@@ -45,7 +46,7 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return &domain.Failure{Kind: "network", Message: "Terex request unavailable", Retryable: true}
+		return requestFailure(ctx, err, method+" "+strings.SplitN(path, "?", 2)[0], time.Since(started))
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
@@ -82,12 +83,15 @@ func (c *Client) request(ctx context.Context, method, path string, in, out any) 
 		if res.StatusCode == 409 && (strings.Contains(message, "лимит скачивания") || strings.Contains(message, "очередь проверки заполнена")) {
 			kind = "quota"
 		}
-		return &domain.Failure{Kind: kind, Message: message, HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res), Code: diagnostic.Code, NextCheckAt: diagnostic.NextCheckAt}
+		return &domain.Failure{Kind: kind, Message: message, Operation: method + " " + strings.SplitN(path, "?", 2)[0], DurationMS: time.Since(started).Milliseconds(), HTTPStatus: res.StatusCode, Retryable: res.StatusCode == 429 || res.StatusCode >= 500, RetryAfter: retryAfter(res), Code: diagnostic.Code, NextCheckAt: diagnostic.NextCheckAt}
 	}
 	if out == nil {
 		return nil
 	}
 	if err = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(out); err != nil {
+		if ctx.Err() != nil || isNetworkError(err) {
+			return requestFailure(ctx, err, method+" "+strings.SplitN(path, "?", 2)[0], time.Since(started))
+		}
 		return errors.New("invalid Terex response")
 	}
 	return nil

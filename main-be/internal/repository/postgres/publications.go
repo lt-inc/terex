@@ -53,10 +53,8 @@ func (s *Store) ListPublicationRecords(ctx context.Context, f domain.Publication
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	for n := range out {
-		if err = s.enrichPublicationPolicy(ctx, &out[n]); err != nil {
-			return nil, err
-		}
+	if err = s.enrichPublicationPolicies(ctx, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

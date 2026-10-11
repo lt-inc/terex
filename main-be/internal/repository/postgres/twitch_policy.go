@@ -922,26 +922,60 @@ func renderPreparationAllowed(ctx context.Context, tx pgx.Tx, rid int64, now tim
 }
 
 func (s *Store) enrichPublicationPolicy(ctx context.Context, p *domain.PublicationRecord) error {
-	var flow string
-	var created *time.Time
-	var maxAge, horizon int
-	var override bool
-	err := s.pool.QueryRow(ctx, `SELECT f.id,COALESCE((f.config->>'max_source_age_hours')::int,72),l.schedule_horizon_hours,
- (SELECT min((i.request->'source'->>'created_at')::timestamptz) FROM twitch_imports i WHERE i.id=o.source_id OR i.id IN(SELECT source_id FROM twitch_compilation_items WHERE compilation_revision_id=p.revision_id) OR i.clip_id IN(SELECT source_clip_id FROM twitch_compilation_items WHERE compilation_revision_id=p.revision_id)),
- COALESCE(p.auto_flow_id IS NULL AND p.freshness_override_revision_id=p.revision_id AND p.freshness_override_publish_at=p.publish_at,false)
- FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id JOIN twitch_flows f ON f.id=o.flow_id JOIN twitch_channel_limits l ON l.youtube_channel_id=o.youtube_channel_id WHERE p.id=$1`, p.ID).Scan(&flow, &maxAge, &horizon, &created, &override)
-	if err == pgx.ErrNoRows {
+	items := []domain.PublicationRecord{*p}
+	if err := s.enrichPublicationPolicies(ctx, items); err != nil {
+		return err
+	}
+	*p = items[0]
+	return nil
+}
+
+func (s *Store) enrichPublicationPolicies(ctx context.Context, publications []domain.PublicationRecord) error {
+	if len(publications) == 0 {
 		return nil
 	}
+	ids := make([]int64, 0, len(publications))
+	byID := make(map[int64]*domain.PublicationRecord, len(publications))
+	for n := range publications {
+		ids = append(ids, publications[n].ID)
+		byID[publications[n].ID] = &publications[n]
+	}
+	// Separate indexed lookups instead of OR subplans that scan the complete
+	// import catalog once per calendar event. Keep the legacy clip-id branch.
+	rows, err := s.pool.Query(ctx, `SELECT p.id,f.id,COALESCE((f.config->>'max_source_age_hours')::int,72),l.schedule_horizon_hours,source_age.created_at,
+ COALESCE(p.auto_flow_id IS NULL AND p.freshness_override_revision_id=p.revision_id AND p.freshness_override_publish_at=p.publish_at,false)
+	FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id JOIN twitch_flows f ON f.id=o.flow_id JOIN twitch_channel_limits l ON l.youtube_channel_id=o.youtube_channel_id
+	LEFT JOIN LATERAL (
+	 SELECT min(sources.created_at) AS created_at FROM (
+	  SELECT (i.request->'source'->>'created_at')::timestamptz AS created_at FROM twitch_imports i WHERE i.id=o.source_id
+	  UNION ALL
+	  SELECT (i.request->'source'->>'created_at')::timestamptz FROM twitch_compilation_items ci JOIN twitch_imports i ON i.id=ci.source_id WHERE ci.compilation_revision_id=p.revision_id
+	  UNION ALL
+	  SELECT (i.request->'source'->>'created_at')::timestamptz FROM twitch_compilation_items ci JOIN twitch_imports i ON i.clip_id=ci.source_clip_id WHERE ci.compilation_revision_id=p.revision_id
+	 ) sources
+	) source_age ON true WHERE p.id=ANY($1::bigint[])`, ids)
 	if err != nil {
 		return err
 	}
-	policy := &domain.PublicationTwitchPolicy{FlowID: flow, SourceCreatedAt: created, MaxSourceAgeHours: maxAge, HorizonHours: horizon, HorizonEnd: time.Now().UTC().Add(time.Duration(horizon) * time.Hour)}
-	if created != nil {
-		deadline := created.Add(time.Duration(maxAge) * time.Hour)
-		policy.Deadline = &deadline
+	defer rows.Close()
+	now := time.Now().UTC()
+	for rows.Next() {
+		var id int64
+		var flow string
+		var created *time.Time
+		var maxAge, horizon int
+		var override bool
+		if err = rows.Scan(&id, &flow, &maxAge, &horizon, &created, &override); err != nil {
+			return err
+		}
+		policy := &domain.PublicationTwitchPolicy{FlowID: flow, SourceCreatedAt: created, MaxSourceAgeHours: maxAge, HorizonHours: horizon, HorizonEnd: now.Add(time.Duration(horizon) * time.Hour)}
+		if created != nil {
+			deadline := created.Add(time.Duration(maxAge) * time.Hour)
+			policy.Deadline = &deadline
+		}
+		p := byID[id]
+		p.TwitchPolicy = policy
+		p.FreshnessOverride = override
 	}
-	p.TwitchPolicy = policy
-	p.FreshnessOverride = override
-	return nil
+	return rows.Err()
 }

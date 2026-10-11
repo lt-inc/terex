@@ -71,7 +71,7 @@ function color(state: string) {
 export default function CalendarPage() {
   const [view, setView] = useState<"week" | "month">("week"),
     [zone, setZone] = useState(DEFAULT_TIMEZONE),
-    [date, setDate] = useState(() => zonedParts(new Date().toISOString()).date),
+    [date, setDate] = useState(""),
     [account, setAccount] = useState(""),
     [platform, setPlatform] = useState(""),
     [state, setState] = useState("");
@@ -81,14 +81,24 @@ export default function CalendarPage() {
     [loading, setLoading] = useState(false),
     [error, setError] = useState(""),
     [refresh, setRefresh] = useState(0);
-  const days = useMemo(() => calendarDays(date, view), [date, view]);
+  const [observedAt, setObservedAt] = useState("");
+  const [updatedAt, setUpdatedAt] = useState("");
+  const days = useMemo(() => date ? calendarDays(date, view) : [], [date, view]);
+  const today = observedAt ? zonedParts(observedAt, zone).date : "";
+  useEffect(() => {
+    const now = new Date().toISOString();
+    setObservedAt(now);
+    setDate(zonedParts(now).date);
+  }, []);
   useEffect(() => {
     fetchAccountsList()
       .then(setAccounts)
       .catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
+    if (!days.length) return;
     let active = true;
+    const controller = new AbortController();
     setLoading(true);
     setError("");
     let from: string, to: string;
@@ -107,9 +117,14 @@ export default function CalendarPage() {
       ...(platform ? { platform } : {}),
       ...(state ? { status: state } : {}),
       limit: "1000",
-    })
+    }, controller.signal)
       .then((rows) => {
-        if (active) setEvents(rows);
+        if (active) {
+          setEvents(rows);
+          const now = new Date().toISOString();
+          setUpdatedAt(now);
+          setObservedAt(now);
+        }
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -119,12 +134,9 @@ export default function CalendarPage() {
       });
     return () => {
       active = false;
+      controller.abort();
     };
   }, [days, zone, account, platform, state, refresh]);
-  useEffect(() => {
-    const timer = setInterval(() => setRefresh((v) => v + 1), 15000);
-    return () => clearInterval(timer);
-  }, []);
   const groups = useMemo(() => {
     const map = new Map<string, PublicationEvent[]>();
     for (const e of events) {
@@ -150,6 +162,10 @@ export default function CalendarPage() {
         Times show when upload starts. Processing and public visibility are
         tracked separately. Overdue approved events catch up automatically;
         older backlog requires confirmation.
+      </p>
+      <p className="text-xs text-slate-400">
+        Auto-refresh is off. Use Refresh to load the latest calendar.
+        {updatedAt && ` Last loaded: ${formatInZone(updatedAt, zone)}.`}
       </p>
       <div className="flex flex-wrap gap-2 items-center">
         <button
@@ -252,7 +268,7 @@ export default function CalendarPage() {
       </div>
       {error && (
         <p role="alert" className="text-red-400">
-          {error}
+          {error}{updatedAt && " Previously loaded events have been kept. Use Refresh to try again."}
         </p>
       )}
       <div className="overflow-x-auto">
@@ -265,7 +281,7 @@ export default function CalendarPage() {
           {days.map((day) => (
             <div
               key={day}
-              className={`min-h-40 border rounded-xl p-2 flex flex-col gap-2 ${day === zonedParts(new Date().toISOString(), zone).date ? "border-indigo-500 bg-slate-800" : "border-slate-700 bg-slate-800/50"}`}
+              className={`min-h-40 border rounded-xl p-2 flex flex-col gap-2 ${day === today ? "border-indigo-500 bg-slate-800" : "border-slate-700 bg-slate-800/50"}`}
             >
               <p className="text-xs text-slate-400">
                 {day.slice(8)}.{day.slice(5, 7)}
