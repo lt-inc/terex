@@ -79,19 +79,46 @@ func calendarSlotsTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, format strin
 	end := now.Add(time.Duration(horizon) * time.Hour)
 	local := now.In(loc)
 	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	// Fetch channel occupancy once for the complete horizon. Day quotas still
+	// count the whole local day, including slots later than the horizon.
+	endLocal := end.In(loc)
+	calendarEnd := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day()+1, 0, 0, 0, 0, loc)
+	rows, err := tx.Query(ctx, `SELECT p.publish_at,FALSE FROM publications p JOIN accounts a ON a.id=p.account_id JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE COALESCE(NULLIF(o.youtube_channel_id,''),a.remote_account_id)=$1 AND j.output_format=$2 AND p.id<>$3 AND `+occupiesCalendar+` AND p.publish_at>=$4 AND p.publish_at<$5
+ UNION ALL
+ SELECT r.slot_at,TRUE FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$6 AND r.state='active' AND r.expires_at>$7 AND r.slot_at>=$4 AND r.slot_at<$5 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`)`, f.YouTubeChannelID, format, excludePID, day, calendarEnd, excludePrep, now)
+	if err != nil {
+		return nil, err
+	}
+	occupiedDays, preparingDays := map[string]int{}, map[string]int{}
+	occupiedTimes, preparingTimes := map[int64]bool{}, map[int64]bool{}
+	for rows.Next() {
+		var at time.Time
+		var preparation bool
+		if err = rows.Scan(&at, &preparation); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		date := at.In(loc).Format("2006-01-02")
+		if preparation {
+			preparingDays[date]++
+			preparingTimes[at.UnixNano()] = true
+		} else {
+			occupiedDays[date]++
+			occupiedTimes[at.Truncate(time.Minute).Unix()] = true
+		}
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
 	out := []policySlot{}
 	for d := 0; d <= 8; d++ {
 		date := day.AddDate(0, 0, d)
 		if date.After(end) {
 			break
 		}
-		var occupied, preparing int
-		if err = tx.QueryRow(ctx, `SELECT
-  (SELECT count(*) FROM publications p JOIN accounts a ON a.id=p.account_id JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE COALESCE(NULLIF(o.youtube_channel_id,''),a.remote_account_id)=$1 AND j.output_format=$2 AND p.id<>$3 AND `+occupiesCalendar+` AND(p.publish_at AT TIME ZONE $4)::date=$5::date),
-  (SELECT count(*) FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$6 AND r.state='active' AND r.expires_at>$7 AND(r.slot_at AT TIME ZONE $4)::date=$5::date AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`))`, f.YouTubeChannelID, format, excludePID, zone, date.Format("2006-01-02"), excludePrep, now).Scan(&occupied, &preparing); err != nil {
-			return nil, err
-		}
-		freeForDay := max(0, daily-occupied-preparing)
+		key := date.Format("2006-01-02")
+		freeForDay := max(0, daily-occupiedDays[key]-preparingDays[key])
 		for _, slot := range slots {
 			clock, e := time.Parse("15:04", slot)
 			if e != nil {
@@ -101,18 +128,12 @@ func calendarSlotsTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, format strin
 			if !at.After(now) || at.After(end) {
 				continue
 			}
-			v := policySlot{At: at, Slot: slot}
-			if err = tx.QueryRow(ctx, `SELECT
-   EXISTS(SELECT 1 FROM publications p JOIN accounts a ON a.id=p.account_id JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE COALESCE(NULLIF(o.youtube_channel_id,''),a.remote_account_id)=$1 AND j.output_format=$2 AND p.id<>$3 AND `+occupiesCalendar+` AND date_trunc('minute',p.publish_at)=$4),
-   EXISTS(SELECT 1 FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$5 AND r.state='active' AND r.expires_at>$6 AND r.slot_at=$4 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`))`, f.YouTubeChannelID, format, excludePID, at, excludePrep, now).Scan(&v.Occupied, &v.Preparing); err != nil {
-				return nil, err
-			}
+			v := policySlot{At: at, Slot: slot, Occupied: occupiedTimes[at.Unix()], Preparing: preparingTimes[at.UnixNano()]}
 			if !v.Occupied && !v.Preparing {
 				if freeForDay <= 0 {
 					continue
-				} else {
-					freeForDay--
 				}
+				freeForDay--
 			}
 			out = append(out, v)
 		}
@@ -400,6 +421,12 @@ func (s *Store) FlowCapacity(ctx context.Context, id string, now time.Time) (twi
 	if err != nil {
 		return twitch.FlowCapacity{}, err
 	}
+	return flowCapacityTx(ctx, tx, f, now)
+}
+
+// Diagnostics already has the current flow and holds a read-only connection;
+// reuse both rather than reacquiring the pool and calculating UI counters.
+func flowCapacityTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, now time.Time) (twitch.FlowCapacity, error) {
 	mode, err := policyMode(ctx, tx)
 	if err != nil {
 		return twitch.FlowCapacity{}, err
@@ -439,7 +466,7 @@ func (s *Store) FlowCapacity(ctx context.Context, id string, now time.Time) (twi
 				}
 			}
 		}
-		if err = tx.QueryRow(ctx, `SELECT count(ps.import_id),COALESCE(sum(ps.duration_sec),0) FROM twitch_preparation_reservations r JOIN twitch_preparation_sources ps ON ps.reservation_id=r.id WHERE r.flow_id=$1 AND r.format=$2 AND r.state='active' AND r.expires_at>$3`, id, format, now).Scan(&cap.SourceCount, &cap.SourceDurationSec); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT count(ps.import_id),COALESCE(sum(ps.duration_sec),0) FROM twitch_preparation_reservations r JOIN twitch_preparation_sources ps ON ps.reservation_id=r.id WHERE r.flow_id=$1 AND r.format=$2 AND r.state='active' AND r.expires_at>$3`, f.ID, format, now).Scan(&cap.SourceCount, &cap.SourceDurationSec); err != nil {
 			return out, err
 		}
 		if format == "compilation" {

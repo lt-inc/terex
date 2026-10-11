@@ -55,11 +55,12 @@ func (f monitorDiagnosticsFunc) Diagnostics(ctx context.Context, id string) (dom
 }
 
 type monitorCollector struct {
-	status     domain.TwitchCollectorStatus
-	err        error
-	flowErrors map[string]error
-	flowCalls  int
-	onStatus   func()
+	status        domain.TwitchCollectorStatus
+	err           error
+	flowErrors    map[string]error
+	flowCalls     int
+	onStatus      func()
+	onDiagnostics func(context.Context, string) error
 }
 
 func (c *monitorCollector) Status(context.Context) (domain.TwitchCollectorStatus, error) {
@@ -68,8 +69,11 @@ func (c *monitorCollector) Status(context.Context) (domain.TwitchCollectorStatus
 	}
 	return c.status, c.err
 }
-func (c *monitorCollector) Diagnostics(_ context.Context, id string) (domain.TwitchDiagnosticCollector, error) {
+func (c *monitorCollector) Diagnostics(ctx context.Context, id string) (domain.TwitchDiagnosticCollector, error) {
 	c.flowCalls++
+	if c.onDiagnostics != nil {
+		return domain.TwitchDiagnosticCollector{}, c.onDiagnostics(ctx, id)
+	}
 	return domain.TwitchDiagnosticCollector{Discovery: []domain.TwitchDiagnosticDiscovery{{FlowID: id, Fetched: 10}}}, c.flowErrors[id]
 }
 
@@ -195,5 +199,29 @@ func TestDiagnosticBudgetPreservesProgressAndContinuesWithNextFlow(t *testing.T)
 	}
 	if len(attempted) != 3 || attempted[1] != "b" || attempted[2] != "a" {
 		t.Fatalf("next cycle starved unvisited flow: %v", attempted)
+	}
+}
+
+func TestCollectorTimeoutStillPersistsMainObservationAndFailure(t *testing.T) {
+	c := &monitorCollector{
+		status: domain.TwitchCollectorStatus{Runtime: &twitch.RuntimeWork{Epoch: 3}},
+		onDiagnostics: func(ctx context.Context, _ string) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	s, r := monitorFixture(c)
+	// One second for diagnostics, five reserved for persisting observations.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	if err := s.Tick(ctx); err == nil {
+		t.Fatal("collector timeout must be reported")
+	}
+	var flow domain.TwitchFlowDiagnostics
+	if err := json.Unmarshal(r.saved["flow/a"], &flow); err != nil {
+		t.Fatal(err)
+	}
+	if flow.Sources["ready"] != 2 || flow.Collector.Available || flow.Collector.ObservedAt != nil || flow.Collector.Message != context.DeadlineExceeded.Error() {
+		t.Fatalf("successful main data or collector timeout explanation lost: %+v", flow)
 	}
 }

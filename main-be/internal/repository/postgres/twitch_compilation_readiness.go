@@ -40,12 +40,25 @@ func nextFlowCompilationTargetTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, 
 }
 
 func inspectFlowCompilationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, targetAt, now time.Time) (domain.AutoCompilationResult, []twitch.CompilationItemRequest, error) {
+	return inspectFlowCompilationSourcesTx(ctx, tx, f, targetAt, now, false)
+}
+
+// Admission needs the canonical ready selection, not a tally of every discovery.
+func inspectFlowCompilationReadyTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, targetAt, now time.Time) (domain.AutoCompilationResult, []twitch.CompilationItemRequest, error) {
+	return inspectFlowCompilationSourcesTx(ctx, tx, f, targetAt, now, true)
+}
+
+func inspectFlowCompilationSourcesTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, targetAt, now time.Time, readyOnly bool) (domain.AutoCompilationResult, []twitch.CompilationItemRequest, error) {
+	readyFilter := ""
+	if readyOnly {
+		readyFilter = " AND i.media_state='ready' AND NOT i.rejected AND NOT fs.excluded AND m.id IS NOT NULL AND m.storage_state='available'"
+	}
 	target := targetAt
 	if target.IsZero() {
 		target = now
 	}
 	out := domain.AutoCompilationResult{Timezone: f.Timezone, LocalDate: target.In(mustLocation(f.Timezone)).Format("2006-01-02"), MinimumClips: f.CompilationMinClips, WindowHours: f.WindowHours, MinimumDurationSec: f.CompilationMinDurationSec, ScheduledAt: targetAt, Sources: &domain.CompilationSourceCounts{}}
-	rows, err := tx.Query(ctx, `SELECT i.id,COALESCE(m.id,''),COALESCE(i.request->'source'->>'broadcaster_id',''),COALESCE((m.verified->>'duration_sec')::float8,0),fs.excluded OR i.rejected,CASE WHEN m.storage_state IS NOT NULL AND m.storage_state<>'available' THEN 'expired' ELSE i.media_state END,EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=m.id),i.request,EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations pr ON pr.id=ps.reservation_id WHERE ps.import_id=i.id AND pr.youtube_channel_id=$2 AND pr.format='compilation' AND pr.state='active' AND pr.expires_at>$3 AND(pr.flow_id<>$1 OR pr.clip_id IS NOT NULL)) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 ORDER BY `+twitchGrowthOrder("i", "$4", "$3::timestamptz", "$5"), f.ID, f.YouTubeChannelID, now, f.RankingMode, twitch.GrowthStaleAfter(f.PollIntervalMinutes).Seconds())
+	rows, err := tx.Query(ctx, `SELECT i.id,COALESCE(m.id,''),COALESCE(i.request->'source'->>'broadcaster_id',''),COALESCE((m.verified->>'duration_sec')::float8,0),fs.excluded OR i.rejected,CASE WHEN m.storage_state IS NOT NULL AND m.storage_state<>'available' THEN 'expired' ELSE i.media_state END,EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=m.id),i.request,EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations pr ON pr.id=ps.reservation_id WHERE ps.import_id=i.id AND pr.youtube_channel_id=$2 AND pr.format='compilation' AND pr.state='active' AND pr.expires_at>$3 AND(pr.flow_id<>$1 OR pr.clip_id IS NOT NULL)) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1`+readyFilter+` ORDER BY `+twitchGrowthOrder("i", "$4", "$3::timestamptz", "$5"), f.ID, f.YouTubeChannelID, now, f.RankingMode, twitch.GrowthStaleAfter(f.PollIntervalMinutes).Seconds())
 	if err != nil {
 		return out, nil, err
 	}
@@ -65,40 +78,9 @@ func inspectFlowCompilationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, tar
 			return out, nil, err
 		}
 		n := out.Sources
-		n.Total++
-		switch {
-		case rejected:
-			n.Rejected++
-		case !preparationSourceFresh(f, req.Source, target, now) || req.Source.CreatedAt.Before(now.Add(-time.Duration(f.WindowHours)*time.Hour)):
-			n.OutsideWindow++
-		case f.Language != "" && (req.Source.Language != f.Language || req.Source.LanguageSource != "clip"):
-			n.Filtered++
-			n.LanguageFiltered++
-		case !sourceMatches(f, req.Source):
-			n.Filtered++
-		case used || reserved:
-			n.AlreadyUsed++
-		case state != "ready" || c.Media == "":
-			n.NotReady++
-			switch state {
-			case "failed":
-				n.Failed++
-			case "expired":
-				n.Expired++
-			case "verifying":
-				n.Verifying++
-			case "pending":
-				n.Downloading++
-			default:
-				n.DownloadPending++
-			}
-		case c.Duration < f.MinDurationSec || c.Duration > f.MaxDurationSec+0.05:
-			n.Filtered++
-			n.DurationFiltered++
-		case !sourceEligible(f, req.Source, now):
-			n.Filtered++
-		default:
-			n.Eligible++
+		before := n.Eligible
+		tallyCompilationSource(n, f, req.Source, target, now, rejected, used || reserved, state, c.Media, c.Duration)
+		if n.Eligible > before {
 			pool = append(pool, c)
 		}
 	}
@@ -156,6 +138,12 @@ func (s *Store) InspectFlowCompilation(ctx context.Context, id string, now time.
 }
 
 func (s *Store) AutoFlowCompilation(ctx context.Context, id string, now time.Time) (domain.AutoCompilationResult, error) {
+	// Operator responses retain the full source breakdown. Periodic preparation
+	// only needs ready physical media and must not scan every pending candidate.
+	return s.autoFlowCompilation(ctx, id, now, false)
+}
+
+func (s *Store) autoFlowCompilation(ctx context.Context, id string, now time.Time, readyOnly bool) (domain.AutoCompilationResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.AutoCompilationResult{}, err
@@ -164,7 +152,12 @@ func (s *Store) AutoFlowCompilation(ctx context.Context, id string, now time.Tim
 	if err = lockTwitch(ctx, tx); err != nil {
 		return domain.AutoCompilationResult{}, err
 	}
-	f, err := flowByID(ctx, tx, id)
+	var f twitch.Flow
+	if readyOnly {
+		f, err = scanFlow(tx.QueryRow(ctx, `SELECT `+collectorFlowCols+` FROM twitch_flows WHERE id=$1 AND NOT archived`, id))
+	} else {
+		f, err = flowByID(ctx, tx, id)
+	}
 	if err != nil {
 		return domain.AutoCompilationResult{}, err
 	}
@@ -178,7 +171,13 @@ func (s *Store) AutoFlowCompilation(ctx context.Context, id string, now time.Tim
 	if err != nil {
 		return domain.AutoCompilationResult{}, err
 	}
-	out, items, err := inspectFlowCompilationTx(ctx, tx, f, target, now)
+	var out domain.AutoCompilationResult
+	var items []twitch.CompilationItemRequest
+	if readyOnly {
+		out, items, err = inspectFlowCompilationReadyTx(ctx, tx, f, target, now)
+	} else {
+		out, items, err = inspectFlowCompilationTx(ctx, tx, f, target, now)
+	}
 	if err != nil {
 		return out, err
 	}

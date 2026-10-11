@@ -154,13 +154,40 @@ func (s *Store) GrantRefs(ctx context.Context, after string, limit int) ([]twitc
 }
 
 func (s *Store) ApplyPressure(ctx context.Context, result twitch.PressureResult) error {
+	if result.Maintenance {
+		return domain.ErrPaused
+	}
 	for _, r := range result.Tasks {
+		if r.GrantState == "consumed" && r.UploadGeneration > 0 {
+			// Older collectors could lose ReserveImport's response before
+			// persisting the generation. A consumed grant is not a new download
+			// permission, even when its original expiry is in the past. Retain
+			// the exact server generation and let completion inspect it; neither
+			// this response nor a generation proves that a PUT took place.
+			tag, err := s.pool.Exec(ctx, `WITH reconciled AS (
+ UPDATE twitch_collector.download_tasks SET reservation=COALESCE(reservation,'{}'::jsonb)||jsonb_build_object('upload_generation',$6::bigint),
+ state='queued',dispatch_state='verification_pending',dispatch_entered_at=now(),run_at=now(),transfer_phase='reconciling',
+ grant_checked_at=$7,grant_expires_at=$8,dispatch_reason_code='upload_reconciliation_pending',dispatch_reason=$9,
+ lease_token=NULL,lease_expires_at=NULL,updated_at=now()
+ WHERE clip_id=$1 AND epoch=$2 AND epoch=(SELECT epoch FROM twitch_collector.state WHERE id=1)
+ AND flow_id=$3 AND COALESCE(reservation->>'import_id','')=$4 AND COALESCE((reservation->>'admission_sequence')::bigint,0)=$5
+ AND (state='queued' OR(state='leased' AND lease_expires_at<=now())) AND dispatch_state IN('waiting_assignment','authorized')
+ AND uploaded IS NULL AND COALESCE((reservation->>'upload_generation')::bigint,0)=0
+ RETURNING clip_id)
+ UPDATE twitch_collector.clips SET state='queued',last_error=$9,error_kind='reconciliation' WHERE clip_id IN(SELECT clip_id FROM reconciled)`, r.ClipID, result.Epoch, r.FlowID, r.ImportID, r.AdmissionSequence, r.UploadGeneration, result.ObservedAt, r.ExpiresAt, assignmentReason("upload_reconciliation_pending"))
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() > 0 {
+				continue
+			}
+		}
 		state := "waiting_assignment"
 		if r.GrantState == "valid" || r.GrantState == "consumed" {
 			state = "authorized"
 		}
 		_, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET dispatch_entered_at=CASE WHEN dispatch_state IS DISTINCT FROM $6 THEN now() ELSE dispatch_entered_at END,dispatch_state=$6,grant_checked_at=$7,grant_expires_at=$8,dispatch_reason_code=$10,dispatch_reason=$11
- WHERE clip_id=$1 AND(state='queued' OR(state='leased' AND lease_expires_at<=now())) AND epoch=$2 AND flow_id=$3 AND COALESCE(reservation->>'import_id','')=$4 AND COALESCE((reservation->>'admission_sequence')::bigint,0)=$5
+ WHERE clip_id=$1 AND(state='queued' OR(state='leased' AND lease_expires_at<=now())) AND epoch=$2 AND epoch=(SELECT epoch FROM twitch_collector.state WHERE id=1) AND flow_id=$3 AND COALESCE(reservation->>'import_id','')=$4 AND COALESCE((reservation->>'admission_sequence')::bigint,0)=$5
  AND uploaded IS NULL AND(COALESCE((reservation->>'upload_generation')::bigint,0)=0 OR((error_code='upload_missing' OR transfer_phase='reserved') AND COALESCE((reservation->>'upload_generation')::bigint,0)=$9))
  AND(dispatch_state IS DISTINCT FROM $6 OR grant_checked_at IS DISTINCT FROM $7 OR grant_expires_at IS DISTINCT FROM $8 OR dispatch_reason_code IS DISTINCT FROM $10)`, r.ClipID, result.Epoch, r.FlowID, r.ImportID, r.AdmissionSequence, state, result.ObservedAt, r.ExpiresAt, r.UploadGeneration, r.ReasonCode, assignmentReason(r.ReasonCode))
 		if err != nil {
@@ -188,6 +215,8 @@ func assignmentReason(code string) string {
 		return "Импорт отсутствует в Terex; ожидается новое наблюдение и назначение"
 	case "upload_generation_changed":
 		return "Изменилась загрузка или эпоха; прежнее задание остановлено"
+	case "upload_reconciliation_pending":
+		return "Проверяется точное состояние прежней загрузки; повторное скачивание не разрешено"
 	case "twitch_reset":
 		return "Идёт полный сброс Twitch"
 	case "source_rejected_or_expired":

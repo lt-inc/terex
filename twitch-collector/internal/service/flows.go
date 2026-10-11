@@ -685,7 +685,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			fail(e)
 			return
 		}
-		if completed.Epoch != task.Epoch || completed.UploadGeneration != task.Reservation.UploadGeneration {
+		if completed.Epoch != task.Epoch || completed.UploadGeneration != task.Reservation.UploadGeneration || completed.ImportID != task.Reservation.ImportID {
 			fail(&domain.Failure{Kind: "expired", Code: "upload_generation_changed", Message: "Загрузка уже заменена новой попыткой или сбросом"})
 			return
 		}
@@ -707,7 +707,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 				}
 			}
 			if task.Uploaded == nil || task.Uploaded.SHA256 == "" || task.Uploaded.SizeBytes <= 0 {
-				fail(&domain.Failure{Kind: "reconciliation", Code: "upload_metadata_missing", Message: "Сохранена загрузка без контрольной суммы и размера; проверяется её точное состояние, повторное скачивание не запущено", Retryable: true})
+				fail(&domain.Failure{Kind: "reconciliation", Code: "upload_metadata_missing", Message: "Terex сохранил поколение загрузки, но контрольная сумма и размер не подтверждены. Нужна ручная сверка исходника; повторное скачивание не разрешено", Retryable: true})
 				return
 			}
 			completed, e = staged.CompleteImport(ctx, task.Reservation, *task.Uploaded)
@@ -733,13 +733,13 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			fail(e)
 			return
 		}
+		if completed.Epoch != task.Epoch || completed.UploadGeneration != task.Reservation.UploadGeneration || completed.ImportID != task.Reservation.ImportID {
+			fail(&domain.Failure{Kind: "expired", Code: "upload_generation_changed", Message: "Ответ проверки относится к другой загрузке"})
+			return
+		}
 		if !domain.MediaReady(completed) {
 			// HTTP 202 is not media readiness. Keep the exact generation queued.
 			fail(&domain.Failure{Kind: "verification", Code: "verification_pending", Message: "Terex принял проверку, но файл ещё не готов; ожидается завершение этой загрузки", Retryable: true})
-			return
-		}
-		if completed.Epoch != task.Epoch || completed.UploadGeneration != task.Reservation.UploadGeneration || completed.ImportID != task.Reservation.ImportID {
-			fail(&domain.Failure{Kind: "expired", Code: "upload_generation_changed", Message: "Ответ проверки относится к другой загрузке"})
 			return
 		}
 		sha := completed.SHA256

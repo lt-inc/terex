@@ -245,23 +245,22 @@ func (s *Store) TickTwitchFlows(ctx context.Context, now time.Time) error {
 	if err := s.autoApproveTwitchReady(ctx, now); err != nil {
 		return err
 	}
-	flows, e := s.ListTwitchFlows(ctx)
+	flows, e := s.ListCollectorTwitchFlows(ctx)
 	if e != nil {
 		return e
 	}
 	for _, f := range flows {
 		if f.Enabled && f.CompilationsEnabled {
-			out, err := s.AutoFlowCompilation(ctx, f.ID, now)
+			out, err := s.autoFlowCompilation(ctx, f.ID, now, true)
 			if err != nil {
 				slog.ErrorContext(ctx, "twitch compilation failed", "flow_id", f.ID, "error", err)
 				continue
 			}
-			eligible, pending := 0, 0
+			eligible := 0
 			if out.Sources != nil {
 				eligible = out.Sources.Eligible
-				pending = out.Sources.NotReady
 			}
-			slog.InfoContext(ctx, "twitch compilation readiness", "flow_id", f.ID, "reason", out.Reason, "eligible", eligible, "ready_duration_sec", out.ReadyDurationSec, "minimum_duration_sec", out.MinimumDurationSec, "missing_duration_sec", out.MissingDurationSec, "selected_count", out.SelectedClips, "pending_count", pending)
+			slog.InfoContext(ctx, "twitch compilation readiness", "flow_id", f.ID, "reason", out.Reason, "eligible", eligible, "ready_duration_sec", out.ReadyDurationSec, "minimum_duration_sec", out.MinimumDurationSec, "missing_duration_sec", out.MissingDurationSec, "selected_count", out.SelectedClips, "pending_known", false)
 		}
 	}
 	return s.scheduleFlowOutputs(ctx, now)

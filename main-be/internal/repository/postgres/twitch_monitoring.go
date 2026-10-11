@@ -8,6 +8,26 @@ import (
 	"time"
 )
 
+// The monitoring loop needs identifiers and labels, not UI counts, access
+// checks or per-source exclusions. Reading those for every monitoring minute
+// competes with admissions without improving any snapshot.
+func (s *Store) ListTwitchMonitoringFlows(ctx context.Context) ([]twitch.Flow, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,COALESCE(config->>'name',id) FROM twitch_flows WHERE NOT archived ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []twitch.Flow{}
+	for rows.Next() {
+		var f twitch.Flow
+		if err = rows.Scan(&f.ID, &f.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) TwitchRuntimeWork(ctx context.Context, now time.Time) (out twitch.RuntimeWork, err error) {
 	out.Counts = []twitch.StageCount{}
 	out.ActiveTasks = []twitch.ActiveTask{}

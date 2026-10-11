@@ -106,12 +106,19 @@ func TestCompletionDoesNotAccept202PendingAndDrainsPausedFlow(t *testing.T) {
 	if store.completed != 0 || store.failed != 2 || store.retry == nil || api.completes != 1 {
 		t.Fatal("generation-only task failed permanently or accepted logical readiness", store.completed, store.failed, store.retry, api.completes)
 	}
+	// Completion may finish an old lost-response task without local SHA/size only
+	// when Terex confirms this exact generation's physical media is ready.
+	api.ready, api.legacyReady = true, false
+	s.processFlow(context.Background(), task, api, store)
+	if store.completed != 1 || store.failed != 2 || api.completes != 1 || api.puts != 0 {
+		t.Fatal("verified old generation was redownloaded or could not complete", store.completed, store.failed, api.completes, api.puts)
+	}
 	api.disabled = true
 	if _, err := s.fetchCollectorConfig(context.Background(), api); err != nil {
 		t.Fatal(err)
 	}
 	s.processFlow(context.Background(), task, api, store)
-	if store.deferred != 1 || api.gets != 2 {
+	if store.deferred != 1 || api.gets != 3 {
 		t.Fatal("global stop allowed completion to continue", store.deferred, api.gets)
 	}
 	now := time.Now()

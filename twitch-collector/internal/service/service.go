@@ -31,6 +31,8 @@ type Service struct {
 	gateLogs                                                                    map[string]gateLog
 	flowStarted                                                                 map[string]time.Time
 	lastAdmissionsAt                                                            time.Time
+	admissionsRetryAt                                                           time.Time
+	admissionsFailures                                                          int
 	lastFailureSyncAt                                                           time.Time
 	lastRevalidationAt                                                          time.Time
 	configObservation                                                           configObservation
@@ -47,13 +49,19 @@ type Service struct {
 	wakeCompletion                                                              chan struct{}
 	reconciling                                                                 bool
 	configInterval, timePressure, timeAdmissions, timeEligibility, configMaxAge time.Duration
+	admissionsTimeout                                                           time.Duration
 }
 
 func New(store domain.Store, twitch domain.Twitch, terex domain.Terex, downloader domain.Downloader, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{store: store, twitch: twitch, terex: terex, downloader: downloader, log: logger, active: map[string]context.CancelCauseFunc{}, gateLogs: map[string]gateLog{}, flowStarted: map[string]time.Time{}, ctx: context.Background(), wakeDownload: make(chan struct{}, 1), wakeCompletion: make(chan struct{}, 1), configInterval: collectorInterval("COLLECTOR_CONFIG_INTERVAL", 5*time.Second), timePressure: collectorInterval("COLLECTOR_PRESSURE_INTERVAL", 15*time.Second), timeAdmissions: collectorInterval("COLLECTOR_ADMISSIONS_INTERVAL", time.Minute), timeEligibility: collectorInterval("COLLECTOR_ELIGIBILITY_INTERVAL", time.Minute), configMaxAge: collectorInterval("COLLECTOR_CONFIG_MAX_AGE", configFreshness)}
+	admissionsTimeout := collectorInterval("COLLECTOR_ADMISSIONS_TIMEOUT", 15*time.Second)
+	if admissionsTimeout > 25*time.Second {
+		logger.Warn("collector admissions timeout exceeds reconciliation budget; using default", "configured_timeout", admissionsTimeout, "timeout", 15*time.Second)
+		admissionsTimeout = 15 * time.Second
+	}
+	return &Service{store: store, twitch: twitch, terex: terex, downloader: downloader, log: logger, active: map[string]context.CancelCauseFunc{}, gateLogs: map[string]gateLog{}, flowStarted: map[string]time.Time{}, ctx: context.Background(), wakeDownload: make(chan struct{}, 1), wakeCompletion: make(chan struct{}, 1), configInterval: collectorInterval("COLLECTOR_CONFIG_INTERVAL", 5*time.Second), timePressure: collectorInterval("COLLECTOR_PRESSURE_INTERVAL", 15*time.Second), timeAdmissions: collectorInterval("COLLECTOR_ADMISSIONS_INTERVAL", time.Minute), timeEligibility: collectorInterval("COLLECTOR_ELIGIBILITY_INTERVAL", time.Minute), configMaxAge: collectorInterval("COLLECTOR_CONFIG_MAX_AGE", configFreshness), admissionsTimeout: admissionsTimeout}
 }
 func collectorInterval(key string, fallback time.Duration) time.Duration {
 	v, err := time.ParseDuration(os.Getenv(key))
