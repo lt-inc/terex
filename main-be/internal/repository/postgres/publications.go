@@ -102,16 +102,15 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 			state = "scheduled"
 		}
 	}
-	var twitchReady, flowAllowed bool
-	var holdReason string
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM clips c JOIN jobs j ON j.job_id=c.job_id JOIN clip_revisions r ON r.id=$2 WHERE c.clip_id=$1 AND j.source_kind IN('twitch','twitch_compilation')AND r.render_state='ready' AND r.approved_at IS NOT NULL),NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=$1 AND(f.archived OR NOT f.enabled)),COALESCE(policy_hold_reason,'')FROM publications WHERE id=$3`, p.ClipID, p.RevisionID, id).Scan(&twitchReady, &flowAllowed, &holdReason); err != nil {
-		return err
-	}
-	if twitchReady && flowAllowed && (p.Status == "scheduled" || p.Status == "queued" || p.Status == "retry_wait" || (p.Status == "on_hold" && holdReason == "manual_schedule" && u.PublishAt != nil)) {
-		if err = requireFlowFiltersTx(ctx, tx, p.ClipID, p.RevisionID); err != nil {
-			return err
+	resumeHeld := p.Status == "on_hold" && (u.PublishAt != nil || u.FreshnessOverride)
+	if p.Status == "scheduled" || p.Status == "queued" || p.Status == "retry_wait" || resumeHeld {
+		ready, e := manualTwitchPublicationReadyTx(ctx, tx, p, resumeHeld)
+		if e != nil {
+			return e
 		}
-		state = "scheduled"
+		if ready {
+			state = "scheduled"
+		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE publications SET publish_at=$2,timezone=$3,metadata=$4,status=$5,policy_hold_reason=CASE WHEN $5='scheduled' THEN '' ELSE policy_hold_reason END,version=version+1,error=NULL WHERE id=$1`, id, p.PublishAt, p.Timezone, mustJSON(p.PublicationMetadata), state)
 	if err != nil {
@@ -205,20 +204,11 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 			state = "scheduled"
 		}
 		if p.Status == "on_hold" {
-			var readyManualTwitch bool
-			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM publications p JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id JOIN clip_revisions r ON r.id=p.revision_id JOIN twitch_outputs o ON o.clip_id=c.clip_id JOIN twitch_flows f ON f.id=o.flow_id WHERE p.id=$1 AND p.policy_hold_reason='manual_schedule' AND j.source_kind IN('twitch','twitch_compilation') AND r.render_state='ready' AND r.approved_at IS NOT NULL AND f.enabled AND NOT f.archived)`, id).Scan(&readyManualTwitch); err != nil {
-				return err
+			ready, e := manualTwitchPublicationReadyTx(ctx, tx, p, true)
+			if e != nil {
+				return e
 			}
-			if readyManualTwitch {
-				if err = requireFlowFiltersTx(ctx, tx, p.ClipID, p.RevisionID); err != nil {
-					return err
-				}
-				if err = requireTwitchSources(ctx, tx, p.ClipID, p.RevisionID); err != nil {
-					return err
-				}
-				if err = storageRevisionAvailable(ctx, tx, p.RevisionID); err != nil {
-					return err
-				}
+			if ready {
 				state = "scheduled"
 			}
 		}
@@ -266,6 +256,47 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// A manual date or explicit immediate upload can resume a policy-held Twitch
+// release. The override only relaxes age/horizon policy; it cannot restore media
+// or bypass a paused flow, source filters, rejection, or another hold reason.
+func manualTwitchPublicationReadyTx(ctx context.Context, tx pgx.Tx, p domain.PublicationRecord, resumeHeld bool) (bool, error) {
+	var twitch, ready, flowAllowed bool
+	var reason string
+	err := tx.QueryRow(ctx, `SELECT j.source_kind IN('twitch','twitch_compilation'),
+ EXISTS(SELECT 1 FROM clip_revisions r WHERE r.id=$2 AND r.clip_id=c.clip_id AND r.render_state='ready' AND r.approved_at IS NOT NULL AND COALESCE(r.bucket,'')<>'' AND COALESCE(r.object,'')<>'' AND c.approval<>'rejected'),
+ NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=c.clip_id AND(f.archived OR NOT f.enabled)),COALESCE(p.policy_hold_reason,'')
+ FROM publications p JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id WHERE p.id=$1`, p.ID, p.RevisionID).Scan(&twitch, &ready, &flowAllowed, &reason)
+	if err != nil || !twitch {
+		return false, err
+	}
+	if resumeHeld {
+		switch reason {
+		case "", "manual_schedule", "source_stale", "calendar_horizon":
+		default:
+			return false, fmt.Errorf("%w: выпуск удерживается (%s); устраните причину удержания перед публикацией", domain.ErrConflict, reason)
+		}
+		if !ready {
+			return false, fmt.Errorf("%w: версия выпуска ещё не готова или исходник отклонён; дождитесь готового файла", domain.ErrConflict)
+		}
+		if !flowAllowed {
+			return false, fmt.Errorf("%w: поток приостановлен или архивирован; включите поток перед публикацией", domain.ErrConflict)
+		}
+	}
+	if !ready || !flowAllowed {
+		return false, nil
+	}
+	if err = requireFlowFiltersTx(ctx, tx, p.ClipID, p.RevisionID); err != nil {
+		return false, err
+	}
+	if err = requireTwitchSources(ctx, tx, p.ClipID, p.RevisionID); err != nil {
+		return false, err
+	}
+	if err = storageRevisionAvailable(ctx, tx, p.RevisionID); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 func insertEvent(ctx context.Context, tx pgx.Tx, id int64, attempt, kind, state string, detail any) error {
 	_, err := tx.Exec(ctx, `INSERT INTO publication_events(id,publication_id,attempt_id,kind,state,detail)VALUES($1,$2,NULLIF($3,''),$4,$5,$6)`, uuid.NewString(), id, attempt, kind, state, mustJSON(detail))
