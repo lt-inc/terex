@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"terex/main-be/internal/domain"
@@ -315,7 +316,7 @@ func TestTwitchHashDuplicateAndSingleTargetCannotBypassProjectLimits(t *testing.
 		t.Fatal(second)
 	}
 	r, _ := s.LatestRevision(ctx, first.ClipID)
-	if r.Title != "Moment first | streamer" || r.Description != first.Source.URL {
+	if r.Title != "Moment first | streamer" || r.MetadataSnapshot == nil || strings.Contains(r.Description, first.Source.URL) || !strings.Contains(r.Description, "https://www.twitch.tv/streamer") {
 		t.Fatal(r.EditSpec)
 	}
 	other, err := s.CreateAccount(ctx, domain.Account{Platform: "youtube", Name: "Other"})
@@ -352,8 +353,11 @@ func TestTwitchGenericRevisionKeepsPinnedCompilationDependencies(t *testing.T) {
 	source.Original = w.ObjectRef{Bucket: "imports", Object: "assemblies/test.mp4"}
 	completeRender(t, s, c.RevisionID, now, &source)
 	r, _ = s.RevisionByID(ctx, c.RevisionID)
-	if r.Description != "https://clips.twitch.tv/a\nhttps://clips.twitch.tv/b\nhttps://clips.twitch.tv/c" {
+	if r.MetadataSnapshot == nil || strings.Contains(r.Description, "clips.twitch.tv") || strings.Count(r.Description, "https://www.twitch.tv/streamer") != 1 || !strings.Contains(r.Description, "3 clips") {
 		t.Fatal(r.Description)
+	}
+	if len(source.Assembly.Items) != 3 || source.Assembly.Items[0].SourceClipID != first.ClipID {
+		t.Fatal("public credits changed internal source pins", source.Assembly)
 	}
 	r.Title = "Metadata edit"
 	next, err := s.SaveRevision(ctx, c.ClipID, domain.EditRequest{Version: 1, EditSpec: r.EditSpec}, r.Manifest, false)
