@@ -129,6 +129,52 @@ export interface ImportedClip {
   media_state?: string;
 }
 
+export interface TwitchMetadataSettings {
+  short_intro_template?: string;
+  compilation_intro_template?: string;
+  hashtag_mode?: "standard" | "custom";
+  custom_hashtags?: string[];
+}
+
+export interface TwitchMetadataSnapshot {
+  schema_version: number;
+  format: "short" | "compilation";
+  settings: TwitchMetadataSettings;
+  source_mode: string;
+  category_name?: string;
+  language_filter?: string;
+  language: string;
+  sources: { login: string; language?: string; language_source?: string }[];
+  intro: string;
+  intro_edited: boolean;
+}
+
+export interface TwitchMetadataPreview {
+  intro: string;
+  description: string;
+  hashtags: string[];
+  language: string;
+  errors: string[];
+  description_bytes: number;
+  tag_characters: number;
+  snapshot: TwitchMetadataSnapshot;
+}
+
+export interface TwitchMetadataPreviewRequest {
+  flow_id?: string;
+  format: "short" | "compilation";
+  title: string;
+  settings?: TwitchMetadataSettings;
+  source_mode?: string;
+  category_name?: string;
+  language_filter?: string;
+  source_ids?: string[];
+  intro?: string;
+  intro_edited?: boolean;
+  clip_id?: string;
+  revision_id?: number;
+}
+
 export interface TwitchFlow {
   id: string;
   name: string;
@@ -147,6 +193,7 @@ export interface TwitchFlow {
   category_id?: string;
   category_name?: string;
   language?: string;
+  metadata?: TwitchMetadataSettings;
   poll_interval_minutes: number;
   ranking_mode?: "views" | "growth";
   window_hours: number;

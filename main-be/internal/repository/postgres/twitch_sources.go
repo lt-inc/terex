@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"log/slog"
 	"math"
 	"strings"
 	"terex/main-be/internal/domain"
@@ -517,18 +518,27 @@ func createFlowShort(ctx context.Context, tx pgx.Tx, id, flow string, now time.T
 		return err
 	}
 	clip, jid := "twitch-"+uuid.NewString(), uuid.NewString()
+	title := publicTwitchTitle(strings.TrimSpace(out.Source.Title + " | " + out.Source.BroadcasterLogin))
+	if len([]rune(title)) > 100 {
+		title = string([]rune(title)[:100])
+	}
+	// Bad publication text must not roll back successful media verification.
+	// The ready source can produce its release after the flow settings are fixed.
+	if metadata := twitch.GenerateMetadata(flowMetadataInput(current, "short", title, []twitch.Source{out.Source})); len(metadata.Errors) > 0 {
+		slog.WarnContext(ctx, "Twitch source ready; release metadata invalid", "flow_id", flow, "import_id", id, "reason", "metadata_invalid", "errors", metadata.Errors)
+		return nil
+	}
 	if _, err = reserveOutputPreparationTx(ctx, tx, current, "", "short", []string{id}, now); err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			return nil
 		}
 		return err
 	}
-	title := strings.TrimSpace(out.Source.Title + " | " + out.Source.BroadcasterLogin)
-	if len([]rune(title)) > 100 {
-		title = string([]rune(title)[:100])
-	}
 	manifest := workflow.SourceManifest{Original: v.Original, DurationSec: v.DurationSec, Options: msg.JobOptions{Vertical: true, Shape: "rectangle"}, Cues: []workflow.Cue{}}
-	rid, err := createTwitchDraft(ctx, tx, jid, clip, "twitch", "short", out.Source.URL, out.Source.ClipID, title, f.AccountID, f.Timezone, manifest, now)
+	// Publication templates apply when a new release is created, even if its
+	// physical download was reserved under an older flow configuration.
+	f.Metadata = current.Metadata
+	rid, err := createTwitchDraft(ctx, tx, jid, clip, "twitch", "short", out.Source.URL, out.Source.ClipID, title, f.AccountID, f.Timezone, manifest, now, flowMetadataInput(current, "short", title, []twitch.Source{out.Source}))
 	if err != nil {
 		return err
 	}

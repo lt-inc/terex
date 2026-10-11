@@ -11,9 +11,13 @@ import {
   saveClipEditor,
   retryClipRender,
   restoreClipRevision,
+  previewTwitchMetadata,
 } from "@/lib/api";
 import { validateEditor } from "@/lib/validation";
 import type { ClipEditor, SubtitleCue } from "@/types";
+import type { TwitchMetadataPreview } from "@/types/twitch";
+import { parseMetadataHashtags } from "@/lib/twitch-metadata";
+import MetadataPreview from "@/components/twitch/MetadataPreview";
 import PreviewModal, {
   type PreviewTarget,
 } from "@/components/media/PreviewModal";
@@ -29,6 +33,7 @@ function spec(e: ClipEditor) {
     description: e.description,
     visibility: e.visibility ?? "public",
     hashtags: e.hashtags,
+    metadata_snapshot: e.metadata_snapshot,
     cues: e.cues,
     subtitles_enabled: e.subtitles_enabled,
   });
@@ -50,6 +55,16 @@ export default function ClipEditorPage() {
     [notice, setNotice] = useState(""),
     [current, setCurrent] = useState(0);
   const [restoreID, setRestoreID] = useState("");
+  const [customTags, setCustomTags] = useState("");
+  const [metadataPreview, setMetadataPreview] = useState<{ fingerprint: string; result: TwitchMetadataPreview } | null>(null);
+  const [metadataError, setMetadataError] = useState("");
+  const generatedMetadata = draft?.metadata_snapshot?.schema_version === 1;
+  const metadataFingerprint = generatedMetadata ? JSON.stringify({
+    id, revision_id: draft?.revision_id, title: draft?.title,
+    settings: draft?.metadata_snapshot?.settings,
+    intro: draft?.metadata_snapshot?.intro_edited ? draft.metadata_snapshot.intro : undefined,
+  }) : "";
+  const currentMetadataPreview = metadataPreview?.fingerprint === metadataFingerprint ? metadataPreview.result : null;
   const parsedTags = tags
     .split(/[\s,]+/)
     .map((t) => t.replace(/^#+/, ""))
@@ -57,7 +72,7 @@ export default function ClipEditorPage() {
   const dirty = !!(
     saved &&
     draft &&
-    spec({ ...draft, hashtags: parsedTags }) !== spec(saved)
+    spec({ ...draft, hashtags: generatedMetadata ? draft.hashtags : parsedTags }) !== spec(saved)
   );
   const load = useCallback(async () => {
     setError("");
@@ -66,6 +81,7 @@ export default function ClipEditorPage() {
       setSaved(e);
       setDraft(e);
       setTags((e.hashtags ?? []).join(" "));
+      setCustomTags((e.metadata_snapshot?.settings.custom_hashtags || []).join(" "));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -73,6 +89,34 @@ export default function ClipEditorPage() {
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    if (!draft?.metadata_snapshot || !generatedMetadata) return;
+    let active = true;
+    setMetadataError("");
+    const timer = setTimeout(() => {
+      previewTwitchMetadata({
+        format: draft.metadata_snapshot!.format,
+        title: draft.title,
+        clip_id: id,
+        revision_id: draft.revision_id,
+        settings: draft.metadata_snapshot!.settings,
+        intro_edited: draft.metadata_snapshot!.intro_edited,
+        ...(draft.metadata_snapshot!.intro_edited ? { intro: draft.metadata_snapshot!.intro } : {}),
+      }).then((result) => {
+        if (!active) return;
+        setMetadataPreview({ fingerprint: metadataFingerprint, result });
+        setDraft((value) => value?.metadata_snapshot ? {
+          ...value, description: result.description, hashtags: result.hashtags,
+          metadata_snapshot: { ...value.metadata_snapshot, intro: result.intro },
+        } : value);
+      }).catch((failure) => {
+        if (active) setMetadataError(failure instanceof Error ? failure.message : String(failure));
+      });
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+  // The fingerprint contains exactly the metadata fields used by the preview.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metadataFingerprint]);
   useEffect(() => {
     if (
       !saved ||
@@ -88,6 +132,7 @@ export default function ClipEditorPage() {
           if (!dirty) {
             setDraft(e);
             setTags((e.hashtags ?? []).join(" "));
+            setCustomTags((e.metadata_snapshot?.settings.custom_hashtags || []).join(" "));
           }
         })
         .catch((e) => {
@@ -122,7 +167,11 @@ export default function ClipEditorPage() {
   }
   async function save() {
     if (!draft) return;
-    const candidate = { ...draft, hashtags: parsedTags };
+    if (generatedMetadata && (!currentMetadataPreview || currentMetadataPreview.errors?.length)) {
+      setError(metadataError || currentMetadataPreview?.errors?.join(" ") || "Дождитесь проверки итогового описания.");
+      return;
+    }
+    const candidate = { ...draft, hashtags: generatedMetadata ? currentMetadataPreview!.hashtags : parsedTags };
     const invalid = validateEditor(candidate);
     if (invalid) {
       setError(invalid);
@@ -135,8 +184,9 @@ export default function ClipEditorPage() {
       setSaved(result);
       setDraft(result);
       setTags((result.hashtags ?? []).join(" "));
+      setCustomTags((result.metadata_snapshot?.settings.custom_hashtags || []).join(" "));
       setNotice(
-        twitchClip ? "Сохранено. Будущие публикации ждут готовности нового рендера; версия допускается автоматически." : "Saved. Future publications are held until this revision is rendered and approved.",
+        twitchClip ? result.render_state === "ready" ? "Сохранено без повторного рендера. Готовый файл переиспользован; начатые загрузки сохраняют исходные метаданные." : "Сохранено. Будущие публикации ждут готовности нового рендера; версия допускается автоматически." : "Saved. Future publications are held until this revision is rendered and approved.",
       );
     } catch (e) {
       setError(
@@ -207,6 +257,7 @@ export default function ClipEditorPage() {
       setSaved(result);
       setDraft(result);
       setTags((result.hashtags ?? []).join(" "));
+      setCustomTags((result.metadata_snapshot?.settings.custom_hashtags || []).join(" "));
       setRestoreID("");
       setNotice(
         twitchClip ? "Предыдущий рендер восстановлен новой версией с автоматическим допуском. Проверьте дату в календаре." : "Previous render restored as a new revision. Review and approve to resume future publications.",
@@ -278,10 +329,10 @@ export default function ClipEditorPage() {
           </button>
           <button
             className="bg-indigo-600 disabled:opacity-40 px-3 py-2 rounded-lg text-sm"
-            disabled={busy || !dirty}
+            disabled={busy || !dirty || (generatedMetadata && (!currentMetadataPreview || !!currentMetadataPreview.errors?.length))}
             onClick={save}
           >
-            {busy ? "Working…" : "Save & render"}
+            {busy ? "Working…" : twitchClip ? "Сохранить изменения" : "Save & render"}
           </button>
           {!twitchClip && <button
             className="bg-emerald-600 disabled:opacity-40 px-3 py-2 rounded-lg text-sm"
@@ -293,7 +344,7 @@ export default function ClipEditorPage() {
         </div>
       </div>
       <p className="text-sm text-slate-400">
-        {twitchClip ? "Готовая версия Twitch допускается автоматически; публикация зависит от переключателя потока и расписания. Изменения удерживают будущие выпуски до готовности нового рендера. Начатые загрузки сохраняют исходную версию." : "Saving this variant holds future publications until reapproval. Already started uploads keep their original revision. Subtitle times refer to the source video."}
+        {twitchClip ? "Готовая версия Twitch допускается автоматически; публикация зависит от потока и расписания. Только правки монтажа требуют рендера. Название, вступление и хештеги готовой версии сохраняются с тем же видеофайлом. Начатые загрузки сохраняют исходную версию." : "Saving this variant holds future publications until reapproval. Already started uploads keep their original revision. Subtitle times refer to the source video."}
       </p>
       {error && (
         <p role="alert" className="text-red-400 text-sm">
@@ -481,24 +532,39 @@ export default function ClipEditorPage() {
               onChange={(e) => change("title", e.target.value)}
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-slate-400">
-            Description
-            <textarea
-              className={input}
-              rows={4}
-              value={draft.description}
-              maxLength={5000}
-              onChange={(e) => change("description", e.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-slate-400">
-            Hashtags separated by spaces
-            <input
-              className={input}
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-            />
-          </label>
+          {generatedMetadata && draft.metadata_snapshot ? <>
+            <label className="flex flex-col gap-1 text-xs text-slate-400">
+              Вступление описания
+              <textarea className={input} rows={4} value={draft.metadata_snapshot.intro} onChange={(event) => change("metadata_snapshot", { ...draft.metadata_snapshot!, intro: event.target.value, intro_edited: true })} />
+              <span>Участники, категория, контакт и хештеги формируются отдельно. При изменении состава подборки ваше вступление сохраняется.</span>
+            </label>
+            <button className={`${button} self-start`} type="button" onClick={() => change("metadata_snapshot", { ...draft.metadata_snapshot!, intro_edited: false })}>Вернуть вступление из шаблона</button>
+            <label className="flex flex-col gap-1 text-xs text-slate-400">
+              Хештеги этого выпуска
+              <select className={input} value={draft.metadata_snapshot.settings.hashtag_mode || "standard"} onChange={(event) => change("metadata_snapshot", { ...draft.metadata_snapshot!, settings: { ...draft.metadata_snapshot!.settings, hashtag_mode: event.target.value as "standard" | "custom" } })}>
+                <option value="standard">Стандартные</option>
+                <option value="custom">Собственные</option>
+              </select>
+            </label>
+            {draft.metadata_snapshot.settings.hashtag_mode === "custom" && <label className="flex flex-col gap-1 text-xs text-slate-400">
+              Собственные хештеги через пробел
+              <input className={input} value={customTags} onChange={(event) => { setCustomTags(event.target.value); change("metadata_snapshot", { ...draft.metadata_snapshot!, settings: { ...draft.metadata_snapshot!.settings, custom_hashtags: parseMetadataHashtags(event.target.value) } }); }} />
+            </label>}
+            <p className="text-xs text-slate-400">Собственные теги заменяют общие и русские. Теги формата, стримера для Short и известной категории добавляются автоматически. Настройки потока не меняются.</p>
+            {metadataError && <p role="alert" className="text-sm text-red-400">{metadataError}</p>}
+            {currentMetadataPreview ? <MetadataPreview result={currentMetadataPreview} label="Итоговое описание для YouTube" /> : <p className="text-xs text-slate-400">Проверяем итоговое описание…</p>}
+            {draft.metadata_snapshot.format === "short" && <p className="text-xs text-slate-400">URL в описании Shorts отображаются текстом: YouTube не делает их кликабельными.</p>}
+          </> : <>
+            <label className="flex flex-col gap-1 text-xs text-slate-400">
+              Description
+              <textarea className={input} rows={4} value={draft.description} onChange={(e) => change("description", e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-slate-400">
+              Hashtags separated by spaces
+              <input className={input} value={tags} onChange={(e) => setTags(e.target.value)} />
+            </label>
+            {twitchClip && <p className="text-xs text-slate-400">Существующий выпуск сохраняет прежнее описание. Новые шаблоны автоматически к нему не применяются.</p>}
+          </>}
           <Toggle
             disabled={draft.source_available === false || busy}
             label="Burn subtitles into this revision"

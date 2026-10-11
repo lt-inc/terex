@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"terex/main-be/internal/domain"
+	"terex/proto/twitch"
 )
 
 const publicationCols = `p.id,p.clip_id,COALESCE(p.revision_id,0),p.account_id,a.name,p.platform,p.publish_at,p.timezone,p.status,p.version,p.metadata,p.cancel_requested,p.upload_id,p.external_url,p.error,p.uploaded_at,p.processed_at,p.published_at,p.last_verified_at,p.started_at`
@@ -95,6 +97,41 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	if u.Timezone != nil {
 		p.Timezone = *u.Timezone
 	}
+	if p.MetadataSnapshot != nil && (u.Title != nil || u.Description != nil || u.Hashtags != nil) {
+		input := p.MetadataSnapshot.ToInput(p.Title, nil)
+		if u.Description != nil {
+			// Calendar edits retain generated attribution; only the introduction
+			// may change. The full automatic suffix must remain untouched.
+			var original domain.PublicationMetadata
+			var data []byte
+			if err = tx.QueryRow(ctx, `SELECT metadata FROM publications WHERE id=$1`, id).Scan(&data); err != nil {
+				return err
+			}
+			if err = json.Unmarshal(data, &original); err != nil {
+				return err
+			}
+			if *u.Description != original.Description {
+				suffix := strings.TrimPrefix(original.Description, original.MetadataSnapshot.Intro)
+				if suffix != "" && !strings.HasSuffix(*u.Description, suffix) {
+					return fmt.Errorf("%w: изменяйте вступление в редакторе; блоки стримеров, контакта и хештегов формируются автоматически", domain.ErrInvalid)
+				}
+				intro := strings.TrimSuffix(*u.Description, suffix)
+				input.IntroOverride = &intro
+			}
+		}
+		if u.Hashtags != nil {
+			input.Settings.HashtagMode = "custom"
+			input.Settings.CustomHashtags = *u.Hashtags
+		}
+		generated := twitch.GenerateMetadata(input)
+		if len(generated.Errors) > 0 {
+			return fmt.Errorf("%w: %s", domain.ErrInvalid, strings.Join(generated.Errors, "; "))
+		}
+		p.Description, p.Hashtags, p.MetadataSnapshot = generated.Description, generated.Hashtags, &generated.Snapshot
+	}
+	if err = validateGeneratedPublication(domain.EditSpec{Title: p.Title, Description: p.Description, Hashtags: p.Hashtags, MetadataSnapshot: p.MetadataSnapshot}); err != nil {
+		return err
+	}
 	state := "on_hold"
 	if u.Title == nil && u.Description == nil && u.Hashtags == nil {
 		state = p.Status
@@ -161,6 +198,11 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 	state := p.Status
 	cancel := p.CancelRequested
 	at := p.PublishAt
+	if action != "cancel" && p.StartedAt == nil {
+		if err = validateGeneratedPublication(domain.EditSpec{Title: p.Title, Description: p.Description, Hashtags: p.Hashtags, MetadataSnapshot: p.MetadataSnapshot}); err != nil {
+			return err
+		}
+	}
 	switch action {
 	case "approve":
 		if err = requireTwitchSources(ctx, tx, p.ClipID, p.RevisionID); err != nil {
@@ -367,6 +409,25 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	for _, d := range ds {
+		// Last validation runs against the pinned publication metadata before
+		// creating a queue command. Existing legacy metadata stays compatible.
+		var metadata []byte
+		var unstarted, cancelling bool
+		if err = tx.QueryRow(ctx, `SELECT metadata,started_at IS NULL,cancel_requested FROM publications WHERE id=$1`, d.id).Scan(&metadata, &unstarted, &cancelling); err != nil {
+			return err
+		}
+		if unstarted && !cancelling {
+			var spec domain.EditSpec
+			if err = json.Unmarshal(metadata, &spec); err != nil {
+				return err
+			}
+			if invalid := validateGeneratedPublication(spec); invalid != nil {
+				if _, err = tx.Exec(ctx, `UPDATE publications SET status='on_hold',policy_hold_reason='metadata_invalid',error=$2 WHERE id=$1`, d.id, invalid.Error()); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		if allowed, e := enforceUnstartedPolicyTx(ctx, tx, d.id, now); e != nil {
 			return e
 		} else if !allowed {

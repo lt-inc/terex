@@ -227,6 +227,7 @@ export interface SubtitleCue {
   text: string;
 }
 export interface ClipEditor {
+	metadata_snapshot?: import("./twitch").TwitchMetadataSnapshot;
 	visibility?: "public" | "unlisted" | "private";
   clip_id: string;
   version: number;

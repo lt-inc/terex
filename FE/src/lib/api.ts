@@ -31,6 +31,8 @@ import type {
   TwitchFlowDiagnostics,
   TwitchResetPreview,
   TwitchResetStatus,
+  TwitchMetadataPreview,
+  TwitchMetadataPreviewRequest,
 } from "@/types/twitch";
 
 export class ApiError extends Error {
@@ -230,6 +232,7 @@ export const saveClipEditor = (id: string, data: ClipEditor) =>
       description: data.description,
       visibility: data.visibility ?? "public",
       hashtags: data.hashtags,
+      metadata_snapshot: data.metadata_snapshot,
       cues: data.cues,
       subtitles_enabled: data.subtitles_enabled,
     }),
@@ -397,6 +400,8 @@ export const fetchTwitchCategories = (q: string) =>
   >(`/twitch/categories?q=${encodeURIComponent(q)}`).then((data) =>
     Array.isArray(data) ? data : data.items || [],
   );
+export const previewTwitchMetadata = (data: TwitchMetadataPreviewRequest) =>
+  request<TwitchMetadataPreview>("/twitch/metadata/preview", json("POST", data));
 export const fetchTwitchFlowClips = (
   id: string,
   filters: Record<string, string>,

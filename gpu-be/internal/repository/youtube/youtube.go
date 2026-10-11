@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"terex/gpu-be/internal/domain"
+	"terex/proto/publicationmetadata"
 )
 
 type TokenSource func(context.Context) (string, error)
@@ -52,61 +53,14 @@ func (c *Client) Capabilities() domain.PublishingCapabilities {
 
 func (c *Client) Validate(m domain.PublicationMetadata) error {
 	m = youtubeMetadata(m)
-	if strings.TrimSpace(m.Title) == "" || len([]rune(m.Title)) > 100 {
-		return fmt.Errorf("YouTube title must contain 1–100 characters")
-	}
-	if len([]byte(m.Description)) > 5000 {
-		return fmt.Errorf("YouTube description exceeds 5000 bytes")
-	}
-	if strings.ContainsAny(m.Title, "<>") || strings.ContainsAny(m.Description, "<>") {
-		return fmt.Errorf("YouTube title and description cannot contain angle brackets")
-	}
-	chars := 0
-	for i, tag := range m.Tags {
-		chars += len([]rune(tag))
-		if i > 0 {
-			chars++
-		}
-		if strings.ContainsAny(tag, " \t") {
-			chars += 2
-		}
-	}
-	if chars > 500 {
-		return fmt.Errorf("YouTube tags exceed 500 characters")
-	}
-	return nil
+	return publicationmetadata.Validate(m.Title, publicationmetadata.Prepared{Description: m.Description, Tags: m.Tags})
 }
 
 // Terex's tags are hashtags. YouTube displays hashtags in the description;
 // snippet.tags is also populated for search metadata, without the leading #.
 func youtubeMetadata(m domain.PublicationMetadata) domain.PublicationMetadata {
-	seen := map[string]bool{}
-	for _, word := range strings.Fields(m.Description) {
-		seen[strings.ToLower(word)] = true
-	}
-	tags := []string{}
-	hashtags := []string{}
-	tagSeen := map[string]bool{}
-	for _, raw := range m.Tags {
-		tag := strings.TrimLeft(strings.TrimSpace(raw), "#")
-		if tag == "" || tagSeen[strings.ToLower(tag)] {
-			continue
-		}
-		tagSeen[strings.ToLower(tag)] = true
-		tags = append(tags, tag)
-		hashtag := "#" + strings.Join(strings.Fields(tag), "")
-		if !seen[strings.ToLower(hashtag)] {
-			hashtags = append(hashtags, hashtag)
-			seen[strings.ToLower(hashtag)] = true
-		}
-	}
-	m.Tags = tags
-	if len(hashtags) > 0 {
-		if m.Description != "" {
-			m.Description += "\n\n"
-		}
-		m.Description += strings.Join(hashtags, " ")
-	}
+	prepared := publicationmetadata.Compose(m.Description, m.Tags)
+	m.Description, m.Tags = prepared.Description, prepared.Tags
 	return m
 }
 
