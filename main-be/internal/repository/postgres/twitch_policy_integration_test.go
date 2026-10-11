@@ -232,3 +232,100 @@ func TestTwitchPolicyFencesOldPlansAndFirstUploadRechecksAge(t *testing.T) {
 		t.Fatal("expired preupload failed to release capacity", stopped, err)
 	}
 }
+
+func TestHeldTwitchPublicationResumesOnlyWithExactPolicyException(t *testing.T) {
+	s, account, _ := twitchFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	f := flowFixture(t, s, account, false, now)
+	im := finishFlow(t, s, reserveFlow(t, s, f, flowSource("expired-manual-release", "123", 20, now), now), 20, "", now)
+	completeRender(t, s, im.RevisionID, now, nil)
+	if err := s.TickTwitchFlows(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM publications WHERE clip_id=$1`, im.ClipID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	// Keep valid, ready files but reproduce the expiry hold from the live calendar.
+	if _, err := s.pool.Exec(ctx, `UPDATE twitch_imports SET request=jsonb_set(request,'{source,created_at}',to_jsonb($2::timestamptz)) WHERE id=$1`, im.ImportID, now.Add(-100*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE twitch_policy_settings SET mode='enforce'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE publications SET policy_hold_reason='source_stale',auto_flow_id=$2,auto_hold=true WHERE id=$1`, id, f.ID); err != nil {
+		t.Fatal(err)
+	}
+	get := func() domain.PublicationRecord {
+		t.Helper()
+		p, err := s.GetPublicationRecord(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	p := get()
+	at := now.Add(time.Hour)
+	if err := s.PatchPublication(ctx, id, domain.PublicationPatch{Version: p.Version, PublishAt: &at}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("expired held publication resumed without confirmation", err)
+	}
+	if err := s.PatchPublication(ctx, id, domain.PublicationPatch{Version: p.Version, PublishAt: &at, FreshnessOverride: true}); err != nil {
+		t.Fatal(err)
+	}
+	p = get()
+	if p.Status != "scheduled" || !p.FreshnessOverride || !p.PublishAt.Equal(at) {
+		t.Fatal("confirmed held schedule still requires approval", p)
+	}
+	events, err := s.PublicationEvents(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind == "freshness_override" && event.State != "scheduled" {
+			t.Fatal("confirmation event still reports a hold", event)
+		}
+	}
+	if err := s.ActPublicationWithOverride(ctx, id, "publish-now", p.Version, false, now); !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("saved-time exception silently authorized a new time", err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE publications SET status='on_hold',policy_hold_reason='source_stale' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ActPublicationWithOverride(ctx, id, "publish-now", p.Version, true, now); err != nil {
+		t.Fatal("held immediate upload failed", err)
+	}
+	p = get()
+	if p.Status != "scheduled" || !p.FreshnessOverride || !p.PublishAt.Equal(now) {
+		t.Fatal("immediate upload stayed held", p)
+	}
+	// Older releases may have a confirmed exception and empty hold reason while
+	// remaining on_hold. They must recover through the same explicit action.
+	if _, err := s.pool.Exec(ctx, `UPDATE publications SET status='on_hold',policy_hold_reason='' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ActPublicationWithOverride(ctx, id, "publish-now", p.Version, true, now.Add(time.Second)); err != nil {
+		t.Fatal("previously confirmed hold failed to recover", err)
+	}
+	p = get()
+	// A freshness exception is not permission to ignore another hold or missing
+	// files. Both failures must leave the existing version and hold intact.
+	if _, err := s.pool.Exec(ctx, `UPDATE publications SET status='on_hold',policy_hold_reason='source_failed' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ActPublicationWithOverride(ctx, id, "publish-now", p.Version, true, now); !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("unrelated hold was bypassed", err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE publications SET policy_hold_reason='source_stale' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE clip_revisions SET storage_state='expired' WHERE id=$1`, im.RevisionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ActPublicationWithOverride(ctx, id, "publish-now", p.Version, true, now); !errors.Is(err, domain.ErrConflict) {
+		t.Fatal("deleted file was accepted with freshness exception", err)
+	}
+	if held := get(); held.Status != "on_hold" || held.Version != p.Version {
+		t.Fatal("rejected action modified the held release", held)
+	}
+}

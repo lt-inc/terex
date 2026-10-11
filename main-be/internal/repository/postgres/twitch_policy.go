@@ -520,10 +520,11 @@ func sourcePolicyViolation(ctx context.Context, tx pgx.Tx, clip string, rid int6
 
 func setPublicationOverrideTx(ctx context.Context, tx pgx.Tx, id int64, override bool, now time.Time) error {
 	if override {
-		if _, err := tx.Exec(ctx, `UPDATE publications SET freshness_override_revision_id=revision_id,freshness_override_publish_at=publish_at,policy_hold_reason='' WHERE id=$1 AND started_at IS NULL AND auto_flow_id IS NULL`, id); err != nil {
+		var state string
+		if err := tx.QueryRow(ctx, `UPDATE publications SET freshness_override_revision_id=revision_id,freshness_override_publish_at=publish_at WHERE id=$1 AND started_at IS NULL AND auto_flow_id IS NULL RETURNING status`, id).Scan(&state); err != nil {
 			return err
 		}
-		return insertEvent(ctx, tx, id, "", "freshness_override", "on_hold", map[string]any{"confirmed_at": now, "scope": "exact_revision_and_publish_at"})
+		return insertEvent(ctx, tx, id, "", "freshness_override", state, map[string]any{"confirmed_at": now, "scope": "exact_revision_and_publish_at"})
 	}
 	_, err := tx.Exec(ctx, `UPDATE publications SET freshness_override_revision_id=NULL,freshness_override_publish_at=NULL WHERE id=$1 AND(freshness_override_revision_id IS DISTINCT FROM revision_id OR freshness_override_publish_at IS DISTINCT FROM publish_at)`, id)
 	return err

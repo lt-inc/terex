@@ -358,7 +358,8 @@ function EventModal({
   }, [onClose, busy]);
   let selectedAt = event.publish_at;
   try { const [date, time] = value.split("T"); selectedAt = zonePartsToISO(date, time, zone); } catch { /* The server validates incomplete dates. */ }
-  const selectedAge = event.twitch_policy?.source_created_at ? Math.max(0, Math.round((new Date(selectedAt).getTime() - new Date(event.twitch_policy.source_created_at).getTime()) / 3600000)) : "неизвестен";
+  const effectiveSelectedAt = Math.max(new Date(selectedAt).getTime(), Date.now());
+  const selectedAge = event.twitch_policy?.source_created_at ? Math.max(0, Math.round((effectiveSelectedAt - new Date(event.twitch_policy.source_created_at).getTime()) / 3600000)) : "неизвестен";
   const policyStamp = (timestamp?: string) => timestamp ? formatInZone(timestamp, zone) : "неизвестно";
   async function action(kind: "approve" | "retry" | "cancel" | "publish-now") {
     setBusy(true);
@@ -448,12 +449,12 @@ function EventModal({
           />
         </label>
         {twitchPublication && !isStarted(event) && <div className="rounded-lg border border-amber-900 bg-amber-950/20 p-3 text-xs">
-          {event.twitch_policy && <><p className="text-slate-300">Самый старый исходник создан {policyStamp(event.twitch_policy.source_created_at)}. Возраст к выбранной дате: {selectedAge} ч при максимуме {event.twitch_policy.max_source_age_hours} ч.</p><p className="mt-1 text-slate-400">Крайний срок: {policyStamp(event.twitch_policy.deadline)}. Горизонт {event.twitch_policy.horizon_hours} ч: до {policyStamp(event.twitch_policy.horizon_end)}.</p>{(new Date(selectedAt) > new Date(event.twitch_policy.deadline || "") || new Date(selectedAt) > new Date(event.twitch_policy.horizon_end)) && <p className="mt-2 text-amber-200">Выбранная дата нарушает ограничения. Выберите более раннее время или явно подтвердите исключение.</p>}</>}
+          {event.twitch_policy && <><p className="text-slate-300">Самый старый исходник создан {policyStamp(event.twitch_policy.source_created_at)}. Возраст на момент выпуска: {selectedAge} ч при максимуме {event.twitch_policy.max_source_age_hours} ч. Дата в прошлом означает выпуск сейчас.</p><p className="mt-1 text-slate-400">Крайний срок: {policyStamp(event.twitch_policy.deadline)}. Горизонт {event.twitch_policy.horizon_hours} ч: до {policyStamp(event.twitch_policy.horizon_end)}.</p>{(effectiveSelectedAt > new Date(event.twitch_policy.deadline || "").getTime() || new Date(selectedAt) > new Date(event.twitch_policy.horizon_end)) && <p className="mt-2 text-amber-200">Дата выпуска нарушает ограничения. Если срок уже прошёл, подтвердите исключение для ручного выпуска.</p>}</>}
           {policyViolation && <><p className="text-amber-200">{policyViolation.message}</p><p className="mt-1 text-slate-400">Самый старый исходник: {policyStamp(policyViolation.source_created_at)}. Крайний срок: {policyStamp(policyViolation.deadline)}.</p></>}
           {event.freshness_override && <p className="mt-2 text-emerald-300">Для сохранённых версии и времени уже подтверждено исключение. Новая дата требует повторного подтверждения.</p>}
           <p className="mt-2 text-slate-400">Назначение Twitch-выпуска проверяет горизонт календаря и возраст всех исходников. Если выбранная дата выходит за ограничения, сервер укажет причину.</p>
           <label className="mt-3 flex items-start gap-2 text-amber-100"><input type="checkbox" className="mt-0.5" checked={freshnessOverride} disabled={busy} onChange={(event) => setFreshnessOverride(event.target.checked)} /><span>Я подтверждаю исключение из правил актуальности и горизонта для этой версии и даты. Решение будет сохранено; изменение даты или версии потребует нового подтверждения.</span></label>
-          <p className="mt-2 text-slate-500">Кнопка переноса применяет выбранную дату. «Upload now» применяется к сохранённому плану, а не к несохранённому полю даты.</p>
+          <p className="mt-2 text-slate-500">«Назначить время» сохраняет выбранную дату. «Upload now» начинает загрузку сохранённой версии сейчас, независимо от даты в поле. Для устаревшего клипа отметьте исключение заново: прежнее подтверждение относится только к сохранённому времени.</p>
         </div>}
         <button
           className={button}
@@ -506,11 +507,11 @@ function EventModal({
               "cancelled",
               "canceled",
               "held",
-              "on_hold",
               "legacy_hold",
               "blocked",
               "needs_attention",
-            ].includes(event.state) && (
+            ].includes(event.state) &&
+            (event.state !== "on_hold" || twitchPublication) && (
               <button
                 disabled={busy}
                 className={button}
@@ -601,7 +602,9 @@ function EventModal({
           title="Confirm publication action"
           message={
             confirmation === "publish-now"
-              ? "Start uploading this publication now?"
+              ? twitchPublication
+                ? "Начать загрузку сохранённой версии сейчас? Дата в поле не используется. Если отмечено исключение, оно будет сохранено для этой версии и нового времени; наличие файла и остальные ограничения проверит сервер."
+                : "Start uploading this publication now?"
               : confirmation === "cancel"
                 ? "Cancel this publication? An external request already in progress may finish before cancellation is recorded."
                 : confirmation === "approve"
