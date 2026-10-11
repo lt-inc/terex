@@ -254,7 +254,7 @@ func Enrich(out *domain.TwitchFlowDiagnostics, collector domain.TwitchDiagnostic
 		case "verification_pending":
 			state = "verification_pending"
 		case "authorized":
-			state = "queued"
+			state = "authorized"
 		case "retry_wait":
 			state = "retry"
 		case "queued", "reserved", "waiting", "waiting_quota", "waiting_capacity", "revalidating":
