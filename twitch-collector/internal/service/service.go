@@ -4,48 +4,75 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	"terex/proto/telemetry"
+	"terex/proto/twitch"
 	"terex/twitch-collector/internal/domain"
 )
 
 type Service struct {
-	resetMu            sync.Mutex
-	resetEpoch         int64
-	resetting          bool
-	checkCancel        context.CancelFunc
-	store              domain.Store
-	twitch             domain.Twitch
-	terex              domain.Terex
-	downloader         domain.Downloader
-	log                *slog.Logger
-	ctx                context.Context
-	mu                 sync.Mutex
-	checking           bool
-	lastStarted        time.Time
-	active             map[string]context.CancelCauseFunc
-	gateLogs           map[string]gateLog
-	flowStarted        map[string]time.Time
-	lastAdmissionsAt   time.Time
-	lastFailureSyncAt  time.Time
-	lastRevalidationAt time.Time
-	configObservation  configObservation
+	resetMu                                                                     sync.Mutex
+	resetEpoch                                                                  int64
+	resetting                                                                   bool
+	checkCancel                                                                 context.CancelFunc
+	store                                                                       domain.Store
+	twitch                                                                      domain.Twitch
+	terex                                                                       domain.Terex
+	downloader                                                                  domain.Downloader
+	log                                                                         *slog.Logger
+	ctx                                                                         context.Context
+	mu                                                                          sync.Mutex
+	checking                                                                    bool
+	lastStarted                                                                 time.Time
+	active                                                                      map[string]context.CancelCauseFunc
+	gateLogs                                                                    map[string]gateLog
+	flowStarted                                                                 map[string]time.Time
+	lastAdmissionsAt                                                            time.Time
+	lastFailureSyncAt                                                           time.Time
+	lastRevalidationAt                                                          time.Time
+	configObservation                                                           configObservation
+	configCache                                                                 twitch.CollectorConfig
+	configFetchSequence                                                         uint64
+	coordinationStarted                                                         bool
+	activeSequence                                                              uint64
+	configFingerprint                                                           string
+	lastTemporalAt                                                              time.Time
+	lastPressureAt                                                              time.Time
+	pressure                                                                    coordinationPressure
+	grantCursor                                                                 string
+	wakeDownload                                                                chan struct{}
+	wakeCompletion                                                              chan struct{}
+	reconciling                                                                 bool
+	configInterval, timePressure, timeAdmissions, timeEligibility, configMaxAge time.Duration
 }
 
 func New(store domain.Store, twitch domain.Twitch, terex domain.Terex, downloader domain.Downloader, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{store: store, twitch: twitch, terex: terex, downloader: downloader, log: logger, active: map[string]context.CancelCauseFunc{}, gateLogs: map[string]gateLog{}, flowStarted: map[string]time.Time{}, ctx: context.Background()}
+	return &Service{store: store, twitch: twitch, terex: terex, downloader: downloader, log: logger, active: map[string]context.CancelCauseFunc{}, gateLogs: map[string]gateLog{}, flowStarted: map[string]time.Time{}, ctx: context.Background(), wakeDownload: make(chan struct{}, 1), wakeCompletion: make(chan struct{}, 1), configInterval: collectorInterval("COLLECTOR_CONFIG_INTERVAL", 5*time.Second), timePressure: collectorInterval("COLLECTOR_PRESSURE_INTERVAL", 15*time.Second), timeAdmissions: collectorInterval("COLLECTOR_ADMISSIONS_INTERVAL", time.Minute), timeEligibility: collectorInterval("COLLECTOR_ELIGIBILITY_INTERVAL", time.Minute), configMaxAge: collectorInterval("COLLECTOR_CONFIG_MAX_AGE", configFreshness)}
+}
+func collectorInterval(key string, fallback time.Duration) time.Duration {
+	v, err := time.ParseDuration(os.Getenv(key))
+	if err == nil && v > 0 {
+		return v
+	}
+	return fallback
 }
 func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
 	s.ctx = ctx
+	_, s.coordinationStarted = s.terex.(domain.FlowTerex)
 	s.mu.Unlock()
 	go s.schedule(ctx)
 	go s.worker(ctx)
+	if s.coordinationStarted {
+		go s.reconcile(ctx)
+		go s.completionWorker(ctx)
+	}
 }
 func (s *Service) schedule(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
@@ -272,7 +299,7 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 		at := config.observedAt
 		out.ConfigObservedAt = &at
 	}
-	out.ConfigAvailable = config.err == nil && !config.observedAt.IsZero() && time.Since(config.observedAt) <= configFreshness
+	out.ConfigAvailable = !config.observedAt.IsZero() && time.Since(config.observedAt) <= s.configMaxAge
 	out.Paused = !out.ConfigAvailable || !config.settings.Enabled || config.maintenance
 	out.BlockReason = config.reason
 	if config.err != nil {
@@ -291,6 +318,19 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 	return out, nil
 }
 func (s *Service) worker(ctx context.Context) {
+	if api, ok := s.terex.(domain.FlowTerex); ok {
+		for {
+			if s.flowWorkerOnce(ctx, api) {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.wakeDownload:
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -298,10 +338,6 @@ func (s *Service) worker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if api, ok := s.terex.(domain.FlowTerex); ok {
-				s.flowWorkerOnce(ctx, api)
-				continue
-			}
 			cfg, err := s.settings(ctx)
 			if reason := settingsBlockReason(cfg, err, s.twitch.Ready()); reason != "" {
 				s.logGate(ctx, "worker", reason, err)

@@ -366,10 +366,10 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		}
 	}
 	// Render commands use the same outbox and survive worker/queue interruption.
-	if _, err = tx.Exec(ctx, `UPDATE render_attempts SET status='expired' WHERE status='active' AND lease_until<$1`, now); err != nil {
+	if err = reconcileRenderDispatch(ctx, tx, now, limit); err != nil {
 		return err
 	}
-	rr, err := tx.Query(ctx, `SELECT r.id,r.revision_no FROM clip_revisions r WHERE r.render_state IN ('pending','rendering') AND NOT EXISTS(SELECT 1 FROM render_attempts a WHERE a.revision_id=r.id AND a.status='active') ORDER BY r.id LIMIT $1 FOR UPDATE SKIP LOCKED`, limit)
+	rr, err := tx.Query(ctx, `SELECT r.id,r.revision_no FROM clip_revisions r WHERE r.render_state IN ('pending','rendering') AND r.render_next_attempt_at<=$2 AND NOT EXISTS(SELECT 1 FROM render_attempts a WHERE a.revision_id=r.id AND a.status='active') ORDER BY r.id LIMIT $1 FOR UPDATE SKIP LOCKED`, limit, now)
 	if err != nil {
 		return err
 	}
@@ -392,16 +392,22 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 		return err
 	}
 	for _, r := range renders {
+		deadline, _, reason, e := renderDispatchDeadline(ctx, tx, r.id, now)
+		if e != nil {
+			return e
+		}
+		if !deadline.After(now) {
+			if e = holdRenderDispatch(ctx, tx, r.id, reason); e != nil {
+				return e
+			}
+			continue
+		}
 		if allowed, e := renderPreparationAllowed(ctx, tx, r.id, now); e != nil {
 			return e
 		} else if !allowed {
 			continue
 		}
-		attempt := uuid.NewString()
-		if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,$3)`, attempt, r.id, now.Add(2*time.Minute)); err != nil {
-			return err
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO publication_outbox(id,kind,payload)VALUES($1,'render_revision',$2)`, uuid.NewString(), mustJSON(map[string]any{"kind": "render", "revision_id": r.id, "attempt_id": attempt, "expected_version": r.version})); err != nil {
+		if err = queueRenderAttempt(ctx, tx, r.id, r.version, now); err != nil {
 			return err
 		}
 	}

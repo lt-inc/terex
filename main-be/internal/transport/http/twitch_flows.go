@@ -226,6 +226,8 @@ func (a *API) enrichFlowClips(r *http.Request, page *domain.FlowClipPage) {
 			switch v.State {
 			case "queued", "waiting", "reserved":
 				row.SourceState = "queued"
+			case "waiting_assignment", "authorized", "verification_pending":
+				row.SourceState = v.State
 			case "downloading", "uploading":
 				row.SourceState = "downloading"
 			case "importing", "verifying", "waiting_quota", "waiting_capacity", "retry_wait":

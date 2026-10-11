@@ -29,8 +29,9 @@ type ActiveTask struct {
 }
 
 type RuntimeWork struct {
-	Epoch       int64        `json:"epoch"`
-	Counts      []StageCount `json:"counts"`
-	ActiveTasks []ActiveTask `json:"active_tasks"`
-	ActiveTotal int          `json:"active_total"`
+	Epoch                int64        `json:"epoch"`
+	Counts               []StageCount `json:"counts"`
+	ActiveTasks          []ActiveTask `json:"active_tasks"`
+	ActiveTotal          int          `json:"active_total"`
+	OldestRenderQueuedAt *time.Time   `json:"oldest_render_queued_at,omitempty"`
 }

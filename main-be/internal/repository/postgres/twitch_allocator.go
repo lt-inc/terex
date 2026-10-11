@@ -198,7 +198,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 	// Redeliver durable unclaimed grants after a collector restart. The local
 	// queue deduplicates clip_id; no new download quota is charged.
 	if out.Mode == "enforce" {
-		rows, err = tx.Query(ctx, `SELECT g.clip_id,g.import_id,g.flow_id,f.version,g.primary_format,i.request,g.epoch,g.sequence,COALESCE(i.revalidation->>'failure_token','') FROM twitch_download_grants g JOIN twitch_imports i ON i.id=g.import_id JOIN twitch_flows f ON f.id=g.flow_id WHERE g.state='active' AND g.expires_at>$1 AND f.enabled AND NOT f.archived ORDER BY g.sequence LIMIT $2`, now, q.Limit)
+		rows, err = tx.Query(ctx, `SELECT g.clip_id,g.import_id,g.flow_id,f.version,g.primary_format,i.request,g.epoch,g.sequence,COALESCE(i.revalidation->>'failure_token',''),g.expires_at FROM twitch_download_grants g JOIN twitch_imports i ON i.id=g.import_id JOIN twitch_flows f ON f.id=g.flow_id WHERE g.state='active' AND g.expires_at>$1 AND f.enabled AND NOT f.archived ORDER BY g.sequence LIMIT $2`, now, q.Limit)
 		if err != nil {
 			return out, err
 		}
@@ -206,7 +206,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 			var g twitch.DownloadGrant
 			var b []byte
 			var r twitch.ImportRequest
-			if err = rows.Scan(&g.ClipID, &g.ImportID, &g.FlowID, &g.FlowVersion, &g.Format, &b, &g.Epoch, &g.AdmissionSequence, &g.RevalidationToken); err != nil {
+			if err = rows.Scan(&g.ClipID, &g.ImportID, &g.FlowID, &g.FlowVersion, &g.Format, &b, &g.Epoch, &g.AdmissionSequence, &g.RevalidationToken, &g.ExpiresAt); err != nil {
 				rows.Close()
 				return out, err
 			}
@@ -317,6 +317,8 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 				return out, err
 			}
 			g.AdmissionSequence = af.LastSequence
+			expiry := now.Add(15 * time.Minute)
+			g.ExpiresAt = &expiry
 			if err = tx.QueryRow(ctx, `SELECT COALESCE(revalidation->>'failure_token','') FROM twitch_imports WHERE id=$1`, g.ImportID).Scan(&g.RevalidationToken); err != nil {
 				return out, err
 			}

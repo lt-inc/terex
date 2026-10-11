@@ -119,4 +119,107 @@ func TestApprovedRecoveryAdmissionAndUploadedPhaseSurviveLostResponse(t *testing
 	if err != nil || current.FailureToken == failure.FailureToken {
 		t.Fatal("old receipt overwrote a new failure", current, err)
 	}
+	// A separate saved lane makes an uncertain PUT drain even when the owner
+	// pauses. No second download claim or late grant may steal its generation.
+	clip.ID = "LaneClip"
+	if err = s.UpsertClips(ctx, []domain.Clip{clip}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ObserveFlow(ctx, f, []domain.Clip{clip}); err != nil {
+		t.Fatal(err)
+	}
+	expires := now.Add(15 * time.Minute)
+	g.ClipID = clip.ID
+	g.ImportID = "lane-import"
+	g.FlowVersion = 2
+	g.ExpiresAt = &expires
+	if _, err = s.QueueAdmissions(ctx, []twitch.DownloadGrant{g}, now); err != nil {
+		t.Fatal(err)
+	}
+	// Explicit absent status closes the lane; omissions alone do not do so.
+	if claimed, e := s.ClaimExistingDownload(ctx, time.Minute); e != nil || claimed != nil {
+		t.Fatal("full-backlog lane accepted a new physical import", claimed, e)
+	}
+	ref := twitch.PressureTaskRef{ClipID: clip.ID, ImportID: g.ImportID, FlowID: f.ID, AdmissionSequence: 1}
+	if err = s.ApplyPressure(ctx, twitch.PressureResult{ObservedAt: now, Tasks: []twitch.PressureTaskResult{{PressureTaskRef: ref, GrantState: "absent"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, e := s.ClaimDownload(ctx, time.Minute); e != nil || claimed != nil {
+		t.Fatal("unassigned task downloaded", claimed, e)
+	}
+	if _, err = s.QueueAdmissions(ctx, []twitch.DownloadGrant{g}, now); err != nil {
+		t.Fatal(err)
+	}
+	lane, err := s.ClaimDownload(ctx, time.Minute)
+	if err != nil || lane == nil || lane.Clip.ID != clip.ID {
+		t.Fatal(lane, err)
+	}
+	reservation := lane.Reservation
+	reservation.UploadGeneration = 3
+	reservation.ReservationID = "pin"
+	if err = s.SaveReservation(ctx, *lane, reservation); err != nil {
+		t.Fatal(err)
+	}
+	lane.Reservation = reservation
+	// Crash after reservation but BEFORE the persisted pre-PUT marker is safe
+	// to resume as a download; old generation-only rows have no such proof.
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET lease_expires_at=now()-interval '1 second' WHERE clip_id=$1`, clip.ID); err != nil {
+		t.Fatal(err)
+	}
+	beforePut, err := other.ClaimExistingDownload(ctx, time.Minute)
+	if err != nil || beforePut == nil || beforePut.TransferPhase != "reserved" || beforePut.Reservation.UploadGeneration != 3 {
+		t.Fatal("pre-PUT reservation quarantined after restart", beforePut, err)
+	}
+	lane = beforePut
+	media.Phase = "uploading"
+	if err = s.QueueCompletion(ctx, *lane, media); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Complete(ctx, *lane, g.ImportID, media.SHA256); err != domain.ErrLeaseLost {
+		t.Fatal("download lease survived handoff", err)
+	}
+	checking, err := other.ClaimCompletion(ctx, time.Minute)
+	if err != nil || checking == nil {
+		t.Fatal(checking, err)
+	}
+	if err = other.ClearUploaded(ctx, *checking); err != nil {
+		t.Fatal(err)
+	}
+	if err = other.FailWithCode(ctx, *checking, "upload", "object confirmed absent", "upload_missing", &retry); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := s.ClaimExistingDownload(ctx, time.Minute)
+	if err != nil || existing == nil || existing.Reservation.UploadGeneration != 3 || existing.Reservation.ReservationID != "pin" {
+		t.Fatal("accepted reservation cannot recover at full backlog", existing, err)
+	}
+	if err = s.QueueCompletion(ctx, *existing, media); err != nil {
+		t.Fatal(err)
+	}
+	f.Enabled = false
+	if err = s.SyncFlows(ctx, []twitch.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+	pause := true
+	if _, err = s.SetChannel(ctx, channel.ID, &pause, false); err != nil {
+		t.Fatal(err)
+	}
+	lane, err = other.ClaimCompletion(ctx, time.Minute)
+	if err != nil || lane == nil || !lane.Completion || lane.Uploaded == nil || lane.Reservation.UploadGeneration != 3 || lane.Attempt != 1 {
+		t.Fatal("paused uncertain PUT lost durable lane", lane, err)
+	}
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.QueueAdmissions(ctx, []twitch.DownloadGrant{g}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err = other.Renew(ctx, *lane, time.Minute); err != nil {
+		t.Fatal("migration/grant replaced active completion", err)
+	}
+	if err = other.Complete(ctx, *lane, g.ImportID, media.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if lane, e := s.ClaimDownload(ctx, time.Minute); e != nil || lane != nil {
+		t.Fatal("verified source downloaded again", lane, e)
+	}
 }

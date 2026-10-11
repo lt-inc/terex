@@ -308,13 +308,13 @@ export default function ClipEditorPage() {
       {saved?.error && (
         <p className="text-red-400 text-sm">Render: {saved.error}</p>
       )}
-      {saved?.render_state === "failed" && (
+      {["failed", "waiting_worker"].includes(saved?.render_state ?? "") && (
         <button
           disabled={busy || dirty || draft.source_available === false}
           className={button}
           onClick={retryRender}
         >
-          Retry render of saved revision
+          Повторить подготовку сохранённой версии
         </button>
       )}
       {draft.source_available === false && (
@@ -441,8 +441,10 @@ export default function ClipEditorPage() {
             </button>
           ) : (
             <p className="text-sm text-slate-500">
-              {saved?.render_state === "failed"
-                ? "Render failed; edit and save again."
+              {saved?.render_state === "waiting_worker"
+                ? "Подготовка удержана: исполнитель не взял задание до крайнего срока либо исходник потерял актуальность. Повторите подготовку сохранённой версии; сервер проверит файлы и сроки."
+                : saved?.render_state === "failed"
+                ? "Рендер завершился ошибкой. Повторите подготовку сохранённой версии; изменение монтажа не требуется."
                 : saved?.render_state === "expired"
                   ? "Файл удалён по сроку хранения. История и ссылки на публикации сохранены; просмотр, восстановление и новый монтаж этой версии недоступны."
                 : "The render appears here when ready."}

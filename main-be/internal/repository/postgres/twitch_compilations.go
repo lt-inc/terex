@@ -205,6 +205,9 @@ func createCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.CompilationR
 	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET work_started_at=COALESCE(work_started_at,$1)WHERE id='default'`, now); err != nil {
 		return domain.Compilation{}, err
 	}
+	if err = tightenQueuedRender(ctx, tx, rid, now); err != nil {
+		return domain.Compilation{}, err
+	}
 	return compilationByID(ctx, tx, id)
 }
 func (s *Store) CreateCompilation(ctx context.Context, req twitch.CompilationRequest, date *time.Time, now time.Time) (domain.Compilation, error) {

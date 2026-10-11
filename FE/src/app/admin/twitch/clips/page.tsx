@@ -225,6 +225,9 @@ export default function TwitchClipsPage() {
             <option value="">Все состояния</option>
             {[
               "discovered",
+              "waiting_assignment",
+              "authorized",
+              "verification_pending",
               "waiting_quota",
               "waiting_capacity",
               "media_expired",
@@ -343,7 +346,7 @@ export default function TwitchClipsPage() {
             : item.excluded
               ? "excluded"
               : item.source_state === "discovered" &&
-                  ["queued", "reserved", "retry_wait", "waiting_quota", "waiting_capacity"].includes(
+                  ["waiting_assignment", "authorized", "verification_pending", "queued", "reserved", "retry_wait", "waiting_quota", "waiting_capacity"].includes(
                     reasonState || "",
                   )
                 ? reasonState

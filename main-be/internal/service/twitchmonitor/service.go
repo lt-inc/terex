@@ -42,7 +42,8 @@ func (s *Service) Tick(ctx context.Context) error {
 	out := domain.TwitchMonitoringSnapshot{
 		CollectorStatus: domain.TwitchCollectorStatus{LastError: "Данные main-be обновлены; данные collector ещё не получены"},
 		Counts:          work.Counts, ActiveTasks: work.ActiveTasks, ActiveTotal: work.ActiveTotal,
-		Discovery: []json.RawMessage{}, DiagnosticsErrors: []domain.TwitchMonitoringFailure{},
+		OldestRenderQueuedAt: work.OldestRenderQueuedAt,
+		Discovery:            []json.RawMessage{}, DiagnosticsErrors: []domain.TwitchMonitoringFailure{},
 	}
 	// Persist the main queues before any remote/expensive diagnostics. Even a
 	// subsequent timeout must not hide a successful main runtime observation.
@@ -225,6 +226,12 @@ func Enrich(out *domain.TwitchFlowDiagnostics, collector domain.TwitchDiagnostic
 			state = "downloading"
 		case "importing", "uploaded", "verifying":
 			state = "verifying"
+		case "waiting_assignment":
+			state = "waiting_assignment"
+		case "verification_pending":
+			state = "verification_pending"
+		case "authorized":
+			state = "queued"
 		case "retry_wait":
 			state = "retry"
 		case "queued", "reserved", "waiting", "waiting_quota", "waiting_capacity", "revalidating":

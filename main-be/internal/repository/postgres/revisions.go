@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"terex/main-be/internal/domain"
 )
@@ -114,12 +113,7 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 		return domain.Revision{}, err
 	}
 	if rerender {
-		attempt := uuid.NewString()
-		if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,now()+interval '2 minutes')`, attempt, r.ID); err != nil {
-			return domain.Revision{}, err
-		}
-		payload, _ := json.Marshal(map[string]any{"kind": "render", "revision_id": r.ID, "attempt_id": attempt, "expected_version": r.Version})
-		if _, err = tx.Exec(ctx, `INSERT INTO publication_outbox(id,kind,payload)VALUES($1,'render_revision',$2)`, uuid.NewString(), payload); err != nil {
+		if err = queueRenderAttempt(ctx, tx, r.ID, r.Version, time.Now().UTC()); err != nil {
 			return domain.Revision{}, err
 		}
 	}
@@ -428,8 +422,8 @@ func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) e
 	if json.Unmarshal(r.Manifest, &source) != nil || source["original"] == nil {
 		return fmt.Errorf("%w: source unavailable", domain.ErrConflict)
 	}
-	attempt := uuid.NewString()
-	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='pending',error=NULL WHERE id=$1`, rid); err != nil {
+
+	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='pending',error=NULL,render_wait_reason='',render_deadline_reason='worker_wait_timeout',render_first_queued_at=NULL,render_dispatch_deadline=NULL,render_next_attempt_at=now() WHERE id=$1`, rid); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE jobs j SET status='processing',fail_place='',updated_at=now() FROM clips c WHERE c.job_id=j.job_id AND c.latest_revision_id=$1 AND j.source_kind IN('twitch','twitch_compilation')`, rid); err != nil {
@@ -438,10 +432,7 @@ func (s *Store) RetryRevision(ctx context.Context, clipID string, version int) e
 	if _, err = tx.Exec(ctx, `UPDATE twitch_imports i SET state='rendering',error=NULL,updated_at=now() FROM clips c WHERE c.clip_id=i.clip_id AND c.latest_revision_id=$1`, rid); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,now()+interval '2 minutes')`, attempt, rid); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO publication_outbox(id,kind,payload)VALUES($1,'render_revision',$2)`, uuid.NewString(), mustJSON(map[string]any{"kind": "render", "revision_id": rid, "attempt_id": attempt, "expected_version": r.Version})); err != nil {
+	if err = queueRenderAttempt(ctx, tx, rid, r.Version, time.Now().UTC()); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

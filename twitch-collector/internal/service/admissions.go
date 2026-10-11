@@ -9,7 +9,7 @@ import (
 
 func (s *Service) queueAdmissions(ctx context.Context, cfg twitch.CollectorConfig) (int, error) {
 	s.mu.Lock()
-	if time.Since(s.lastAdmissionsAt) < time.Minute {
+	if time.Since(s.lastAdmissionsAt) < s.timeAdmissions {
 		s.mu.Unlock()
 		return 0, nil
 	}

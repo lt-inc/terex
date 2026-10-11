@@ -53,6 +53,7 @@ func (a *API) Router() http.Handler {
 			r.Get("/twitch/flows/{id}/diagnostics", a.twitchFlowDiagnostics)
 			r.Get("/twitch/flows/{id}/observation-candidates", a.twitchObservationCandidates)
 			r.Post("/twitch/collector/admissions", a.twitchAdmissions)
+			r.Post("/twitch/collector/pressure", a.twitchPressure)
 			r.Get("/twitch/policy/preview", a.twitchPolicyPreview)
 			r.Post("/twitch/policy/apply", a.twitchPolicyApply)
 			r.Get("/twitch/flows/{id}/clips", a.twitchFlowClips)

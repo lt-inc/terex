@@ -108,8 +108,8 @@ export default function TwitchServiceSettings() {
                 : "Collector ожидает проверки"}
           </p>
           <p className="mt-2 text-slate-400">
-            В очереди: {status.queued} · скачивается: {status.downloading} ·
-            импортировано: {status.imported} · ошибок: {status.failed}
+            Ждут назначения: {status.waiting_assignment ?? "—"} · разрешено скачивание: {status.queued} · скачивается: {status.downloading} ·
+            ждут проверки: {status.verification_pending ?? "—"} · проверяется: {status.verifying ?? "—"} · исходников готово: {status.imported} · ошибок: {status.failed}
           </p>
           {status.block_reason && (
             <p className="mt-2 text-amber-300">{status.block_reason}</p>
