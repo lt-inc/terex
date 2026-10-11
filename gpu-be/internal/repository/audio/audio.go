@@ -30,7 +30,8 @@ const (
 
 type Analyzer struct {
 	// Cmd runs the YAMNet script, e.g. "python3 /opt/terex/yamnet.py". Empty disables audio events.
-	Cmd string
+	Cmd     string
+	Acquire func(context.Context) (func(), error)
 }
 
 func New(cmd string) *Analyzer { return &Analyzer{Cmd: cmd} }
@@ -57,8 +58,15 @@ func (a *Analyzer) Energy(ctx context.Context, audioPath string) (series domain.
 	ctx, span := telemetry.Start(ctx, "audio energy")
 	defer func() { telemetry.End(span, err) }()
 	start := time.Now()
+	if a.Acquire != nil {
+		release, e := a.Acquire(ctx)
+		if e != nil {
+			return series, e
+		}
+		defer release()
+	}
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-i", audioPath, "-ac", "1", "-ar", fmt.Sprint(sampleRate), "-f", "s16le", "-")
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-threads", "1", "-i", audioPath, "-ac", "1", "-ar", fmt.Sprint(sampleRate), "-threads", "1", "-f", "s16le", "-")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return series, err

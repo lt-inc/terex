@@ -14,9 +14,13 @@ import (
 	"terex/proto/workflow"
 )
 
-type testStore struct{ uploaded []domain.ObjectRef }
+type testStore struct {
+	uploaded  []domain.ObjectRef
+	downloads []domain.ObjectRef
+}
 
 func (s *testStore) Download(_ context.Context, ref domain.ObjectRef, p string) error {
+	s.downloads = append(s.downloads, ref)
 	b := []byte("media")
 	if strings.HasSuffix(ref.Object, "intervals.json") {
 		b = []byte(`[{"id":0,"start":1,"end":3,"title":"Test"}]`)

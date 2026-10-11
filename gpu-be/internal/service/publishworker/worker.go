@@ -13,6 +13,7 @@ import (
 	"terex/gpu-be/internal/repository/credentials"
 	"terex/gpu-be/internal/repository/youtube"
 	"terex/gpu-be/internal/service/googleauth"
+	"terex/gpu-be/internal/service/mediatmp"
 	"terex/proto/workflow"
 )
 
@@ -27,6 +28,7 @@ type Worker struct {
 	Provider         func(youtube.TokenSource) *youtube.Client
 	ProviderFactory  func(string, youtube.TokenSource) (domain.PublishingProvider, error)
 	RenewInterval    time.Duration
+	Resources        domain.MediaResources
 }
 
 func (w *Worker) Handle(ctx context.Context, cmd workflow.Command) error {
@@ -41,6 +43,8 @@ func (w *Worker) Handle(ctx context.Context, cmd workflow.Command) error {
 		return fmt.Errorf("coordinator returned no publication")
 	}
 	q := workflow.LeaseRequest{AttemptID: lease.AttemptID, LeaseToken: lease.LeaseToken, ExpectedVersion: lease.ExpectedVersion}
+	ctx = domain.WithMediaAttempt(ctx, lease.AttemptID, lease.ExpectedVersion)
+	ctx = domain.WithMediaIdentity(ctx, "", lease.Publication.ClipID, "publication", lease.Publication.RevisionID)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var mu sync.Mutex
@@ -114,6 +118,10 @@ func (w *Worker) Handle(ctx context.Context, cmd workflow.Command) error {
 		return nil
 	}
 	failure := workflow.FailRequest{LeaseRequest: q, State: "retry_wait", Code: "provider_error", Message: err.Error(), Retryable: true, RetryAfterSeconds: 30}
+	if errors.Is(err, domain.ErrMediaResourceWait) {
+		failure.Code = "resource_wait"
+		failure.RetryAfterSeconds = 60
+	}
 	if errors.Is(err, domain.ErrUploadUncertain) {
 		failure.State = "needs_attention"
 		failure.Code = "upload_outcome_unknown"
@@ -145,7 +153,17 @@ func (w *Worker) Handle(ctx context.Context, cmd workflow.Command) error {
 	return reportErr
 }
 
-func (w *Worker) execute(ctx context.Context, q workflow.LeaseRequest, p *workflow.PublicationWork, check func() error) error {
+func (w *Worker) execute(ctx context.Context, q workflow.LeaseRequest, p *workflow.PublicationWork, check func() error) (err error) {
+	ctx, release, resourceErr := mediatmp.Begin(ctx, w.Resources)
+	if resourceErr != nil {
+		return resourceErr
+	}
+	defer release()
+	defer func() {
+		if !errors.Is(err, domain.ErrUploadUncertain) {
+			err = mediatmp.Cause(ctx, err)
+		}
+	}()
 	now := w.Now
 	if now == nil {
 		now = time.Now
@@ -176,7 +194,6 @@ func (w *Worker) execute(ctx context.Context, q workflow.LeaseRequest, p *workfl
 		return nil
 	}
 	id := ""
-	var err error
 	if p.Provider == "youtube" {
 		id, err = credentials.ID(p.CredentialRef)
 		if err != nil {
@@ -262,11 +279,11 @@ func (w *Worker) execute(ctx context.Context, q workflow.LeaseRequest, p *workfl
 			if err = os.MkdirAll(w.TmpDir, 0o755); err != nil {
 				return err
 			}
-			dir, e := os.MkdirTemp(w.TmpDir, "publish-")
+			dir, cleanup, e := mediatmp.MkdirTemp(ctx, w.Resources, w.TmpDir, "publish-")
 			if e != nil {
 				return e
 			}
-			defer os.RemoveAll(dir)
+			defer cleanup()
 			file = filepath.Join(dir, "clip.mp4")
 			if err = w.Store.Download(ctx, p.Media, file); err != nil {
 				return err

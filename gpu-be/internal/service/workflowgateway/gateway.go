@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"terex/gpu-be/internal/repository/credentials"
 	"terex/gpu-be/internal/repository/youtube"
 	"terex/gpu-be/internal/service/googleauth"
+	"terex/gpu-be/internal/service/mediatmp"
 	"terex/gpu-be/internal/service/renderer"
 	"terex/proto/workflow"
 )
@@ -27,10 +27,11 @@ type Store interface {
 }
 
 type Service struct {
-	Auth   *googleauth.Service
-	Store  Store
-	Media  domain.Media
-	TmpDir string
+	Auth      *googleauth.Service
+	Store     Store
+	Media     domain.Media
+	TmpDir    string
+	Resources domain.MediaResources
 }
 
 func (s *Service) OAuthURL(_ context.Context, q *workflow.OAuthURLRequest) (*workflow.OAuthURLResponse, error) {
@@ -174,14 +175,17 @@ func (s *Service) EditorContext(ctx context.Context, q *workflow.EditorContextRe
 		if prober, ok := s.Media.(interface {
 			Duration(context.Context, string) (float64, error)
 		}); ok {
-			if err = os.MkdirAll(s.TmpDir, 0o755); err != nil {
+			var release func()
+			ctx, release, err = mediatmp.Begin(ctx, s.Resources)
+			if err != nil {
 				return nil, err
 			}
-			dir, e := os.MkdirTemp(s.TmpDir, "source-probe-")
+			defer release()
+			dir, cleanup, e := mediatmp.MkdirTemp(ctx, s.Resources, s.TmpDir, "source-probe-")
 			if e != nil {
 				return nil, e
 			}
-			defer os.RemoveAll(dir)
+			defer cleanup()
 			file := filepath.Join(dir, "original.mp4")
 			if err = s.Store.Download(ctx, m.Original, file); err != nil {
 				return nil, err

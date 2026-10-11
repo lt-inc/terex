@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"terex/gpu-be/internal/domain"
+	"terex/gpu-be/internal/service/mediatmp"
 	"terex/proto/workflow"
 )
 
@@ -24,41 +25,54 @@ type assembler interface {
 // MaterializeAssembly resolves only the immutable files pinned by the control
 // plane. The resulting original is unique to this fenced render attempt.
 func (s *Service) MaterializeAssembly(ctx context.Context, w workflow.RenderWork) (workflow.RenderWork, error) {
+	work, _, cleanup, err := s.materializeAssembly(ctx, w, false)
+	if cleanup != nil {
+		cleanup()
+	}
+	return work, err
+}
+
+func (s *Service) materializeAssembly(ctx context.Context, w workflow.RenderWork, keepLocal bool) (workflow.RenderWork, string, func(), error) {
 	a := w.Source.Assembly
 	if a == nil {
-		return w, nil
+		return w, "", nil, nil
 	}
 	// A later editor revision can trim the already assembled original. Only a
 	// new composition (whose original is unset) needs its timeline rebuilt.
 	if w.Source.Original.Bucket != "" && w.Source.Original.Object != "" {
-		return w, nil
+		return w, "", nil, nil
 	}
 	maxItems := 10
 	if a.SchemaVersion == 2 {
 		maxItems = 60
 	}
 	if (a.SchemaVersion != 1 && a.SchemaVersion != 2) || a.Profile != "landscape_1080p30" || a.BumperDurationFrames != 30 || len(a.Items) < 3 || len(a.Items) > maxItems || w.Output.Bucket != domain.BucketClips || w.Output.Object == "" {
-		return w, fmt.Errorf("invalid assembly specification")
+		return w, "", nil, fmt.Errorf("invalid assembly specification")
 	}
 	m, ok := s.Media.(assembler)
 	if !ok {
-		return w, fmt.Errorf("media worker does not support assemblies")
+		return w, "", nil, fmt.Errorf("media worker does not support assemblies")
 	}
 	tmp := s.revisionTmp(ctx)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return w, err
+		return w, "", nil, err
 	}
-	dir, err := os.MkdirTemp(tmp, "assembly-")
+	dir, cleanup, err := mediatmp.MkdirTemp(ctx, s.Resources, tmp, "assembly-")
 	if err != nil {
-		return w, err
+		return w, "", nil, err
 	}
-	defer os.RemoveAll(dir)
+	retained := false
+	defer func() {
+		if !retained {
+			cleanup()
+		}
+	}()
 	files := make([]string, 0, 2*len(a.Items)-1)
 	for i, item := range a.Items {
 		if item.Original.Bucket != "imports" || !strings.HasPrefix(item.Original.Object, "verified/") || len(item.SHA256) != 64 ||
 			(a.SchemaVersion == 1 && (item.SourceClipID == "" || item.SourceRevisionID <= 0)) ||
 			(a.SchemaVersion == 2 && (item.MediaID == "" || item.TwitchSourceID == "")) {
-			return w, fmt.Errorf("invalid pinned assembly source")
+			return w, "", nil, fmt.Errorf("invalid pinned assembly source")
 		}
 		file := filepath.Join(dir, fmt.Sprintf("source-%02d.mp4", i))
 		slog.InfoContext(ctx, "compilation source download", "stage", "download", "clip_id", w.ClipID, "revision_id", w.RevisionID, "media_id", item.MediaID, "source_id", item.TwitchSourceID, "ordinal", i)
@@ -70,59 +84,59 @@ func (s *Service) MaterializeAssembly(ctx context.Context, w workflow.RenderWork
 			err = s.Store.Download(ctx, item.Original, file)
 		}
 		if err != nil {
-			return w, err
+			return w, "", nil, err
 		}
 		f, e := os.Open(file)
 		if e != nil {
-			return w, e
+			return w, "", nil, e
 		}
 		h := sha256.New()
 		_, e = io.Copy(h, f)
 		f.Close()
 		if e != nil {
-			return w, e
+			return w, "", nil, e
 		}
 		if hex.EncodeToString(h.Sum(nil)) != item.SHA256 {
-			return w, fmt.Errorf("assembly source checksum mismatch")
+			return w, "", nil, fmt.Errorf("assembly source checksum mismatch")
 		}
 		if err = CheckAssemblyBudget(ctx); err != nil {
-			return w, err
+			return w, "", nil, err
 		}
 		normalized := filepath.Join(dir, fmt.Sprintf("clip-%02d.mp4", i))
 		if err = m.NormalizeAssemblySegment(ctx, domain.AssemblySegment{File: file, StartSec: item.StartSec, EndSec: item.EndSec, NextChannel: item.BroadcasterLogin}, normalized); err != nil {
-			return w, err
+			return w, "", nil, err
 		}
 		if err = os.Remove(file); err != nil {
-			return w, err
+			return w, "", nil, err
 		}
 		files = append(files, normalized)
 		slog.InfoContext(ctx, "compilation source normalized", "stage", "normalize", "clip_id", w.ClipID, "media_id", item.MediaID, "source_id", item.TwitchSourceID, "ordinal", i)
 		if i < len(a.Items)-1 {
 			card := filepath.Join(dir, fmt.Sprintf("card-%02d.mp4", i))
 			if err = m.AssemblyTransition(ctx, a.Items[i+1].BroadcasterLogin, card); err != nil {
-				return w, err
+				return w, "", nil, err
 			}
 			files = append(files, card)
 		}
 		if err = CheckAssemblyBudget(ctx); err != nil {
-			return w, err
+			return w, "", nil, err
 		}
 	}
 	output := filepath.Join(dir, "original.mp4")
 	slog.InfoContext(ctx, "compilation concatenation", "stage", "assemble", "clip_id", w.ClipID, "revision_id", w.RevisionID, "items", len(a.Items))
 	if err = m.ConcatAssembly(ctx, files, output); err != nil {
-		return w, err
+		return w, "", nil, err
 	}
 	if err = CheckAssemblyBudget(ctx); err != nil {
-		return w, err
+		return w, "", nil, err
 	}
 	dur, err := m.Duration(ctx, output)
 	if err != nil {
-		return w, err
+		return w, "", nil, err
 	}
 	ref := domain.ObjectRef{Bucket: "imports", Object: "assemblies/" + w.Output.Object + ".original.mp4"}
 	if err = s.Store.Upload(ctx, ref, output); err != nil {
-		return w, err
+		return w, "", nil, err
 	}
 	w.Source.Original = ref
 	w.Source.DurationSec = dur
@@ -131,5 +145,9 @@ func (s *Service) MaterializeAssembly(ctx context.Context, w workflow.RenderWork
 	w.StartSec = 0
 	w.EndSec = dur
 	w.Cues = nil
-	return w, nil
+	if keepLocal {
+		retained = true
+		return w, output, cleanup, nil
+	}
+	return w, "", nil, nil
 }

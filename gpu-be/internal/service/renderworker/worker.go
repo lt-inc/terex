@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"terex/gpu-be/internal/domain"
 	"time"
 
 	"terex/gpu-be/internal/service/renderer"
@@ -73,6 +74,7 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 		defer release()
 	}
 	q := workflow.LeaseRequest{AttemptID: l.AttemptID, LeaseToken: l.LeaseToken, ExpectedVersion: l.ExpectedVersion}
+	ctx = domain.WithMediaAttempt(ctx, l.AttemptID, l.ExpectedVersion)
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	done := make(chan struct{})
@@ -102,12 +104,17 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 		}
 	}
 	work := *l.Render
+	var prepared *renderer.PreparedRender
 	if err == nil {
-		work, err = w.Renderer.MaterializeAssembly(renderCtx, work)
+		prepared, err = w.Renderer.PrepareRender(renderCtx, work)
+		if err == nil {
+			work = prepared.Work
+			defer prepared.Close()
+		}
 	}
 	var media workflow.ObjectRef
 	if err == nil {
-		media, err = w.Renderer.RenderRevision(renderCtx, work)
+		media, err = w.Renderer.RenderPrepared(renderCtx, prepared)
 	}
 	if budgetErr := renderer.CheckAssemblyBudget(renderCtx); budgetErr != nil {
 		err = budgetErr
@@ -128,11 +135,20 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 		}
 	} else {
 		code := "render_failed"
+		retryable := errors.Is(err, domain.ErrMediaResourceWait)
+		if retryable {
+			code = "resource_wait"
+		}
 		if errors.Is(err, renderer.ErrAssemblyBudget) {
 			code = "assembly_budget_exceeded"
+			retryable = true
 		}
 		slog.ErrorContext(ctx, "revision render failed", "stage", "render", "reason", code, "clip_id", work.ClipID, "revision_id", work.RevisionID, "err", err)
-		_, reportErr := w.Coordinator.Fail(ctx, &workflow.FailRequest{LeaseRequest: q, State: "failed", Code: code, Message: err.Error(), Retryable: false})
+		state := "failed"
+		if retryable {
+			state = "retry_wait"
+		}
+		_, reportErr := w.Coordinator.Fail(ctx, &workflow.FailRequest{LeaseRequest: q, State: state, Code: code, Message: err.Error(), Retryable: retryable, RetryAfterSeconds: 60})
 		if reportErr != nil {
 			err = errors.Join(err, fmt.Errorf("report render failure: %w", reportErr))
 		} else {

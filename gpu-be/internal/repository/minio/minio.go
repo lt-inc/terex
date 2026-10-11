@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"time"
@@ -31,7 +32,9 @@ func (s *Store) PresignInternalPut(ctx context.Context, ref domain.ObjectRef, tt
 	return u.String(), nil
 }
 
-func (s *Store) DownloadLimited(ctx context.Context, ref domain.ObjectRef, dest string, limit int64) error {
+func (s *Store) DownloadLimited(ctx context.Context, ref domain.ObjectRef, dest string, limit int64) (err error) {
+	start := time.Now()
+	defer func() { transferLog(ctx, "download_limited", dest, start, err) }()
 	st, err := s.internal.StatObject(ctx, ref.Bucket, ref.Object, mc.StatObjectOptions{})
 	if err != nil {
 		if mc.ToErrorResponse(err).Code == "NoSuchKey" {
@@ -98,6 +101,8 @@ func (s *Store) EnsureBuckets(ctx context.Context, buckets ...string) error {
 }
 
 func (s *Store) Upload(ctx context.Context, ref domain.ObjectRef, path string) (err error) {
+	start := time.Now()
+	defer func() { transferLog(ctx, "upload", path, start, err) }()
 	ctx, span := telemetry.Start(ctx, "minio upload", attribute.String("s3.bucket", ref.Bucket), attribute.String("s3.object", ref.Object))
 	defer func() { telemetry.End(span, err) }()
 	_, err = s.internal.FPutObject(ctx, ref.Bucket, ref.Object, path, mc.PutObjectOptions{})
@@ -105,9 +110,19 @@ func (s *Store) Upload(ctx context.Context, ref domain.ObjectRef, path string) (
 }
 
 func (s *Store) Download(ctx context.Context, ref domain.ObjectRef, path string) (err error) {
+	start := time.Now()
+	defer func() { transferLog(ctx, "download", path, start, err) }()
 	ctx, span := telemetry.Start(ctx, "minio download", attribute.String("s3.bucket", ref.Bucket), attribute.String("s3.object", ref.Object))
 	defer func() { telemetry.End(span, err) }()
 	return s.internal.FGetObject(ctx, ref.Bucket, ref.Object, path, mc.GetObjectOptions{})
+}
+
+func transferLog(ctx context.Context, op, path string, start time.Time, err error) {
+	attrs := append(domain.MediaLogAttrs(ctx), "op", op, "duration_ms", time.Since(start).Milliseconds(), "success", err == nil, "result_code", domain.MediaResultCode(domain.MediaCause(ctx, err)))
+	if info, e := os.Stat(path); e == nil {
+		attrs = append(attrs, "bytes", info.Size())
+	}
+	slog.InfoContext(ctx, "media storage transfer finished", attrs...)
 }
 
 func (s *Store) Delete(ctx context.Context, ref domain.ObjectRef) error {

@@ -1,6 +1,6 @@
 # CPU image for editor/media smoke tests. Uses the media packages from the
 # production base, without downloading Whisper/Torch (editing never uses them).
-FROM ubuntu:22.04
+FROM ubuntu:26.04
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-liberation ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /smoke
