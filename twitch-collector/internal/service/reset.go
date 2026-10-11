@@ -15,8 +15,10 @@ func (s *Service) beginResetWorker(ctx context.Context, epoch int64) (context.Co
 		return nil, nil, domain.ErrPaused
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
-	s.active["reset-worker"] = cancel
-	release := func() { cancel(nil); s.mu.Lock(); delete(s.active, "reset-worker"); s.mu.Unlock() }
+	s.activeSequence++
+	id := fmt.Sprintf("reset-worker-%d", s.activeSequence)
+	s.active[id] = cancel
+	release := func() { cancel(nil); s.mu.Lock(); delete(s.active, id); s.mu.Unlock() }
 	return ctx, release, nil
 }
 
@@ -57,6 +59,11 @@ func (s *Service) handleReset(ctx context.Context, cfg twitch.CollectorConfig) (
 	s.resetEpoch = cfg.Epoch
 	s.flowStarted = map[string]time.Time{}
 	s.lastStarted = time.Time{}
+	s.configFingerprint = ""
+	s.lastTemporalAt = time.Time{}
+	s.lastPressureAt = time.Time{}
+	s.grantCursor = ""
+	s.lastAdmissionsAt = time.Time{}
 	s.mu.Unlock()
 	if cfg.Maintenance != nil {
 		api, ok := s.terex.(interface {

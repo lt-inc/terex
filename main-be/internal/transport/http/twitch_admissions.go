@@ -17,3 +17,16 @@ func (a *API) twitchAdmissions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, out)
 }
+
+func (a *API) twitchPressure(w http.ResponseWriter, r *http.Request) {
+	var q twitch.PressureRequest
+	if !decode(w, r, &q) {
+		return
+	}
+	out, err := a.Twitch.CollectorPressure(r.Context(), q)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}

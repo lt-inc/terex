@@ -87,4 +87,56 @@ func TestSyncFlowsAndObserveFlowDoNotDeadlock(t *testing.T) {
 	for e := range errs {
 		t.Error(e)
 	}
+	var before, after string
+	if err = s.pool.QueryRow(ctx, `SELECT xmin::text FROM twitch_collector.consumers WHERE flow_id=$1 AND clip_id=$2`, f.ID, asc[0].ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SyncFlows(ctx, []twitch.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SyncExclusions(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ObserveFlow(ctx, f, asc); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT xmin::text FROM twitch_collector.consumers WHERE flow_id=$1 AND clip_id=$2`, f.ID, asc[0].ID).Scan(&after); err != nil || before != after {
+		t.Fatal("unchanged consumer still rewritten", before, after, err)
+	}
+	old := f
+	f.Version++
+	f.MinViews = 1000
+	if err = s.SyncFlows(ctx, []twitch.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ObserveFlow(ctx, old, desc); err == nil {
+		t.Fatal("stale discovery changed consumers after settings revision")
+	}
+	f.ExcludedSourceIDs = []string{asc[0].ID}
+	if err = s.SyncFlows(ctx, []twitch.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SyncExclusions(ctx, twitch.CollectorConfig{Flows: []twitch.Flow{f}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SyncExclusions(ctx, cfg); err == nil {
+		t.Fatal("stale exclusions accepted after settings revision")
+	}
+	var excluded bool
+	if err = s.pool.QueryRow(ctx, `SELECT excluded FROM twitch_collector.consumers WHERE flow_id=$1 AND clip_id=$2`, f.ID, asc[0].ID).Scan(&excluded); err != nil || !excluded {
+		t.Fatal("stale exclusions removed current operator decision", excluded, err)
+	}
+	// Changing monitoring counters is not a configuration edit and cannot
+	// re-evaluate/rewrite all consumers every five seconds.
+	if err = s.pool.QueryRow(ctx, `SELECT xmin::text FROM twitch_collector.flows WHERE id=$1`, f.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	f.FoundClips, f.ReadyOutputs, f.BlockReason = 500, 20, "calendar full"
+	f.LastCheckedAt = &now
+	if err = s.SyncFlows(ctx, []twitch.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT xmin::text FROM twitch_collector.flows WHERE id=$1`, f.ID).Scan(&after); err != nil || before != after {
+		t.Fatal("runtime counters changed stored flow configuration", before, after, err)
+	}
 }

@@ -128,6 +128,9 @@ func createFlowCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.Compilat
 	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET work_started_at=COALESCE(work_started_at,$2)WHERE id=$1`, f.ID, now); err != nil {
 		return domain.Compilation{}, err
 	}
+	if err = tightenQueuedRender(ctx, tx, rid, now); err != nil {
+		return domain.Compilation{}, err
+	}
 	return compilationByID(ctx, tx, id)
 }
 

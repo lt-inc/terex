@@ -132,9 +132,9 @@ CASE
  WHERE r.bucket=o.bucket AND r.object=o.object AND (p.status IN('scheduled','queued','retry_wait','uploading','uploaded','processing','verifying','needs_attention')
  OR(p.started_at IS NOT NULL AND p.status NOT IN('published','cancelled')))) THEN 'Запланированный выпуск или незавершённая публикация'
  WHEN EXISTS(SELECT 1 FROM twitch_storage_references r JOIN render_attempts a ON a.revision_id=r.revision_id
- WHERE r.bucket=o.bucket AND r.object=o.object AND a.status='active' AND a.lease_until>$1) OR
+ WHERE r.bucket=o.bucket AND r.object=o.object AND a.status='active' AND ((a.execution_started_at IS NOT NULL AND a.lease_until>$1) OR (a.execution_started_at IS NULL AND a.dispatch_deadline>$1))) OR
  EXISTS(SELECT 1 FROM render_attempts a JOIN clip_revisions rv ON rv.id=a.revision_id JOIN clips c ON c.clip_id=rv.clip_id JOIN jobs j ON j.job_id=c.job_id
- WHERE j.source_kind IN('twitch','twitch_compilation') AND a.status='active' AND a.lease_until>$1 AND (o.object LIKE '%'||a.id||'.mp4' OR o.object LIKE '%'||a.id||'.mp4.original.mp4')) THEN 'Активный рендер'
+ WHERE j.source_kind IN('twitch','twitch_compilation') AND a.status='active' AND ((a.execution_started_at IS NOT NULL AND a.lease_until>$1) OR (a.execution_started_at IS NULL AND a.dispatch_deadline>$1)) AND (o.object LIKE '%'||a.id||'.mp4' OR o.object LIKE '%'||a.id||'.mp4.original.mp4')) THEN 'Принятая очередь рендера или активный рендер'
  WHEN EXISTS(SELECT 1 FROM twitch_storage_references r JOIN twitch_imports i ON i.id=r.import_id
  WHERE r.bucket=o.bucket AND r.object=o.object AND(i.upload_claim_until>$1 OR i.upload_expires_at>$1) AND i.media_state<>'ready') THEN 'Активная загрузка или проверка файла'
  WHEN EXISTS(SELECT 1 FROM twitch_storage_references r JOIN twitch_preparation_sources ps ON ps.import_id=r.import_id

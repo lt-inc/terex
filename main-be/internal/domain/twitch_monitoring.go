@@ -14,21 +14,26 @@ type TwitchMonitoringRepo interface {
 }
 
 type TwitchCollectorStatus struct {
-	Available        bool                `json:"available"`
-	Running          bool                `json:"running"`
-	Paused           bool                `json:"paused"`
-	CredentialsReady bool                `json:"credentials_ready"`
-	ConfigAvailable  bool                `json:"config_available"`
-	ConfigObservedAt *time.Time          `json:"config_observed_at,omitempty"`
-	LastCheckAt      *time.Time          `json:"last_check_at,omitempty"`
-	LastError        string              `json:"last_error,omitempty"`
-	BlockReason      string              `json:"block_reason,omitempty"`
-	Channels         int                 `json:"channels"`
-	Queued           int                 `json:"queued"`
-	Downloading      int                 `json:"downloading"`
-	Imported         int                 `json:"imported"`
-	Failed           int                 `json:"failed"`
-	Runtime          *twitch.RuntimeWork `json:"runtime,omitempty"`
+	Available            bool                `json:"available"`
+	Running              bool                `json:"running"`
+	Paused               bool                `json:"paused"`
+	CredentialsReady     bool                `json:"credentials_ready"`
+	ConfigAvailable      bool                `json:"config_available"`
+	ConfigObservedAt     *time.Time          `json:"config_observed_at,omitempty"`
+	LastCheckAt          *time.Time          `json:"last_check_at,omitempty"`
+	LastError            string              `json:"last_error,omitempty"`
+	BlockReason          string              `json:"block_reason,omitempty"`
+	Channels             int                 `json:"channels"`
+	Queued               int                 `json:"queued"`
+	WaitingAssignment    int                 `json:"waiting_assignment"`
+	VerificationPending  int                 `json:"verification_pending"`
+	Verifying            int                 `json:"verifying"`
+	OldestAuthorizedAt   *time.Time          `json:"oldest_authorized_at,omitempty"`
+	OldestVerificationAt *time.Time          `json:"oldest_verification_at,omitempty"`
+	Downloading          int                 `json:"downloading"`
+	Imported             int                 `json:"imported"`
+	Failed               int                 `json:"failed"`
+	Runtime              *twitch.RuntimeWork `json:"runtime,omitempty"`
 }
 
 type TwitchCollectorMonitoring interface {
@@ -37,13 +42,14 @@ type TwitchCollectorMonitoring interface {
 }
 
 type TwitchMonitoringSnapshot struct {
-	CollectorStatus     TwitchCollectorStatus     `json:"collector_status"`
-	CollectorObservedAt *time.Time                `json:"collector_observed_at,omitempty"`
-	Counts              []twitch.StageCount       `json:"counts"`
-	ActiveTasks         []twitch.ActiveTask       `json:"active_tasks"`
-	ActiveTotal         int                       `json:"active_total"`
-	Discovery           []json.RawMessage         `json:"discovery"`
-	DiagnosticsErrors   []TwitchMonitoringFailure `json:"diagnostics_errors"`
+	CollectorStatus      TwitchCollectorStatus     `json:"collector_status"`
+	CollectorObservedAt  *time.Time                `json:"collector_observed_at,omitempty"`
+	Counts               []twitch.StageCount       `json:"counts"`
+	ActiveTasks          []twitch.ActiveTask       `json:"active_tasks"`
+	ActiveTotal          int                       `json:"active_total"`
+	OldestRenderQueuedAt *time.Time                `json:"oldest_render_queued_at,omitempty"`
+	Discovery            []json.RawMessage         `json:"discovery"`
+	DiagnosticsErrors    []TwitchMonitoringFailure `json:"diagnostics_errors"`
 }
 
 type TwitchMonitoringFailure struct {

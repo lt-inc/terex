@@ -15,7 +15,7 @@ func (s *Service) FlowDiagnostics(ctx context.Context, id string) (domain.FlowDi
 	s.mu.Lock()
 	config := s.configObservation
 	s.mu.Unlock()
-	if config.err != nil || config.observedAt.IsZero() || time.Since(config.observedAt) > configFreshness {
+	if config.observedAt.IsZero() || time.Since(config.observedAt) > s.configMaxAge {
 		return domain.FlowDiagnostics{}, errors.New("flow diagnostics unavailable: no recent Terex settings observation")
 	}
 	repo, ok := s.store.(interface {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"reflect"
 	"strings"
@@ -509,7 +510,16 @@ func (s *Service) Claim(ctx context.Context, q *w.ClaimRequest) (*w.Lease, error
 	return s.Coordinator.ClaimWorkflow(ctx, q, s.now())
 }
 func (s *Service) Renew(ctx context.Context, q *w.LeaseRequest) (*w.Permit, error) {
-	return s.Coordinator.RenewWorkflow(ctx, q, s.now())
+	started := time.Now()
+	p, err := s.Coordinator.RenewWorkflow(ctx, q, s.now())
+	result := "denied"
+	if err != nil {
+		result = "error"
+	} else if p != nil && p.Allowed {
+		result = "allowed"
+	}
+	slog.InfoContext(ctx, "workflow lease renewed", "attempt_id", q.AttemptID, "expected_version", q.ExpectedVersion, "result", result, "duration_ms", time.Since(started).Milliseconds(), "err", err)
+	return p, err
 }
 func (s *Service) Checkpoint(ctx context.Context, q *w.CheckpointRequest) (*w.Result, error) {
 	ok, err := s.Coordinator.CheckpointWorkflow(ctx, q, s.now())

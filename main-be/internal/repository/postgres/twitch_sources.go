@@ -309,14 +309,17 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	if err = tx.QueryRow(ctx, `WITH reserved AS(SELECT import_id,broadcaster_id FROM twitch_download_reservations WHERE(created_at AT TIME ZONE $1)::date=$2::date AND import_id<>$4 UNION SELECT g.import_id,i.request->'source'->>'broadcaster_id' FROM twitch_download_grants g JOIN twitch_imports i ON i.id=g.import_id WHERE(g.created_at AT TIME ZONE $1)::date=$2::date AND g.import_id<>$4 AND g.state<>'released') SELECT count(DISTINCT import_id),count(DISTINCT import_id)FILTER(WHERE broadcaster_id=$3)FROM reserved`, settings.Timezone, day, r.Source.BroadcasterID, id).Scan(&total, &channel); err != nil {
 		return out, err
 	}
-	if total >= settings.DailyDownloads || channel >= settings.PerChannelDailyDownloads {
-		return out, fmt.Errorf("%w: достигнут общий лимит скачивания", domain.ErrConflict)
+	if total >= settings.DailyDownloads {
+		return out, waitPreparation("daily_download_limit", "Достигнут общий дневной лимит скачиваний", now)
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(i.media_id,i.id)) FROM twitch_imports i WHERE `+pendingTwitchSource).Scan(&backlog); err != nil {
+	if channel >= settings.PerChannelDailyDownloads {
+		return out, waitPreparation("broadcaster_daily_limit", "Достигнут дневной лимит скачиваний для этого стримера", now)
+	}
+	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(i.media_id,i.id)) FROM twitch_imports i WHERE i.id<>$1 AND (`+pendingTwitchSource+`)`, id).Scan(&backlog); err != nil {
 		return out, err
 	}
 	if backlog >= settings.BacklogLimit {
-		return out, fmt.Errorf("%w: очередь проверки заполнена", domain.ErrConflict)
+		return out, waitPreparation("backlog_full", "Достигнут лимит уникальных исходников в подготовке; существующие загрузки продолжают проверяться", now)
 	}
 	parentGeneration := r.UploadGeneration
 	generation++
@@ -540,6 +543,9 @@ func createFlowShort(ctx context.Context, tx pgx.Tx, id, flow string, now time.T
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_flow_sources SET reserved_at=COALESCE(reserved_at,$3),config=$4,flow_version=$5 WHERE flow_id=$1 AND import_id=$2`, flow, id, now, mustJSON(f), f.Version); err != nil {
+		return err
+	}
+	if err = tightenQueuedRender(ctx, tx, rid, now); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE twitch_flows SET work_started_at=COALESCE(work_started_at,$2)WHERE id=$1`, flow, now)

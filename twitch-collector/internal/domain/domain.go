@@ -55,14 +55,18 @@ type Clip struct {
 }
 
 type Task struct {
-	Epoch       int64
-	Clip        Clip
-	Token       string
-	Attempt     int
-	FlowID      string
-	FlowVersion int
-	Reservation twitch.Import
-	Uploaded    *UploadedMedia
+	Completion    bool
+	DispatchState string
+	ErrorCode     string
+	TransferPhase string
+	Epoch         int64
+	Clip          Clip
+	Token         string
+	Attempt       int
+	FlowID        string
+	FlowVersion   int
+	Reservation   twitch.Import
+	Uploaded      *UploadedMedia
 }
 
 type FailedImport struct {
@@ -84,6 +88,8 @@ type ClipStatus struct {
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	Attempt       int        `json:"attempt"`
+	DispatchState string     `json:"dispatch_state,omitempty"`
+	ReasonCode    string     `json:"reason_code,omitempty"`
 }
 
 // DiscoveryReport describes a bounded metadata search, never a download queue.
@@ -125,20 +131,25 @@ type FlowTwitch interface {
 }
 
 type Status struct {
-	Runtime          *twitch.RuntimeWork `json:"runtime,omitempty"`
-	ConfigObservedAt *time.Time          `json:"config_observed_at,omitempty"`
-	ConfigAvailable  bool                `json:"config_available"`
-	Running          bool                `json:"running"`
-	Paused           bool                `json:"paused"`
-	CredentialsReady bool                `json:"credentials_ready"`
-	LastCheckAt      *time.Time          `json:"last_check_at,omitempty"`
-	LastError        string              `json:"last_error,omitempty"`
-	BlockReason      string              `json:"block_reason,omitempty"`
-	Channels         int                 `json:"channels"`
-	Queued           int                 `json:"queued"`
-	Downloading      int                 `json:"downloading"`
-	Imported         int                 `json:"imported"`
-	Failed           int                 `json:"failed"`
+	Runtime              *twitch.RuntimeWork `json:"runtime,omitempty"`
+	ConfigObservedAt     *time.Time          `json:"config_observed_at,omitempty"`
+	ConfigAvailable      bool                `json:"config_available"`
+	Running              bool                `json:"running"`
+	Paused               bool                `json:"paused"`
+	CredentialsReady     bool                `json:"credentials_ready"`
+	LastCheckAt          *time.Time          `json:"last_check_at,omitempty"`
+	LastError            string              `json:"last_error,omitempty"`
+	BlockReason          string              `json:"block_reason,omitempty"`
+	Channels             int                 `json:"channels"`
+	Queued               int                 `json:"queued"`
+	Downloading          int                 `json:"downloading"`
+	Imported             int                 `json:"imported"`
+	Failed               int                 `json:"failed"`
+	WaitingAssignment    int                 `json:"waiting_assignment"`
+	VerificationPending  int                 `json:"verification_pending"`
+	Verifying            int                 `json:"verifying"`
+	OldestAuthorizedAt   *time.Time          `json:"oldest_authorized_at,omitempty"`
+	OldestVerificationAt *time.Time          `json:"oldest_verification_at,omitempty"`
 }
 
 type Download struct {
