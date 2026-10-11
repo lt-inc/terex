@@ -6,7 +6,8 @@ For the existing k3s deployment, see [the staging setup guide](../docs/TWITCH-K8
 
 Collection starts disabled. Enable the service and create an active publication flow with a confirmed YouTube destination before using Check now. Changing the polling interval alone does not enable collection. See [publication flows and staging rollout](../docs/TWITCH-FLOWS.ru.md). The panel displays the current blocking reason. Calendar, diagnostics, clip lists and editors load on opening or user actions; use their Refresh button for later updates. Failed refreshes preserve the last successful data. Only an active full reset polls its progress automatically.
 
-Collector control configuration still refreshes independently every five seconds.
+Collector control configuration still refreshes independently every five seconds,
+with one request at a time and an eight-second response deadline.
 It uses a lean backend read without UI counters or calendar scans. A failed request
 reports a specific timeout, DNS or connection error with endpoint and elapsed time;
 it does not mean an immediate pause while the last confirmed snapshot is fresh.

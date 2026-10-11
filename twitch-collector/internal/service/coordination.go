@@ -44,7 +44,10 @@ func (s *Service) reconcile(ctx context.Context) {
 	ticker := time.NewTicker(s.configInterval)
 	defer ticker.Stop()
 	for {
-		request, cancel := context.WithTimeout(ctx, 3*time.Second)
+		// Leave room for transient DB/CPU contention on staging. This is only
+		// the control read deadline; the 30s freshness gate and lease renewals
+		// continue to fence work independently.
+		request, cancel := context.WithTimeout(ctx, 8*time.Second)
 		cfg, err := s.fetchCollectorConfig(request, api)
 		cancel()
 		if err != nil {
