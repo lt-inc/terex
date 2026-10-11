@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"terex/gpu-be/internal/domain"
 	"terex/gpu-be/internal/service/renderer"
@@ -13,11 +14,13 @@ import (
 
 type testCoordinator struct {
 	workflow.Coordinator
-	lease    *workflow.Lease
-	permit   *workflow.Permit
-	renewErr error
-	failErr  error
-	failure  *workflow.FailRequest
+	lease       *workflow.Lease
+	permit      *workflow.Permit
+	renewErr    error
+	failErr     error
+	failure     *workflow.FailRequest
+	renewCalls  int
+	renewErrors []error
 }
 
 func (c *testCoordinator) Claim(context.Context, *workflow.ClaimRequest) (*workflow.Lease, error) {
@@ -25,6 +28,10 @@ func (c *testCoordinator) Claim(context.Context, *workflow.ClaimRequest) (*workf
 }
 
 func (c *testCoordinator) Renew(context.Context, *workflow.LeaseRequest) (*workflow.Permit, error) {
+	c.renewCalls++
+	if c.renewCalls <= len(c.renewErrors) {
+		return nil, c.renewErrors[c.renewCalls-1]
+	}
 	return c.permit, c.renewErr
 }
 
@@ -54,6 +61,7 @@ func TestHandlePreservesRenderErrorWhenFailureReportFails(t *testing.T) {
 			coordinator := &testCoordinator{
 				lease: &workflow.Lease{
 					Granted: true, AttemptID: "attempt", LeaseToken: "lease", ExpectedVersion: 1,
+					ExpiresAt: time.Now().Add(2 * time.Minute),
 					Render: &workflow.RenderWork{
 						ClipID: "clip", RevisionID: 1, EndSec: 1,
 						Source: workflow.SourceManifest{Original: domain.ObjectRef{Bucket: domain.BucketDownloads, Object: "source.mp4"}},
@@ -78,6 +86,32 @@ func TestHandlePreservesRenderErrorWhenFailureReportFails(t *testing.T) {
 				t.Fatalf("incorrect persisted render failure: %+v", coordinator.failure)
 			}
 		})
+	}
+}
+
+func TestRenewRetriesOnlyInsideConfirmedLease(t *testing.T) {
+	start := time.Now()
+	for _, recover := range []bool{true, false} {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		now := start
+		confirmed := start.Add(20 * time.Second)
+		c := &testCoordinator{renewErrors: []error{context.DeadlineExceeded}, permit: &workflow.Permit{Allowed: true, ExpiresAt: start.Add(2 * time.Minute)}}
+		if !recover {
+			c.renewErr = context.DeadlineExceeded
+			c.permit = nil
+		}
+		w := &Worker{Coordinator: c, leaseNow: func() time.Time { return now }, leaseWait: func(_ context.Context, d time.Duration) error { now = now.Add(d); return nil }}
+		got := w.renewRenderLease(ctx, cancel, &workflow.LeaseRequest{}, &confirmed)
+		if recover {
+			if !got || c.renewCalls != 2 || ctx.Err() != nil || !confirmed.Equal(c.permit.ExpiresAt) {
+				t.Fatalf("temporary outage did not recover: %v calls=%d confirmed=%v", got, c.renewCalls, confirmed)
+			}
+		} else {
+			if got || now.After(start.Add(15*time.Second)) || !errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+				t.Fatalf("renderer outlived confirmed fence: %v time=%v cause=%v", got, now, context.Cause(ctx))
+			}
+		}
+		cancel(nil)
 	}
 }
 

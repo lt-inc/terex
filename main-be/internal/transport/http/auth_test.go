@@ -26,6 +26,8 @@ func TestOperatorAuthCapabilities(t *testing.T) {
 		{"POST", "/api/twitch/reset/preview", "Bearer service-test", "", 403},
 		{"POST", "/api/twitch/reset/collector-ack", "Bearer service-test", "", 204},
 		{"POST", "/api/twitch/collector/admissions", "Bearer service-test", "", 204},
+		{"POST", "/api/twitch/collector/pressure", "Bearer service-test", "", 204},
+		{"GET", "/api/twitch/collector/pressure", "Bearer service-test", "", 403},
 		{"POST", "/api/clips/id/approve", "Bearer service-test", "", 403},
 		{"GET", "/api/accounts/list", "Bearer service-test", "", 403},
 		{"GET", "/api/jobs", "", "", 401},

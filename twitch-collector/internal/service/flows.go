@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"terex/proto/telemetry"
@@ -170,10 +169,6 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 		s.logGate(ctx, "discovery", message, err)
 		return
 	}
-	if err = syncFlowConfig(ctx, store, cfg); err != nil {
-		message = safeErrorMessage(err, "Не удалось сохранить потоки")
-		return
-	}
 	channels, err := s.store.ListChannels(ctx)
 	if err != nil {
 		message = safeErrorMessage(err, "Не удалось загрузить каналы")
@@ -324,7 +319,9 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 			log.ErrorContext(ctx, message, errorFields(err)...)
 			continue
 		}
-		if err = store.ObserveFlow(ctx, flow, all); err != nil {
+		observedFlow := flow
+		observedFlow.ExcludedSourceIDs = append(append([]string(nil), flow.ExcludedSourceIDs...), cfg.BlockedSourceIDs...)
+		if err = store.ObserveFlow(ctx, observedFlow, all); err != nil {
 			message = safeErrorMessage(err, "Не удалось сохранить потребителей")
 			continue
 		}
@@ -407,23 +404,13 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 	}
 	// Reuse is observed before the backlog/download gate. Round-robin interleaves
 	// candidate lists so one large category cannot spend the whole shared budget.
-	pending, err := s.terex.PendingCount(ctx)
-	if err != nil {
-		message = "Не удалось проверить очередь Terex"
-		return
-	}
-	if pending >= cfg.Settings.BacklogLimit {
-		message = fmt.Sprintf("Ожидают обработки %d источников; предел %d", pending, cfg.Settings.BacklogLimit)
-		return
-	}
 	if cfg.Settings.AdmissionMode == "enforce" {
-		s.mu.Lock()
-		s.lastAdmissionsAt = time.Time{}
-		s.mu.Unlock()
-		reserved, err = s.queueAdmissions(ctx, cfg)
-		if err != nil {
-			message = safeErrorMessage(err, "Не удалось получить назначения main-be")
-		}
+		// The single reconciler owns admissions. Discovery only persists metadata.
+		wake(s.wakeDownload)
+		return
+	}
+	if err = s.downloadPressure(cfg); err != nil {
+		message = safeErrorMessage(err, "Ожидание очереди Terex")
 		return
 	}
 	// Shadow calculates the new distribution without changing current behavior.
@@ -457,82 +444,108 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 	}
 }
 
-func (s *Service) flowWorkerOnce(ctx context.Context, api domain.FlowTerex) {
+func (s *Service) flowWorkerOnce(ctx context.Context, api domain.FlowTerex) bool {
 	cfg, err := s.collectorConfig(ctx, api)
-	if err == nil {
-		if skip, e := s.handleReset(ctx, cfg); skip || e != nil {
-			return
-		}
-	}
 	if reason := flowBlockReason(cfg, err, s.twitch.Ready()); reason != "" {
 		s.logGate(ctx, "worker", reason, err)
-		return
+		return false
 	}
 	ctx, release, err := s.beginResetWorker(ctx, cfg.Epoch)
 	if err != nil {
-		return
+		return false
 	}
 	defer release()
 	store := s.store.(domain.FlowStore)
-	if err = syncFlowConfig(ctx, store, cfg); err != nil {
-		s.logGate(ctx, "worker", "Не удалось обновить состояние потоков", err)
-		return
-	}
-	s.reconcileRevalidations(ctx, api, cfg.Epoch)
-	s.reconcileFailedImports(ctx, api, cfg.Epoch)
-	if cfg.Settings.AdmissionMode == "enforce" {
-		if _, err = s.queueAdmissions(ctx, cfg); err != nil {
-			s.logGate(ctx, "admissions", "Не удалось получить назначения подготовки", err)
-			return
+	allowNewPhysical := true
+	if err = s.downloadPressure(cfg); err != nil {
+		s.logGate(ctx, "worker", safeErrorMessage(err, "Новые скачивания ожидают очереди Terex"), err)
+		var failure *domain.Failure
+		if !errors.As(err, &failure) || failure.Code != "backlog_full" {
+			return false
 		}
+		allowNewPhysical = false
 	}
-	pending, err := s.terex.PendingCount(ctx)
-	if err != nil || pending >= cfg.Settings.BacklogLimit {
-		s.logGate(ctx, "worker", "Очередь Terex недоступна или заполнена", err)
-		return
+	if allowNewPhysical {
+		s.logGate(ctx, "worker", "", nil)
 	}
-	s.logGate(ctx, "worker", "", nil)
-	task, err := s.store.Claim(ctx, 30*time.Second)
+	queue, ok := s.store.(dispatchStore)
+	if !ok {
+		return false
+	}
+	var task *domain.Task
+	if allowNewPhysical {
+		task, err = queue.ClaimDownload(ctx, 30*time.Second)
+	} else {
+		task, err = queue.ClaimExistingDownload(ctx, 30*time.Second)
+	}
 	if err != nil {
 		s.logGate(ctx, "task_claim", "Не удалось взять задание", err)
-		return
+		return false
 	}
 	if task == nil {
-		return
+		return false
 	}
 	if task.FlowID == "" {
 		s.process(ctx, *task, cfg.Settings)
-		return
+		return true
 	}
 	s.processFlow(ctx, *task, api, store)
+	return true
 }
 func (s *Service) processFlow(parent context.Context, task domain.Task, api domain.FlowTerex, store domain.FlowStore) {
+	if task.Uploaded != nil || task.Reservation.UploadGeneration > 0 && task.ErrorCode != "upload_missing" && task.TransferPhase != "reserved" {
+		task.Completion = true
+	}
+	leaseTask := task
 	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(nil)
 	ctx, span := telemetry.Start(ctx, "collector.process_flow")
 	defer span.End()
 	log := s.log.With("clip_id", task.Clip.ID, "source_id", task.Clip.ID, "flow_id", task.FlowID, "attempt", task.Attempt)
 	stage := "reservation"
-	guard := func(c context.Context) error {
+	controlGuard := func(c context.Context) error {
 		cfg, e := s.collectorConfig(c, api)
-		if e != nil || !cfg.Settings.Enabled || cfg.Maintenance != nil || task.Epoch != cfg.Epoch {
+		if e != nil || cfg.Maintenance != nil || !cfg.Settings.Enabled || leaseTask.Epoch != cfg.Epoch {
 			return domain.ErrPaused
 		}
-		if e = syncFlowConfig(c, store, cfg); e != nil {
-			return e
+		for _, id := range cfg.BlockedSourceIDs {
+			if id == leaseTask.Clip.ID {
+				return &domain.Failure{Kind: "blocked", Code: "source_rejected", Message: "Источник исключён из всех потоков"}
+			}
 		}
-		active, e := store.HasActiveConsumer(c, task.Clip.ID)
-		if e != nil {
-			return e
+		if !leaseTask.Completion {
+			if !cfg.Settings.Enabled {
+				return domain.ErrPaused
+			}
+			active, e := store.HasActiveConsumer(c, leaseTask.Clip.ID)
+			if e != nil {
+				return e
+			}
+			if !active {
+				return domain.ErrPaused
+			}
+			ch, e := s.store.GetChannel(c, leaseTask.Clip.ChannelID)
+			if e != nil {
+				return e
+			}
+			if ch.Paused || ch.Archived {
+				return domain.ErrPaused
+			}
 		}
-		if !active {
-			return domain.ErrPaused
+		return nil
+	}
+	guard := func(c context.Context) error {
+		if err := controlGuard(c); err != nil {
+			return err
 		}
-		return s.store.ValidLease(c, task)
+		return s.store.ValidLease(c, leaseTask)
 	}
 	done := make(chan struct{})
-	defer close(done)
+	heartbeatStopped := make(chan struct{})
+	defer func() { cancel(nil); close(done); <-heartbeatStopped }()
 	go func() {
+		defer close(heartbeatStopped)
+		confirmed := time.Now().Add(30 * time.Second)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -542,14 +555,18 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if e := guard(ctx); e != nil {
+				request, end := context.WithTimeout(ctx, 3*time.Second)
+				e := controlGuard(request)
+				end()
+				if e != nil {
 					cancel(e)
 					return
 				}
-				if e := s.store.Renew(ctx, task, 30*time.Second); e != nil {
+				if e := s.renewFlowLease(ctx, leaseTask, confirmed); e != nil {
 					cancel(e)
 					return
 				}
+				confirmed = time.Now().Add(30 * time.Second)
 			}
 		}
 	}()
@@ -613,18 +630,17 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			return
 		}
 		retry := RetryAt(task.Attempt, f, time.Now())
+		if task.Completion {
+			retry = CompletionRetryAt(task.Attempt, f, time.Now())
+		}
 		if f.Code == "flow_version_changed" {
 			retry = nil
 		}
-		if f.Code == "invalid_media" && task.Uploaded != nil {
-			if durable, ok := store.(interface {
-				ClearUploaded(context.Context, domain.Task) error
-			}); ok {
-				_ = durable.ClearUploaded(save, task)
-			}
-			task.Uploaded = nil
+		if retry != nil {
+			log.WarnContext(save, "collector task retry scheduled", "stage", stage, "reason_code", f.Code, "reason", f.Message, "retry_at", retry)
+		} else {
+			log.ErrorContext(save, "collector task failed", "stage", stage, "reason_code", f.Code, "reason", f.Message)
 		}
-		log.ErrorContext(save, "collector task failed", "stage", stage, "reason", f.Message, "retry_at", retry)
 		if durable, ok := s.store.(interface {
 			FailWithCode(context.Context, domain.Task, string, string, string, *time.Time) error
 		}); ok {
@@ -648,7 +664,8 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 	}
 	// A quarantined upload survives collector restarts. Retry verification for
 	// this exact generation before considering another download or upload.
-	if task.Uploaded != nil {
+	if task.Completion || task.Uploaded != nil || task.Reservation.UploadGeneration > 0 && task.ErrorCode != "upload_missing" && task.TransferPhase != "reserved" {
+		task.Completion = true
 		stage = "verification"
 		staged, ok := api.(stagedImportAPI)
 		if !ok {
@@ -672,7 +689,27 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			fail(&domain.Failure{Kind: "expired", Code: "upload_generation_changed", Message: "Загрузка уже заменена новой попыткой или сбросом"})
 			return
 		}
-		if completed.MediaState != "ready" && completed.State != "ready" {
+		if completed.Rejected || completed.MediaState == "expired" || completed.MediaState == "failed" || completed.MediaState == "" && completed.State == "failed" {
+			fail(&domain.Failure{Kind: "blocked", Code: "upload_unavailable", Message: "Terex подтвердил отклонение, недоступность или ошибку этой загрузки; нужна ручная проверка состояния"})
+			return
+		}
+		if !domain.MediaReady(completed) {
+			if task.Uploaded == nil && completed.SHA256 != "" && completed.SizeBytes > 0 {
+				media := domain.UploadedMedia{SHA256: completed.SHA256, SizeBytes: completed.SizeBytes, Phase: "uploaded"}
+				if durable, ok := store.(interface {
+					SaveUploaded(context.Context, domain.Task, domain.UploadedMedia) error
+				}); ok {
+					if e = durable.SaveUploaded(ctx, task, media); e != nil {
+						fail(e)
+						return
+					}
+					task.Uploaded = &media
+				}
+			}
+			if task.Uploaded == nil || task.Uploaded.SHA256 == "" || task.Uploaded.SizeBytes <= 0 {
+				fail(&domain.Failure{Kind: "reconciliation", Code: "upload_metadata_missing", Message: "Сохранена загрузка без контрольной суммы и размера; проверяется её точное состояние, повторное скачивание не запущено", Retryable: true})
+				return
+			}
 			completed, e = staged.CompleteImport(ctx, task.Reservation, *task.Uploaded)
 		}
 		if e != nil {
@@ -696,7 +733,20 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			fail(e)
 			return
 		}
-		if e = s.store.Complete(ctx, task, completed.ImportID, task.Uploaded.SHA256); e != nil {
+		if !domain.MediaReady(completed) {
+			// HTTP 202 is not media readiness. Keep the exact generation queued.
+			fail(&domain.Failure{Kind: "verification", Code: "verification_pending", Message: "Terex принял проверку, но файл ещё не готов; ожидается завершение этой загрузки", Retryable: true})
+			return
+		}
+		if completed.Epoch != task.Epoch || completed.UploadGeneration != task.Reservation.UploadGeneration || completed.ImportID != task.Reservation.ImportID {
+			fail(&domain.Failure{Kind: "expired", Code: "upload_generation_changed", Message: "Ответ проверки относится к другой загрузке"})
+			return
+		}
+		sha := completed.SHA256
+		if task.Uploaded != nil {
+			sha = task.Uploaded.SHA256
+		}
+		if e = s.store.Complete(ctx, task, completed.ImportID, sha); e != nil {
 			fail(e)
 			return
 		}
@@ -719,7 +769,7 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 		fail(err)
 		return
 	}
-	if imp.MediaState == "ready" || imp.State == "ready" {
+	if domain.MediaReady(imp) {
 		if err = s.store.Complete(ctx, task, imp.ImportID, imp.SHA256); err != nil {
 			fail(err)
 		}
@@ -762,39 +812,23 @@ func (s *Service) processFlow(parent context.Context, task domain.Task, api doma
 			return
 		}
 		task.Uploaded = &media
-		if err = staged.PutImport(ctx, imp, *file, guard); err != nil {
+		putErr := staged.PutImport(ctx, imp, *file, guard)
+		if putErr == nil {
+			media.Phase = "uploaded"
+		} else {
+			log.WarnContext(ctx, "collector upload result uncertain; verification will reconcile", "import_id", imp.ImportID, "reason", safeErrorMessage(putErr, "PUT response unavailable"))
+		}
+		queue, ok := s.store.(dispatchStore)
+		if !ok {
+			fail(errors.New("durable completion queue unavailable"))
+			return
+		}
+		if err = queue.QueueCompletion(ctx, task, media); err != nil {
 			fail(err)
 			return
 		}
-		media.Phase = "uploaded"
-		if err = durable.SaveUploaded(ctx, task, media); err != nil {
-			fail(err)
-			return
-		}
-		stage = "verification"
-		if hasStage {
-			if err = stageStore.SetTaskStage(ctx, task, "verifying"); err != nil {
-				fail(err)
-				return
-			}
-		}
-		if err = guard(ctx); err != nil {
-			fail(err)
-			return
-		}
-		if _, err = staged.CompleteImport(ctx, imp, media); err != nil {
-			fail(err)
-			return
-		}
-		if err = guard(ctx); err != nil {
-			fail(err)
-			return
-		}
-		if err = s.store.Complete(ctx, task, imp.ImportID, file.SHA256); err != nil {
-			fail(err)
-			return
-		}
-		log.InfoContext(ctx, "collector import completed", "import_id", imp.ImportID, "stage", "complete")
+		wake(s.wakeCompletion)
+		log.InfoContext(ctx, "collector upload queued for verification", "import_id", imp.ImportID, "generation", imp.UploadGeneration, "phase", media.Phase, "dispatch_state", "verification_pending")
 		return
 	}
 	uploadGuards := 0

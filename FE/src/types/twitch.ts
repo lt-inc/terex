@@ -98,6 +98,11 @@ export interface TwitchCollectorStatus {
   last_error?: string;
   channels: number;
   queued: number;
+  waiting_assignment?: number;
+  verification_pending?: number;
+  verifying?: number;
+  oldest_authorized_at?: string;
+  oldest_verification_at?: string;
   downloading: number;
   imported: number;
   failed: number;

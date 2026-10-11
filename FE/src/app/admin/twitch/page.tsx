@@ -13,7 +13,7 @@ import {
   archiveTwitchFlow,
   restoreTwitchFlow,
 } from "@/lib/api";
-import { durationLabel } from "@/lib/twitch-status";
+import { durationLabel, queueAgeLabel } from "@/lib/twitch-status";
 import type { TwitchCollectorStatus, TwitchFlow } from "@/types/twitch";
 import type { AccountRecord } from "@/types";
 const button =
@@ -159,13 +159,15 @@ export default function TwitchFlowsPage() {
                   : "Collector работает по расписанию"}
             </span>
             <span className="text-slate-400">
-              {status.queued} в очереди · {status.downloading} скачивается ·{" "}
-              {status.imported} импортировано
+              {status.waiting_assignment ?? "—"} ждёт назначения · {status.queued} разрешено к скачиванию · {status.downloading} скачивается ·{" "}
+              {status.verification_pending ?? "—"} ждёт проверки · {status.verifying ?? "—"} проверяется · {status.imported} исходников готово
             </span>
             <Link href="/admin/twitch/settings" className="text-indigo-400">
               Общий бюджет →
             </Link>
           </div>
+          <p className="mt-2 text-xs text-slate-400">Ожидание назначения не занимает исполнителя. Уже загруженные файлы проверяются отдельно от скачивания; полный backlog не мешает завершению импорта.</p>
+          <p className="mt-1 text-xs text-slate-400">Самое старое разрешённое скачивание: {queueAgeLabel(status.oldest_authorized_at)}. Самая старая ожидающая проверка: {queueAgeLabel(status.oldest_verification_at)}.</p>
           {status.block_reason && (
             <p className="mt-2 text-amber-200">{status.block_reason}</p>
           )}

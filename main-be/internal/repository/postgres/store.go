@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5"
@@ -17,7 +19,13 @@ import (
 	"terex/proto/pgxutil"
 )
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool          *pgxpool.Pool
+	pressureMu    sync.Mutex
+	pressureCount int
+	pressureAt    time.Time
+	pressureEpoch int64
+}
 
 func New(ctx context.Context, dsn string) (*Store, error) {
 	cfg, err := pgxutil.ParseConfig(dsn)

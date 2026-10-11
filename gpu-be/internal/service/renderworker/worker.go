@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log/slog"
 	"terex/gpu-be/internal/domain"
 	"time"
@@ -18,6 +20,8 @@ type Worker struct {
 	Coordinator workflow.Coordinator
 	Renderer    *renderer.Service
 	WorkerID    string
+	leaseNow    func() time.Time
+	leaseWait   func(context.Context, time.Duration) error
 }
 
 var (
@@ -25,23 +29,92 @@ var (
 	errRenderLeaseRenewFailed = errors.New("renew render lease")
 )
 
-// A failed renewal must stop rendering immediately, but retain the dependency
-// error so a cancelled ffmpeg process does not hide why the work was stopped.
-func (w *Worker) renewRenderLease(ctx context.Context, cancel context.CancelCauseFunc, q *workflow.LeaseRequest) bool {
-	p, err := w.Coordinator.Renew(ctx, q)
-	if err != nil {
-		cancel(fmt.Errorf("%w: %w", errRenderLeaseRenewFailed, err))
-		return false
+// Retry transport failures only inside the last confirmed lease. The safety
+// margin also bounds the RPC itself, so a hung renewal cannot outlive its fence.
+func (w *Worker) renewRenderLease(ctx context.Context, cancel context.CancelCauseFunc, q *workflow.LeaseRequest, confirmed ...*time.Time) bool {
+	now := time.Now
+	if w.leaseNow != nil {
+		now = w.leaseNow
 	}
-	if p == nil {
-		cancel(fmt.Errorf("%w: coordinator returned no permit", errRenderLeaseRenewFailed))
-		return false
+	wait := func(ctx context.Context, d time.Duration) error {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			return nil
+		}
 	}
-	if !p.Allowed {
-		cancel(errRenderLeaseDenied)
-		return false
+	if w.leaseWait != nil {
+		wait = w.leaseWait
 	}
-	return true
+	var expiry *time.Time
+	if len(confirmed) > 0 {
+		expiry = confirmed[0]
+	}
+	delays := []time.Duration{time.Second, 2 * time.Second, 5 * time.Second}
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			return false
+		}
+		callCtx := ctx
+		callCancel := func() {}
+		if expiry != nil {
+			remaining := expiry.Sub(now()) - 5*time.Second
+			if remaining <= 0 {
+				if lastErr == nil {
+					lastErr = errors.New("last confirmed render lease expired")
+				}
+				cancel(fmt.Errorf("%w: %w", errRenderLeaseRenewFailed, lastErr))
+				return false
+			}
+			callCtx, callCancel = context.WithTimeout(ctx, min(5*time.Second, remaining))
+		}
+		p, err := w.Coordinator.Renew(callCtx, q)
+		callCancel()
+		if ctx.Err() != nil {
+			return false
+		}
+		if err == nil && p != nil && !p.Allowed {
+			cancel(errRenderLeaseDenied)
+			return false
+		}
+		if err == nil && p != nil && p.Allowed {
+			if expiry != nil {
+				if !p.ExpiresAt.After(now().Add(5 * time.Second)) {
+					cancel(fmt.Errorf("%w: invalid renewed expiry", errRenderLeaseRenewFailed))
+					return false
+				}
+				*expiry = p.ExpiresAt
+			}
+			return true
+		}
+		if err == nil {
+			cancel(fmt.Errorf("%w: coordinator returned no permit", errRenderLeaseRenewFailed))
+			return false
+		}
+		lastErr = err
+		c := status.Code(err)
+		// Unknown includes dependency failures returned by older coordinators.
+		// Permanent protocol errors must not consume the remaining lease.
+		transient := c == codes.Unavailable || c == codes.DeadlineExceeded || c == codes.ResourceExhausted || c == codes.Unknown
+		if expiry == nil || !transient {
+			cancel(fmt.Errorf("%w: %w", errRenderLeaseRenewFailed, err))
+			return false
+		}
+		delay := delays[min(attempt, len(delays)-1)]
+		remaining := expiry.Sub(now()) - 5*time.Second
+		if remaining <= 0 {
+			cancel(fmt.Errorf("%w: %w", errRenderLeaseRenewFailed, err))
+			return false
+		}
+		slog.WarnContext(ctx, "render lease renewal retry", "attempt_id", q.AttemptID, "retry_after_ms", delay.Milliseconds(), "confirmed_expiry", *expiry, "err", err)
+		if e := wait(ctx, min(delay, remaining)); e != nil {
+			return false
+		}
+	}
 }
 
 func renderCancellationError(ctx context.Context) error {
@@ -78,16 +151,21 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	done := make(chan struct{})
+	confirmedExpiry := l.ExpiresAt
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
 		for {
+			delay := min(10*time.Second, time.Until(confirmedExpiry)-5*time.Second)
+			if delay < 0 {
+				delay = 0
+			}
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
-				if !w.renewRenderLease(ctx, cancel, &q) {
+			case <-timer.C:
+				if !w.renewRenderLease(ctx, cancel, &q, &confirmedExpiry) {
 					return
 				}
 			}

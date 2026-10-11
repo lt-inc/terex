@@ -16,7 +16,7 @@ func secretEqual(a, b string) bool {
 }
 func collectorRoute(r *http.Request) bool {
 	p := r.URL.Path
-	if p == "/api/twitch/collector/admissions" || p == "/api/twitch/reset/collector-ack" {
+	if p == "/api/twitch/collector/admissions" || p == "/api/twitch/collector/pressure" || p == "/api/twitch/reset/collector-ack" {
 		return r.Method == http.MethodPost
 	}
 	if p == "/api/twitch/collector-config" {

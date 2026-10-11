@@ -99,9 +99,6 @@ func (s *Service) retryFlowClip(ctx context.Context, id string) error {
 		return err
 	}
 	defer release()
-	if err = syncFlowConfig(work, s.store.(domain.FlowStore), cfg); err != nil {
-		return err
-	}
 	failure, err := store.FailedForRetry(work, id)
 	if err != nil {
 		return err

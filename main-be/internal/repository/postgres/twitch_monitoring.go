@@ -20,9 +20,13 @@ func (s *Store) TwitchRuntimeWork(ctx context.Context, now time.Time) (out twitc
 		err = waitPreparation("twitch_reset", "Снимок мониторинга ожидает окончания сброса", now)
 		return
 	}
+	err = s.pool.QueryRow(ctx, `SELECT min(a.created_at) FROM render_attempts a JOIN clip_revisions r ON r.id=a.revision_id JOIN twitch_outputs o ON o.clip_id=r.clip_id WHERE a.status='active' AND a.execution_started_at IS NULL AND a.dispatch_deadline>$1`, now).Scan(&out.OldestRenderQueuedAt)
+	if err != nil {
+		return
+	}
 	rows, e := s.pool.Query(ctx, `SELECT 'import',state,'source',count(*)::integer FROM twitch_imports GROUP BY state
  UNION ALL SELECT CASE WHEN o.format='compilation' THEN 'compilation' ELSE 'render' END,
- CASE WHEN r.render_state='rendering' AND NOT EXISTS(SELECT 1 FROM render_attempts a WHERE a.revision_id=r.id AND a.status='active' AND a.lease_until>now()) THEN 'pending' ELSE r.render_state END,o.format,count(*)::integer
+ CASE WHEN EXISTS(SELECT 1 FROM render_attempts a WHERE a.revision_id=r.id AND a.status='active' AND a.execution_started_at IS NOT NULL AND a.lease_until>now()) THEN 'rendering' WHEN EXISTS(SELECT 1 FROM render_attempts a WHERE a.revision_id=r.id AND a.status='active' AND a.execution_started_at IS NULL AND a.dispatch_deadline>now()) THEN 'queued' WHEN r.render_state='rendering' THEN 'pending' ELSE r.render_state END,o.format,count(*)::integer
  FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id GROUP BY 1,2,3
  UNION ALL SELECT 'publication',CASE WHEN p.status='uploading' AND NOT EXISTS(SELECT 1 FROM publication_attempts a WHERE a.publication_id=p.id AND a.publication_version=p.version AND a.status='active' AND a.lease_until>now()) THEN 'needs_attention' ELSE p.status END,o.format,count(*)::integer FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id GROUP BY 2,3`)
 	if e != nil {
@@ -46,12 +50,12 @@ func (s *Store) TwitchRuntimeWork(ctx context.Context, now time.Time) (out twitc
 	rows, err = s.pool.Query(ctx, `WITH tasks AS (
  SELECT c.clip_id,c.title,o.flow_id,COALESCE(f.config->>'name',o.flow_id) flow_name,o.format,
  CASE WHEN o.format='compilation' THEN 'compilation' ELSE 'render' END stage,
- CASE WHEN a.id IS NULL THEN 'pending' ELSE r.render_state END state,0 attempt,a.created_at started_at,r.created_at updated_at,
+ CASE WHEN a.id IS NULL THEN 'pending' WHEN a.execution_started_at IS NULL THEN 'queued' ELSE 'rendering' END state,0 attempt,a.execution_started_at started_at,r.created_at updated_at,
  NULL::timestamptz next_attempt_at,'' error_kind,COALESCE(r.error,'') error,COALESCE(i.request->'source'->>'url','') source_url,
  '/admin/clips/'||c.clip_id terex_url
  FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id
  JOIN twitch_flows f ON f.id=o.flow_id LEFT JOIN twitch_imports i ON i.id=o.source_id
- LEFT JOIN LATERAL(SELECT id,created_at FROM render_attempts WHERE revision_id=r.id AND status='active' AND lease_until>$1 ORDER BY created_at DESC LIMIT 1)a ON true
+ LEFT JOIN LATERAL(SELECT id,created_at,execution_started_at FROM render_attempts WHERE revision_id=r.id AND status='active' AND ((execution_started_at IS NOT NULL AND lease_until>$1) OR (execution_started_at IS NULL AND dispatch_deadline>$1)) ORDER BY created_at DESC LIMIT 1)a ON true
  WHERE r.render_state IN('pending','rendering','queued')
  UNION ALL
  SELECT c.clip_id,c.title,o.flow_id,COALESCE(f.config->>'name',o.flow_id),o.format,'publication',CASE WHEN p.status='uploading' AND a.created_at IS NULL THEN 'needs_attention' ELSE p.status END,

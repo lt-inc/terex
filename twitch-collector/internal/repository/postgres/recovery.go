@@ -24,14 +24,14 @@ func (s *Store) SaveUploaded(ctx context.Context, t domain.Task, media domain.Up
 	if err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET uploaded=$3 WHERE `+validLease, t.Clip.ID, t.Token, raw)
+	tag, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET uploaded=$3,transfer_phase=$4 WHERE `+validLease, t.Clip.ID, t.Token, raw, media.Phase)
 	if err == nil && tag.RowsAffected() != 1 {
 		return domain.ErrLeaseLost
 	}
 	return err
 }
 func (s *Store) ClearUploaded(ctx context.Context, t domain.Task) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET uploaded=NULL WHERE `+validLease, t.Clip.ID, t.Token)
+	tag, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET uploaded=NULL,dispatch_state='authorized',error_code='upload_missing',transfer_phase='reserved',verification_attempts=0 WHERE `+validLease, t.Clip.ID, t.Token)
 	if err == nil && tag.RowsAffected() != 1 {
 		return domain.ErrLeaseLost
 	}
@@ -119,8 +119,9 @@ func (s *Store) ApplyRevalidation(ctx context.Context, f domain.FailedImport, r 
 	} else if r.State != "discovered" {
 		return domain.ErrConflict
 	}
-	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks SET state=$5,attempts=0,run_at=now(),last_error='',error_code='',failure_synced_at=NULL,revalidation_token=$2,flow_version=$6,lease_token=NULL,lease_expires_at=NULL,
+	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks SET state=$5,dispatch_state=CASE WHEN $5='queued' THEN 'verification_pending' ELSE 'waiting_assignment' END,attempts=0,verification_attempts=0,run_at=now(),last_error='',error_code='',failure_synced_at=NULL,revalidation_token=$2,flow_version=$6,lease_token=NULL,lease_expires_at=NULL,
 uploaded=CASE WHEN $5='queued' THEN uploaded ELSE NULL END,
+transfer_phase=CASE WHEN $5='queued' THEN transfer_phase ELSE '' END,
 reservation=CASE WHEN $5='discovered' THEN COALESCE(reservation,'{}'::jsonb)||jsonb_build_object('reservation_id','','upload_generation',0,'upload_import_id','','upload_url','','flow_id',$7::text,'flow_version',$6::int) ELSE reservation END,flow_id=$7
 WHERE clip_id=$1 AND state='failed' AND failure_token=$2 AND epoch=$3 AND updated_at=$4 AND epoch=(SELECT epoch FROM twitch_collector.state WHERE id=1)`, f.ClipID, f.FailureToken, r.Epoch, f.FailedAt, state, r.FlowVersion, r.FlowID)
 	if err != nil {

@@ -135,7 +135,7 @@ const pendingTwitchSource = `NOT i.rejected AND i.state NOT IN('discovered','fai
  OR(i.clip_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM twitch_outputs o WHERE o.clip_id=i.clip_id) AND EXISTS(SELECT 1 FROM clips c WHERE c.clip_id=i.clip_id AND c.approval='pending')))
  AND((SELECT mode FROM twitch_policy_settings WHERE id=1)<>'enforce'
  OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations pr ON pr.id=ps.reservation_id JOIN twitch_flows pf ON pf.id=pr.flow_id WHERE ps.import_id=i.id AND pr.state='active' AND pr.expires_at>now() AND pf.enabled AND NOT pf.archived)
- OR EXISTS(SELECT 1 FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN render_attempts ra ON ra.revision_id=c.latest_revision_id WHERE(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=c.latest_revision_id AND ci.source_id=i.id)) AND ra.status='active' AND ra.lease_until>now()))`
+ OR EXISTS(SELECT 1 FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN render_attempts ra ON ra.revision_id=c.latest_revision_id WHERE(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=c.latest_revision_id AND ci.source_id=i.id)) AND ra.status='active' AND ((ra.execution_started_at IS NOT NULL AND ra.lease_until>now()) OR (ra.execution_started_at IS NULL AND ra.dispatch_deadline>now()))))`
 
 func (s *Store) ListTwitchImports(ctx context.Context, pending bool, state string) ([]twitch.Import, error) {
 	rows, err := s.pool.Query(ctx, `WITH pending_sources AS(SELECT i.id,row_number()OVER(PARTITION BY COALESCE(i.media_id,i.id)ORDER BY i.created_at DESC,i.id)position FROM twitch_imports i WHERE `+pendingTwitchSource+`)
@@ -404,14 +404,8 @@ func createTwitchDraft(ctx context.Context, tx pgx.Tx, jobID, clipID, kind, form
 	return rid, queueInitialRender(ctx, tx, rid, 1, now)
 }
 func queueInitialRender(ctx context.Context, tx pgx.Tx, rid int64, version int, now time.Time) error {
-	attempt := uuid.NewString()
-	if _, err := tx.Exec(ctx, `INSERT INTO render_attempts(id,revision_id,lease_until)VALUES($1,$2,$3)`, attempt, rid, now.Add(2*time.Minute)); err != nil {
-		return err
-	}
-	_, err := tx.Exec(ctx, `INSERT INTO publication_outbox(id,kind,payload)VALUES($1,'render_revision',$2)`, uuid.NewString(), mustJSON(workflow.Command{Kind: workflow.KindRender, RevisionID: rid, AttemptID: attempt, ExpectedVersion: version}))
-	return err
+	return queueRenderAttempt(ctx, tx, rid, version, now)
 }
-
 func (s *Store) RejectTwitchImport(ctx context.Context, id string, rejected bool) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

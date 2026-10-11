@@ -5,9 +5,12 @@ import (
 	"terex/twitch-collector/internal/domain"
 )
 
+const dispatchVisibleState = `CASE WHEN c.state='queued' AND t.dispatch_state IN('waiting_assignment','authorized','verification_pending') THEN t.dispatch_state WHEN c.state='queued' AND c.error_kind='capacity' THEN 'waiting_capacity' WHEN c.state='queued' AND c.error_kind='quota' THEN 'waiting_quota' WHEN c.state='queued' AND c.last_error<>'' THEN 'retry_wait' ELSE c.state END`
+const dispatchVisibleReason = `CASE WHEN c.state='queued' AND t.dispatch_state='waiting_assignment' AND t.dispatch_reason<>'' THEN t.dispatch_reason ELSE c.last_error END`
+
 func (s *Store) ClipStatuses(ctx context.Context, flow string, ids []string) ([]domain.ClipStatus, error) {
-	rows, err := s.pool.Query(ctx, `SELECT c.clip_id,CASE WHEN c.state='queued' AND c.error_kind='capacity' THEN 'waiting_capacity' WHEN c.state='queued' AND c.error_kind='quota' THEN 'waiting_quota' WHEN c.state='queued' AND c.last_error<>'' THEN 'retry_wait' ELSE c.state END,c.last_error,CASE WHEN t.state='queued' THEN t.run_at END,
- CASE WHEN t.state='leased' THEN t.started_at END,COALESCE(t.attempts,0)
+	rows, err := s.pool.Query(ctx, `SELECT c.clip_id,`+dispatchVisibleState+`,`+dispatchVisibleReason+`,CASE WHEN t.state='queued' THEN t.run_at END,
+ CASE WHEN t.state='leased' THEN t.started_at END,COALESCE(t.attempts,0),COALESCE(t.dispatch_state,''),COALESCE(NULLIF(t.dispatch_reason_code,''),t.error_code,'')
  FROM twitch_collector.clips c JOIN twitch_collector.consumers co ON co.clip_id=c.clip_id
  LEFT JOIN twitch_collector.download_tasks t ON t.clip_id=c.clip_id WHERE co.flow_id=$1 AND c.clip_id=ANY($2) ORDER BY c.clip_id`, flow, ids)
 	if err != nil {
@@ -17,7 +20,7 @@ func (s *Store) ClipStatuses(ctx context.Context, flow string, ids []string) ([]
 	out := []domain.ClipStatus{}
 	for rows.Next() {
 		var item domain.ClipStatus
-		if err = rows.Scan(&item.ClipID, &item.State, &item.Reason, &item.NextAttemptAt, &item.StartedAt, &item.Attempt); err != nil {
+		if err = rows.Scan(&item.ClipID, &item.State, &item.Reason, &item.NextAttemptAt, &item.StartedAt, &item.Attempt, &item.DispatchState, &item.ReasonCode); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -42,13 +45,16 @@ func (s *Store) SetTaskStage(ctx context.Context, t domain.Task, stage string) e
 // Filter lookup returns only identifiers and states. Main-be applies its own
 // search and output filters before paginating; videos and signed URLs stay out.
 func (s *Store) FilteredClipStatuses(ctx context.Context, flow, state string) ([]domain.ClipStatus, error) {
-	rows, err := s.pool.Query(ctx, `SELECT c.clip_id,c.state FROM twitch_collector.clips c JOIN twitch_collector.consumers co ON co.clip_id=c.clip_id
+	rows, err := s.pool.Query(ctx, `SELECT c.clip_id,`+dispatchVisibleState+` FROM twitch_collector.clips c JOIN twitch_collector.consumers co ON co.clip_id=c.clip_id LEFT JOIN twitch_collector.download_tasks t ON t.clip_id=c.clip_id
  WHERE co.flow_id=$1 AND NOT co.excluded AND CASE $2
  WHEN 'failed' THEN c.state='failed' OR(c.state='queued' AND c.last_error<>'' AND c.error_kind NOT IN('quota','capacity'))
  WHEN 'retry_wait' THEN c.state='queued' AND c.last_error<>'' AND c.error_kind NOT IN('quota','capacity')
  WHEN 'waiting_quota' THEN c.state='queued' AND c.error_kind='quota'
  WHEN 'waiting_capacity' THEN c.state='queued' AND c.error_kind='capacity'
- WHEN 'queued' THEN c.state='queued' AND c.last_error=''
+ WHEN 'queued' THEN c.state='queued' AND t.dispatch_state='authorized'
+ WHEN 'authorized' THEN c.state='queued' AND t.dispatch_state='authorized'
+ WHEN 'waiting_assignment' THEN c.state='queued' AND t.dispatch_state='waiting_assignment'
+ WHEN 'verification_pending' THEN c.state='queued' AND t.dispatch_state='verification_pending'
  WHEN 'downloading' THEN c.state IN('downloading','importing','verifying')
  WHEN 'importing' THEN c.state IN('importing','verifying')
  WHEN 'verifying' THEN c.state='verifying'

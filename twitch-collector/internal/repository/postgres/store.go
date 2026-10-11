@@ -99,7 +99,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("provision collector schema before startup: %w", err)
 		}
 	}
-	if _, err = tx.Exec(ctx, migration+resetMigration+discoveryMigration+recoveryMigration); err != nil {
+	if _, err = tx.Exec(ctx, migration+resetMigration+discoveryMigration+recoveryMigration+coordinationMigration); err != nil {
 		return fmt.Errorf("collector migration: %w", err)
 	}
 	return tx.Commit(ctx)
@@ -371,11 +371,11 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (*domain.Task, e
 	return task, nil
 }
 
-const validLease = `t.clip_id=$1 AND t.state='leased' AND t.lease_token=$2 AND t.lease_expires_at>now()`
+const validLease = `t.clip_id=$1 AND t.state='leased' AND t.lease_token=$2 AND t.lease_expires_at>now() AND t.epoch=(SELECT epoch FROM twitch_collector.state WHERE id=1)`
 
 func (s *Store) ValidLease(ctx context.Context, t domain.Task) error {
 	var valid bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_collector.download_tasks t JOIN twitch_collector.clips c ON c.clip_id=t.clip_id JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE `+validLease+` AND NOT ch.paused AND NOT ch.archived)`, t.Clip.ID, t.Token).Scan(&valid)
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_collector.download_tasks t JOIN twitch_collector.clips c ON c.clip_id=t.clip_id JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE `+validLease+` AND($3 OR(NOT ch.paused AND NOT ch.archived)))`, t.Clip.ID, t.Token, t.Completion).Scan(&valid)
 	if err != nil {
 		return err
 	}
@@ -385,7 +385,7 @@ func (s *Store) ValidLease(ctx context.Context, t domain.Task) error {
 	return nil
 }
 func (s *Store) Renew(ctx context.Context, t domain.Task, lease time.Duration) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET lease_expires_at=now()+$3*interval '1 second',updated_at=now() FROM twitch_collector.clips c JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE c.clip_id=t.clip_id AND `+validLease+` AND NOT ch.paused AND NOT ch.archived`, t.Clip.ID, t.Token, lease.Seconds())
+	tag, err := s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET lease_expires_at=now()+$3*interval '1 second',updated_at=now() FROM twitch_collector.clips c JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE c.clip_id=t.clip_id AND `+validLease+` AND($4 OR(NOT ch.paused AND NOT ch.archived))`, t.Clip.ID, t.Token, lease.Seconds(), t.Completion)
 	if err != nil {
 		return err
 	}
@@ -400,7 +400,7 @@ func (s *Store) Complete(ctx context.Context, t domain.Task, importID, sha strin
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET state='done',lease_token=NULL,lease_expires_at=NULL,uploaded=NULL,updated_at=now() FROM twitch_collector.clips c JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE c.clip_id=t.clip_id AND `+validLease+` AND NOT ch.paused AND NOT ch.archived`, t.Clip.ID, t.Token)
+	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET state='done',lease_token=NULL,lease_expires_at=NULL,uploaded=NULL,updated_at=now() FROM twitch_collector.clips c JOIN twitch_collector.channels ch ON ch.id=c.channel_id WHERE c.clip_id=t.clip_id AND `+validLease+` AND($3 OR(NOT ch.paused AND NOT ch.archived))`, t.Clip.ID, t.Token, t.Completion)
 	if err != nil {
 		return err
 	}
@@ -467,7 +467,7 @@ func (s *Store) deferTask(ctx context.Context, t domain.Task, when time.Time, me
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET state='queued',attempts=GREATEST(attempts-1,0),run_at=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE `+validLease, t.Clip.ID, t.Token, when)
+	tag, err := tx.Exec(ctx, `UPDATE twitch_collector.download_tasks t SET state='queued',attempts=GREATEST(attempts-CASE WHEN $4 THEN 0 ELSE 1 END,0),verification_attempts=GREATEST(verification_attempts-CASE WHEN $4 THEN 1 ELSE 0 END,0),run_at=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=now() WHERE `+validLease, t.Clip.ID, t.Token, when, t.Completion)
 	if err != nil {
 		return err
 	}
@@ -491,8 +491,14 @@ func (s *Store) SetLastCheck(ctx context.Context, at time.Time, message string) 
 func (s *Store) Status(ctx context.Context) (domain.Status, error) {
 	var out domain.Status
 	err := s.pool.QueryRow(ctx, `SELECT st.last_check_at,st.last_error,(SELECT count(*) FROM twitch_collector.channels WHERE NOT archived),
- (SELECT count(*) FROM twitch_collector.clips WHERE state='queued'),(SELECT count(*) FROM twitch_collector.clips WHERE state IN('downloading','importing','verifying')),
- (SELECT count(*) FROM twitch_collector.clips WHERE state='imported'),(SELECT count(*) FROM twitch_collector.clips WHERE state='failed') FROM twitch_collector.state st WHERE id=1`).Scan(&out.LastCheckAt, &out.LastError, &out.Channels, &out.Queued, &out.Downloading, &out.Imported, &out.Failed)
+ (SELECT count(*) FROM twitch_collector.download_tasks WHERE state='queued' AND dispatch_state='authorized'),(SELECT count(*) FROM twitch_collector.clips WHERE state IN('downloading','importing')),
+ (SELECT count(*) FROM twitch_collector.clips WHERE state='imported'),(SELECT count(*) FROM twitch_collector.clips WHERE state='failed'),
+ (SELECT count(*) FROM twitch_collector.download_tasks WHERE state='queued' AND dispatch_state='waiting_assignment'),
+ (SELECT count(*) FROM twitch_collector.download_tasks WHERE state='queued' AND dispatch_state='verification_pending'),
+ (SELECT count(*) FROM twitch_collector.clips WHERE state='verifying'),
+ (SELECT min(dispatch_entered_at) FROM twitch_collector.download_tasks WHERE state='queued' AND dispatch_state='authorized'),
+ (SELECT min(dispatch_entered_at) FROM twitch_collector.download_tasks WHERE state='queued' AND dispatch_state='verification_pending')
+ FROM twitch_collector.state st WHERE id=1`).Scan(&out.LastCheckAt, &out.LastError, &out.Channels, &out.Queued, &out.Downloading, &out.Imported, &out.Failed, &out.WaitingAssignment, &out.VerificationPending, &out.Verifying, &out.OldestAuthorizedAt, &out.OldestVerificationAt)
 	if err != nil {
 		return out, err
 	}

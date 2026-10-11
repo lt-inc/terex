@@ -30,21 +30,37 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		var rid int64
 		var status, worker string
 		var expiry time.Time
-		err = tx.QueryRow(ctx, `SELECT revision_id,status,worker_id,lease_until FROM render_attempts WHERE id=$1 FOR UPDATE`, q.AttemptID).Scan(&rid, &status, &worker, &expiry)
+		err = tx.QueryRow(ctx, `SELECT revision_id,status,worker_id,COALESCE(dispatch_deadline,lease_until) FROM render_attempts WHERE id=$1 FOR UPDATE`, q.AttemptID).Scan(&rid, &status, &worker, &expiry)
 		if err == pgx.ErrNoRows {
 			return out, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		if rid != q.RevisionID || status != "active" || worker != "" || expiry.Before(now) {
+		if rid != q.RevisionID || status != "active" || worker != "" || !expiry.After(now) {
 			return out, nil
 		}
 		r, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1 FOR UPDATE`, rid))
 		if err != nil {
 			return nil, err
 		}
-		if r.Version != q.ExpectedVersion || r.RenderState == "ready" || r.RenderState == "failed" {
+		if r.Version != q.ExpectedVersion || r.RenderState == "ready" || r.RenderState == "failed" || r.RenderState == "waiting_worker" {
+			return out, nil
+		}
+		deadline, _, reason, e := renderDispatchDeadline(ctx, tx, rid, now)
+		if e != nil {
+			return nil, e
+		}
+		if !deadline.After(now) {
+			if _, e = tx.Exec(ctx, `UPDATE render_attempts SET status='expired',lease_token=NULL WHERE id=$1`, q.AttemptID); e != nil {
+				return nil, e
+			}
+			if e = holdRenderDispatch(ctx, tx, rid, reason); e != nil {
+				return nil, e
+			}
+			if e = tx.Commit(ctx); e != nil {
+				return nil, e
+			}
 			return out, nil
 		}
 		if e := storageRevisionAvailable(ctx, tx, rid); e != nil {
@@ -81,7 +97,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		}
 		source.Options.Subtitles = r.SubtitlesEnabled
 		out.Render = &workflow.RenderWork{Twitch: isTwitch, Epoch: epoch, RevisionID: rid, ClipID: r.ClipID, JobID: jobID, StartSec: r.StartSec, EndSec: r.EndSec, Cues: cues, Source: source, Output: workflow.ObjectRef{Bucket: "clips", Object: r.ClipID + "/revision-" + jsonNumber(rid) + "/" + q.AttemptID + ".mp4"}}
-		if _, err = tx.Exec(ctx, `UPDATE render_attempts SET worker_id=$2,lease_token=$3,lease_until=$4 WHERE id=$1`, q.AttemptID, q.WorkerID, token, until); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE render_attempts SET worker_id=$2,lease_token=$3,lease_until=$4,execution_started_at=$5,epoch=$6 WHERE id=$1`, q.AttemptID, q.WorkerID, token, until, now, epoch); err != nil {
 			return nil, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='rendering' WHERE id=$1`, rid); err != nil {
@@ -252,7 +268,7 @@ func lockRender(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now tim
 	if err != nil {
 		return 0, false, err
 	}
-	if token != q.LeaseToken || q.LeaseToken == "" || status != "active" || until.Before(now) {
+	if token != q.LeaseToken || q.LeaseToken == "" || status != "active" || !until.After(now) {
 		return rid, false, nil
 	}
 	var version int
@@ -263,6 +279,15 @@ func lockRender(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now tim
 	return rid, err == nil && version == q.ExpectedVersion, err
 }
 func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now time.Time) (*workflow.Permit, error) {
+	// Render heartbeats take the shared reset fence then the attempt/revision
+	// locks. They must not wait behind discovery/admission's global lock.
+	var render bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM render_attempts WHERE id=$1)`, q.AttemptID).Scan(&render); err != nil {
+		return nil, err
+	}
+	if render {
+		return s.renewRenderWorkflow(ctx, q, now)
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -312,6 +337,47 @@ func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	return out, nil
+}
+
+func (s *Store) renewRenderWorkflow(ctx context.Context, q *workflow.LeaseRequest, now time.Time) (*workflow.Permit, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	var current int64
+	var active bool
+	if err = tx.QueryRow(ctx, `SELECT epoch,active FROM twitch_reset_control WHERE id=1 FOR SHARE`).Scan(&current, &active); err != nil {
+		return nil, err
+	}
+	out := &workflow.Permit{}
+	var epoch int64
+	var managed bool
+	if err = tx.QueryRow(ctx, `SELECT epoch,twitch FROM render_attempts WHERE id=$1 FOR UPDATE`, q.AttemptID).Scan(&epoch, &managed); err == pgx.ErrNoRows {
+		return out, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if managed && (active || epoch != current) {
+		return out, nil
+	}
+	_, ok, err := lockRender(ctx, tx, *q, now)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return out, nil
+	}
+	until := now.Add(leaseDuration)
+	if _, err = tx.Exec(ctx, `UPDATE render_attempts SET lease_until=$2 WHERE id=$1`, q.AttemptID, until); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	out.Allowed = true
+	out.ExpiresAt = until
 	return out, nil
 }
 
@@ -505,7 +571,11 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 		if q.Retryable {
 			state = "pending"
 		}
-		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state=$2,error=$3 WHERE id=$1`, rid, state, q.Message); err != nil {
+		delay := 0
+		if q.Retryable {
+			delay = max(60, q.RetryAfterSeconds)
+		}
+		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state=$2,error=$3,render_next_attempt_at=$4 WHERE id=$1`, rid, state, q.Message, now.Add(time.Duration(delay)*time.Second)); err != nil {
 			return false, err
 		}
 		importState, jobState := "failed", "failed"
