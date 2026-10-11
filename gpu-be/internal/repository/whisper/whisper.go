@@ -19,8 +19,9 @@ import (
 
 // Client runs the openai-whisper CLI (same engine as the old candidate service).
 type Client struct {
-	Bin   string
-	Model string
+	Bin       string
+	Model     string
+	Resources domain.MediaResources
 }
 
 func New(bin, model string) *Client { return &Client{Bin: bin, Model: model} }
@@ -29,11 +30,18 @@ func (c *Client) Transcribe(ctx context.Context, audioPath string) (segs []domai
 	ctx, span := telemetry.Start(ctx, "whisper transcribe", attribute.String("whisper.model", c.Model))
 	defer func() { telemetry.End(span, err) }()
 	start := time.Now()
-	outDir, err := os.MkdirTemp("", "whisper-*")
+	var outDir string
+	var cleanup func()
+	if c.Resources != nil {
+		outDir, cleanup, err = c.Resources.MkdirTemp(ctx, filepath.Dir(audioPath), "whisper-")
+	} else {
+		outDir, err = os.MkdirTemp(filepath.Dir(audioPath), "whisper-")
+		cleanup = func() { _ = os.RemoveAll(outDir) }
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(outDir)
+	defer cleanup()
 
 	cmd := exec.CommandContext(ctx, c.Bin, audioPath,
 		"--model", c.Model,

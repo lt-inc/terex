@@ -22,6 +22,7 @@ import (
 	"terex/gpu-be/internal/repository/ffmpeg"
 	"terex/gpu-be/internal/repository/jobstate"
 	"terex/gpu-be/internal/repository/llm"
+	"terex/gpu-be/internal/repository/mediaguard"
 	"terex/gpu-be/internal/repository/minio"
 	"terex/gpu-be/internal/repository/whisper"
 	"terex/gpu-be/internal/repository/ytdlp"
@@ -91,7 +92,17 @@ func run() error {
 	}
 	defer br.Close()
 
+	resources := mediaguard.New([]string{cfg.TmpDir, cfg.AssemblyTmpDir}, cfg.MediaScratchBudgetBytes, cfg.MediaMinFreeBytes)
+	if err := resources.Prepare(); err != nil {
+		return err
+	}
+	go resources.Run(ctx)
 	media := ffmpeg.New(cfg.UseNVENC)
+	media.Resources, media.Threads, media.VerificationWait = resources, cfg.FFmpegThreads, cfg.MediaVerifyWait
+	acoustic := audio.New(cfg.YamnetCmd)
+	acoustic.Acquire = media.AcquireEncoding
+	stt := whisper.New(cfg.WhisperBin, cfg.WhisperModel)
+	stt.Resources = resources
 	rep := &reporter.Reporter{State: state, Broker: br}
 	gw := &storagegw.Service{Store: store}
 	auth := googleauth.New(&credentialrepo.Repository{Store: store}, cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
@@ -103,18 +114,18 @@ func run() error {
 	coord := workflow.NewCoordinatorClient(coordConn)
 	resetGate := resetgate.New()
 	workerID, _ := os.Hostname()
-	rendererSvc := &renderer.Service{Store: store, Media: media, Broker: br, State: state, Rep: rep, TmpDir: cfg.TmpDir, AssemblyTmpDir: cfg.AssemblyTmpDir, AssemblyBudgetBytes: cfg.AssemblyBudgetBytes}
+	rendererSvc := &renderer.Service{Store: store, Media: media, Broker: br, State: state, Rep: rep, TmpDir: cfg.TmpDir, AssemblyTmpDir: cfg.AssemblyTmpDir, AssemblyBudgetBytes: cfg.AssemblyBudgetBytes, Resources: resources, TwitchFastPath: cfg.TwitchRenderFastPath, AssemblyLocalReuse: cfg.AssemblyLocalReuse}
 	if err := rendererSvc.PrepareAssemblyScratch(); err != nil {
 		return err
 	}
 
 	svcs := tamqp.Services{
-		Preproc: &preproc.Service{Store: store, Dl: ytdlp.New(), Media: media, Broker: br, Rep: rep, TmpDir: cfg.TmpDir},
-		Candidate: &candidate.Service{Store: store, STT: whisper.New(cfg.WhisperBin, cfg.WhisperModel), LLM: newLLM(cfg), Audio: audio.New(cfg.YamnetCmd),
-			Limits: domain.ClipLimits{MinSec: cfg.ClipMinSec, MaxSec: cfg.ClipMaxSec, MaxClips: cfg.MaxClips}, PromptTags: cfg.PromptTags, Broker: br, Rep: rep, TmpDir: cfg.TmpDir},
+		Preproc: &preproc.Service{Store: store, Dl: ytdlp.New(), Media: media, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
+		Candidate: &candidate.Service{Store: store, STT: stt, LLM: newLLM(cfg), Audio: acoustic,
+			Limits: domain.ClipLimits{MinSec: cfg.ClipMinSec, MaxSec: cfg.ClipMaxSec, MaxClips: cfg.MaxClips}, PromptTags: cfg.PromptTags, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
 		Renderer:         rendererSvc,
 		Publisher:        &publisher.Service{Pub: publisher.Manual{}, Broker: br},
-		Publication:      &publishworker.Worker{Coordinator: coord, Store: store, Auth: auth, TmpDir: cfg.TmpDir, WorkerID: workerID + "-publish"},
+		Publication:      &publishworker.Worker{Coordinator: coord, Store: store, Auth: auth, TmpDir: cfg.TmpDir, WorkerID: workerID + "-publish", Resources: resources},
 		RenderRevision:   &renderworker.Worker{Coordinator: coord, Renderer: rendererSvc, WorkerID: workerID + "-render", Reset: resetGate},
 		PublisherWorkers: cfg.PublisherWorkers, RenderRevisionWorkers: cfg.RenderRevisionWorkers,
 	}
@@ -125,12 +136,12 @@ func run() error {
 	}
 	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	gpuv1.RegisterGpuServiceServer(gs, &tgrpc.Server{State: state, GW: gw})
-	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, TmpDir: cfg.TmpDir})
-	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir, Reset: resetGate})
+	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, TmpDir: cfg.TmpDir, Resources: resources})
+	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir, Reset: resetGate, Resources: resources})
 	workflow.RegisterResetGatewayServer(gs, resetGate)
 	workflow.RegisterStorageGatewayServer(gs, &storagecleanup.Service{Store: store})
 	go func() { _ = gs.Serve(lis) }()
-	slog.Info("gpu-be started", "grpc", cfg.GRPCAddr)
+	slog.Info("gpu-be started", "grpc", cfg.GRPCAddr, "twitch_render_fast_path", cfg.TwitchRenderFastPath, "assembly_local_reuse", cfg.AssemblyLocalReuse, "ffmpeg_threads", cfg.FFmpegThreads, "encoding_slots", 1, "verification_slots", 1, "media_scratch_budget_bytes", cfg.MediaScratchBudgetBytes, "media_min_free_bytes", cfg.MediaMinFreeBytes)
 
 	errc := make(chan error, 1)
 	go func() { errc <- tamqp.Run(ctx, br, cfg.WorkersPerModule, svcs) }()

@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"terex/gpu-be/internal/domain"
+	"terex/gpu-be/internal/service/mediatmp"
 	"terex/gpu-be/internal/service/reporter"
 	"terex/proto/telemetry"
 	"terex/proto/workflow"
@@ -20,15 +21,23 @@ import (
 const stage = "preproc"
 
 type Service struct {
-	Store  domain.ObjectStore
-	Dl     domain.Downloader
-	Media  domain.Media
-	Broker domain.Broker
-	Rep    *reporter.Reporter
-	TmpDir string
+	Store     domain.ObjectStore
+	Dl        domain.Downloader
+	Media     domain.Media
+	Broker    domain.Broker
+	Rep       *reporter.Reporter
+	TmpDir    string
+	Resources domain.MediaResources
 }
 
 func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err error) {
+	ctx = domain.WithMediaIdentity(ctx, msg.JobID, "", "legacy", 0)
+	ctx, release, err := mediatmp.Begin(ctx, s.Resources)
+	if err != nil {
+		return err
+	}
+	defer release()
+	defer func() { err = mediatmp.Cause(ctx, err) }()
 	ctx, span := telemetry.Start(ctx, stage+" handle", attribute.String("job.id", msg.JobID))
 	defer func() { telemetry.End(span, err) }()
 	s.Rep.Report(ctx, msg.JobID, stage, "running", "")
@@ -41,11 +50,11 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 	if err = os.MkdirAll(s.TmpDir, 0o755); err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp(s.TmpDir, msg.JobID+"-")
+	dir, cleanup, err := mediatmp.MkdirTemp(ctx, s.Resources, s.TmpDir, msg.JobID+"-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer cleanup()
 
 	src := filepath.Join(dir, msg.JobID+".mp4")
 	if err = s.Dl.Download(ctx, msg.YTURL, src); err != nil {

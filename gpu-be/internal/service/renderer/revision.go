@@ -3,6 +3,7 @@ package renderer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path"
@@ -11,6 +12,7 @@ import (
 
 	"terex/gpu-be/internal/domain"
 	"terex/gpu-be/internal/service/candidate"
+	"terex/gpu-be/internal/service/mediatmp"
 	"terex/proto/workflow"
 )
 
@@ -65,6 +67,53 @@ func RelativeCues(cues []workflow.Cue, start, end float64) []domain.Segment {
 // RenderRevision cuts before any expensive transforms: only the selected clip is
 // rebuilt, from the original media, using its immutable revision's edited cues.
 func (s *Service) RenderRevision(ctx context.Context, w workflow.RenderWork) (domain.ObjectRef, error) {
+	return s.renderRevision(ctx, w, "", false)
+}
+
+func (s *Service) fastPathReason(w workflow.RenderWork) string {
+	if !s.TwitchFastPath {
+		return "disabled"
+	}
+	if !w.Twitch || w.Source.Assembly != nil {
+		return "not_twitch_short"
+	}
+	o := w.Source.Options
+	if !o.Vertical {
+		return "not_vertical"
+	}
+	if o.Shape != "" && o.Shape != "rectangle" {
+		return "shape"
+	}
+	if o.Subtitles {
+		return "subtitles"
+	}
+	if o.BackgroundID != "" {
+		return "custom_background"
+	}
+	if w.Source.Banner != "" {
+		ext := strings.ToLower(path.Ext(w.Source.Banner))
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" {
+			return "animated_or_unsupported_banner"
+		}
+	}
+	if _, ok := s.Media.(domain.ShortRenderer); !ok {
+		return "media_capability"
+	}
+	return ""
+}
+
+func (s *Service) renderRevision(ctx context.Context, w workflow.RenderWork, localOriginal string, localAssembly bool) (ref domain.ObjectRef, err error) {
+	format := "short"
+	if w.Source.Assembly != nil {
+		format = "compilation"
+	}
+	ctx = domain.WithMediaIdentity(ctx, w.JobID, w.ClipID, format, w.RevisionID)
+	ctx, release, err := mediatmp.Begin(ctx, s.Resources)
+	if err != nil {
+		return domain.ObjectRef{}, err
+	}
+	defer release()
+	defer func() { err = mediatmp.Cause(ctx, err) }()
 	if w.Source.Original.Bucket == "" || w.Source.Original.Object == "" || w.Output.Bucket != domain.BucketClips {
 		return domain.ObjectRef{}, fmt.Errorf("revision lacks original or clip output")
 	}
@@ -80,14 +129,57 @@ func (s *Service) RenderRevision(ctx context.Context, w workflow.RenderWork) (do
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return domain.ObjectRef{}, err
 	}
-	dir, err := os.MkdirTemp(tmp, "revision-")
+	dir, cleanup, err := mediatmp.MkdirTemp(ctx, s.Resources, tmp, "revision-")
 	if err != nil {
 		return domain.ObjectRef{}, err
 	}
-	defer os.RemoveAll(dir)
-	src := filepath.Join(dir, "original.mp4")
-	if err = s.Store.Download(ctx, w.Source.Original, src); err != nil {
-		return domain.ObjectRef{}, fmt.Errorf("source unavailable: %w", err)
+	defer cleanup()
+	src := localOriginal
+	if src == "" {
+		src = filepath.Join(dir, "original.mp4")
+		if err = s.Store.Download(ctx, w.Source.Original, src); err != nil {
+			return domain.ObjectRef{}, fmt.Errorf("source unavailable: %w", err)
+		}
+	}
+	// A newly assembled original is already normalized to the final profile.
+	// This provenance is local and cannot be supplied by an API/queue request.
+	if localAssembly && w.StartSec == 0 && w.EndSec == w.Source.DurationSec && !w.Source.Options.Vertical && !w.Source.Options.Subtitles {
+		out := src
+		if w.Source.Banner != "" {
+			bp := filepath.Join(dir, "banner"+path.Ext(w.Source.Banner))
+			if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketBanners, Object: w.Source.Banner}, bp); err != nil {
+				return domain.ObjectRef{}, err
+			}
+			out = filepath.Join(dir, "bannered.mp4")
+			if err = s.Media.Banner(ctx, src, bp, out, w.Source.Options.Shape == "rectangle"); err != nil {
+				return domain.ObjectRef{}, err
+			}
+		}
+		slog.InfoContext(ctx, "render profile selected", append(domain.MediaLogAttrs(ctx), "profile", "assembly_local", "original_download_skipped", true, "full_range_cut_skipped", true)...)
+		if err = s.Store.Upload(ctx, w.Output, out); err != nil {
+			return domain.ObjectRef{}, err
+		}
+		return w.Output, nil
+	}
+	if reason := s.fastPathReason(w); reason == "" {
+		banner := ""
+		if w.Source.Banner != "" {
+			banner = filepath.Join(dir, "banner"+path.Ext(w.Source.Banner))
+			if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketBanners, Object: w.Source.Banner}, banner); err != nil {
+				return domain.ObjectRef{}, err
+			}
+		}
+		out := filepath.Join(dir, "short.mp4")
+		slog.InfoContext(ctx, "render profile selected", append(domain.MediaLogAttrs(ctx), "profile", "short_single_pass")...)
+		if err = s.Media.(domain.ShortRenderer).RenderShort(ctx, domain.ShortRenderSpec{Source: src, Banner: banner, StartSec: w.StartSec, EndSec: w.EndSec, Rectangle: true}, out); err != nil {
+			return domain.ObjectRef{}, err
+		}
+		if err = s.Store.Upload(ctx, w.Output, out); err != nil {
+			return domain.ObjectRef{}, err
+		}
+		return w.Output, nil
+	} else {
+		slog.InfoContext(ctx, "render profile selected", append(domain.MediaLogAttrs(ctx), "profile", "legacy", "fallback_reason", reason)...)
 	}
 	cur := filepath.Join(dir, "cut.mp4")
 	if err = s.Media.Cut(ctx, src, cur, w.StartSec, w.EndSec); err != nil {

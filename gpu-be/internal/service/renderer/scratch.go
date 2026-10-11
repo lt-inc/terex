@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"terex/gpu-be/internal/service/mediatmp"
 	"time"
 )
 
@@ -82,7 +82,7 @@ func (s *Service) BeginAssembly(ctx context.Context) (context.Context, func(), e
 		<-s.assemblyPermit
 		return nil, nil, err
 	}
-	dir, err := os.MkdirTemp(root, "attempt-")
+	dir, cleanup, err := mediatmp.MkdirTemp(ctx, s.Resources, root, "attempt-")
 	if err != nil {
 		<-s.assemblyPermit
 		return nil, nil, err
@@ -96,7 +96,7 @@ func (s *Service) BeginAssembly(ctx context.Context) (context.Context, func(), e
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(100 * time.Millisecond)
+		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -113,9 +113,7 @@ func (s *Service) BeginAssembly(ctx context.Context) (context.Context, func(), e
 	return workCtx, func() {
 		cancel(context.Canceled)
 		<-done
-		if err := os.RemoveAll(dir); err != nil {
-			slog.Error("compilation scratch cleanup failed", "stage", "cleanup", "reason", "scratch_cleanup_failed", "err", err)
-		}
+		cleanup()
 		<-s.assemblyPermit
 	}, nil
 }

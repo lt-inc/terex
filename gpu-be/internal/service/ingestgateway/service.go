@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"terex/gpu-be/internal/domain"
+	"terex/gpu-be/internal/service/mediatmp"
 	"terex/gpu-be/internal/service/resetgate"
 	"terex/proto/twitch"
 	"terex/proto/workflow"
@@ -29,6 +30,9 @@ var safeID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 var digest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func unavailable(ctx context.Context, action string, err error) error {
+	if errors.Is(err, domain.ErrMediaResourceWait) || errors.Is(context.Cause(ctx), domain.ErrMediaResourceWait) {
+		return status.Errorf(codes.Unavailable, "resource_wait: %s: %v", action, mediatmp.Cause(ctx, err))
+	}
 	if ctx.Err() != nil {
 		return status.FromContextError(ctx.Err()).Err()
 	}
@@ -39,6 +43,9 @@ func unavailable(ctx context.Context, action string, err error) error {
 }
 
 func invalidMedia(ctx context.Context, action string, err error) error {
+	if errors.Is(err, domain.ErrMediaResourceWait) || errors.Is(context.Cause(ctx), domain.ErrMediaResourceWait) {
+		return unavailable(ctx, action, err)
+	}
 	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, exec.ErrNotFound) {
 		return unavailable(ctx, action, err)
 	}
@@ -56,10 +63,11 @@ type Store interface {
 	Upload(context.Context, domain.ObjectRef, string) error
 }
 type Service struct {
-	Reset  *resetgate.Gate
-	Store  Store
-	Media  Media
-	TmpDir string
+	Reset     *resetgate.Gate
+	Store     Store
+	Media     Media
+	TmpDir    string
+	Resources domain.MediaResources
 }
 
 func staging(id string) domain.ObjectRef {
@@ -89,11 +97,17 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	if q == nil || !safeID.MatchString(q.ImportID) || q.Ref != staging(q.ImportID) {
 		return nil, status.Error(codes.InvalidArgument, "invalid staging reference")
 	}
+	ctx = domain.WithMediaImport(ctx, q.ImportID)
 	ctx, release, err := s.Reset.Begin(ctx, q.Epoch)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	ctx, resourceRelease, err := mediatmp.Begin(ctx, s.Resources)
+	if err != nil {
+		return nil, unavailable(ctx, "prepare verification", err)
+	}
+	defer resourceRelease()
 	if q.ExpectedSHA256 != "" && !digest.MatchString(q.ExpectedSHA256) {
 		return nil, status.Error(codes.InvalidArgument, "invalid SHA-256")
 	}
@@ -103,11 +117,11 @@ func (s *Service) VerifyUpload(ctx context.Context, q *workflow.VerifyUploadRequ
 	if err := os.MkdirAll(s.TmpDir, 0o755); err != nil {
 		return nil, unavailable(ctx, "prepare verification directory", err)
 	}
-	dir, err := os.MkdirTemp(s.TmpDir, "verify-")
+	dir, cleanup, err := mediatmp.MkdirTemp(ctx, s.Resources, s.TmpDir, "verify-")
 	if err != nil {
 		return nil, unavailable(ctx, "prepare verification file", err)
 	}
-	defer os.RemoveAll(dir)
+	defer cleanup()
 	file := filepath.Join(dir, "source.mp4")
 	if err = s.Store.DownloadLimited(ctx, q.Ref, file, MaxBytes); err != nil {
 		if errors.Is(err, domain.ErrObjectNotFound) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -20,20 +21,124 @@ import (
 
 type Client struct {
 	// NVENC switches libx264 for h264_nvenc where we encode video.
-	NVENC bool
+	NVENC                  bool
+	Threads                int
+	VerificationWait       time.Duration
+	Resources              domain.MediaResources
+	encoding, verification chan struct{}
 }
 
-func New(nvenc bool) *Client { return &Client{NVENC: nvenc} }
+func New(nvenc bool) *Client {
+	return &Client{NVENC: nvenc, Threads: 2, VerificationWait: 10 * time.Second, encoding: make(chan struct{}, 1), verification: make(chan struct{}, 1)}
+}
+
+// AcquireEncoding shares the heavy-media slot with legacy audio decoding.
+func (c *Client) AcquireEncoding(ctx context.Context) (func(), error) { return c.acquire(ctx, false) }
+
+func (c *Client) acquire(ctx context.Context, verification bool) (func(), error) {
+	permit := c.encoding
+	if verification {
+		permit = c.verification
+	}
+	if permit == nil {
+		return func() {}, nil
+	} // compatibility for injected media clients
+	var timeout <-chan time.Time
+	var timer *time.Timer
+	if verification {
+		wait := c.VerificationWait
+		if wait <= 0 {
+			wait = 10 * time.Second
+		}
+		timer = time.NewTimer(wait)
+		defer timer.Stop()
+		timeout = timer.C
+	}
+	select {
+	case permit <- struct{}{}:
+		return func() { <-permit }, nil
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	case <-timeout:
+		return nil, &domain.MediaResourceError{Code: "resource_wait", Detail: "video verification slot is busy; retry this import"}
+	}
+}
 
 func (c *Client) run(ctx context.Context, op string, args ...string) (err error) {
 	ctx, span := telemetry.Start(ctx, "ffmpeg "+op, attribute.Bool("ffmpeg.nvenc", c.NVENC))
 	defer func() { telemetry.End(span, err) }()
 	start := time.Now()
-	full := append([]string{"-y", "-hide_banner", "-loglevel", "error"}, args...)
-	if out, runErr := exec.CommandContext(ctx, "ffmpeg", full...).CombinedOutput(); runErr != nil {
+	attrs := []any{"op", op}
+	defer func() {
+		attrs = append(attrs, "duration_ms", time.Since(start).Milliseconds(), "result_code", domain.MediaResultCode(err))
+		attrs = append(attrs, domain.MediaLogAttrs(ctx)...)
+		if err != nil {
+			slog.WarnContext(ctx, "ffmpeg failed", append(attrs, "err", err)...)
+		} else {
+			slog.InfoContext(ctx, "ffmpeg finished", append(attrs, "took", time.Since(start).Round(time.Millisecond))...)
+		}
+	}()
+	if c.Resources != nil {
+		var release func()
+		ctx, release, err = c.Resources.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
+	verification := op == "integrity"
+	release, err := c.acquire(ctx, verification)
+	if err != nil {
+		return err
+	}
+	defer release()
+	waitMS := time.Since(start).Milliseconds()
+	threads := max(1, c.Threads)
+	if verification {
+		threads = 1
+	}
+	full := []string{"-y", "-hide_banner", "-loglevel", "error", "-filter_threads", strconv.Itoa(threads), "-filter_complex_threads", strconv.Itoa(threads)}
+	// threads is a per-input/output codec option; a single leading value only
+	// limits the first decoder. Insert it for every file and for the encoder.
+	for i, a := range args {
+		if a == "-i" {
+			full = append(full, "-threads", strconv.Itoa(threads))
+		}
+		if i == len(args)-1 {
+			full = append(full, "-threads", strconv.Itoa(threads))
+		}
+		full = append(full, a)
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg", full...)
+	out, runErr := cmd.CombinedOutput()
+	attrs = append(attrs, "queue_wait_ms", waitMS, "threads", threads, "nvenc", c.NVENC)
+	if cmd.ProcessState != nil {
+		attrs = append(attrs, "cpu_user_seconds", cmd.ProcessState.UserTime().Seconds(), "cpu_system_seconds", cmd.ProcessState.SystemTime().Seconds())
+		attrs = append(attrs, "max_rss_kib", processMaxRSS(cmd.ProcessState))
+	}
+	var inputBytes int64
+	for i, a := range args {
+		if a == "-i" && i+1 < len(args) {
+			if info, e := os.Stat(args[i+1]); e == nil {
+				inputBytes += info.Size()
+			}
+		}
+	}
+	attrs = append(attrs, "input_bytes", inputBytes)
+	if len(args) > 0 {
+		if info, e := os.Stat(args[len(args)-1]); e == nil {
+			attrs = append(attrs, "output_bytes", info.Size())
+		}
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if runErr != nil {
+		if strings.Contains(strings.ToLower(string(out)), "no space left on device") {
+			return &domain.MediaResourceError{Code: "scratch_full", Detail: "FFmpeg output filesystem is full"}
+		}
 		return fmt.Errorf("ffmpeg %s: %w: %s", op, runErr, tail(out))
 	}
-	slog.InfoContext(ctx, "ffmpeg finished", "op", op, "took", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
