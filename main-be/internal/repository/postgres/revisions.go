@@ -162,6 +162,9 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
 	if r.RenderState != "ready" || r.Object == "" {
 		return fmt.Errorf("%w: rendered revision is not ready", domain.ErrConflict)
 	}
+	if err = validateGeneratedPublication(r.EditSpec); err != nil {
+		return err
+	}
 	if err = storageRevisionAvailable(ctx, tx, rid); err != nil {
 		return err
 	}

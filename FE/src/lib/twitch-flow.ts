@@ -1,4 +1,5 @@
 import type { TwitchFlow } from "@/types/twitch";
+import { validateMetadataSettings } from "./twitch-metadata";
 export const defaultTwitchFlow = (): TwitchFlow => ({
   id: "",
   name: "",
@@ -118,6 +119,8 @@ export function validateTwitchFlow(
     }
   }
   if (step == null || step === 3) {
+    const metadataError = validateMetadataSettings(flow.metadata);
+    if (metadataError) return metadataError;
     if (!Number.isSafeInteger(flow.schedule_horizon_hours) || flow.schedule_horizon_hours < 1 || flow.schedule_horizon_hours > 168)
       return "Горизонт календаря: целое число от 1 до 168 часов.";
     if (!Number.isSafeInteger(flow.max_source_age_hours) || flow.max_source_age_hours < 1 || flow.max_source_age_hours > 720)

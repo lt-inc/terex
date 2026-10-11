@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"terex/main-be/internal/domain"
 	"terex/proto/twitch"
 	"time"
@@ -150,6 +151,18 @@ func (s *Store) ListFlowClips(ctx context.Context, id string, q domain.FlowClipQ
 			row.SourceState = "used"
 			row.Reason.Code = "output_created"
 			row.Reason.Message = "Ролик подготовлен из этого исходника"
+		}
+		if row.SourceState == "ready" && len(row.Outputs) == 0 && f.ShortsEnabled {
+			title := publicTwitchTitle(strings.TrimSpace(row.Source.Title + " | " + row.Source.BroadcasterLogin))
+			if len([]rune(title)) > 100 {
+				title = string([]rune(title)[:100])
+			}
+			metadata := twitch.GenerateMetadata(flowMetadataInput(f, "short", title, []twitch.Source{row.Source}))
+			if len(metadata.Errors) > 0 {
+				row.Reason.Code = "metadata_invalid"
+				row.Reason.Message = "Файл проверен; выпуск ждёт исправления описания и хештегов потока: " + strings.Join(metadata.Errors, "; ")
+				row.Reason.Actions = []string{"retry"}
+			}
 		}
 	}
 	return out, nil

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import Toggle from "@/components/ui/Toggle";
 import TwitchNav from "./TwitchNav";
 import CapacityPanel from "./CapacityPanel";
+import MetadataSettingsEditor from "./MetadataSettingsEditor";
 import {
   createTwitchFlow,
   fetchAccountsList,
@@ -621,6 +622,7 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
             )}
             {step === 3 && (
               <>
+                <MetadataSettingsEditor flow={flow} onChange={(value) => change("metadata", value)} />
                 {flowID && !flow.archived && <CapacityPanel flowID={flowID} timezone={original?.timezone || "Asia/Tomsk"} />}
                 <Toggle
                   label="Включить поток"

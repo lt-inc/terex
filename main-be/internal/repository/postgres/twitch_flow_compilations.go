@@ -98,15 +98,12 @@ func createFlowCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.Compilat
 		return domain.Compilation{}, err
 	}
 	id, jid := "compilation-"+uuid.NewString(), uuid.NewString()
-	rid, err := createTwitchDraft(ctx, tx, jid, id, "twitch_compilation", "compilation", "", "", req.Title, f.AccountID, f.Timezone, m, now)
+	sources, err := assemblyMetadataSources(ctx, tx, m.Assembly)
 	if err != nil {
 		return domain.Compilation{}, err
 	}
-	desc, err := assemblyProvenance(ctx, tx, m.Assembly)
+	rid, err := createTwitchDraft(ctx, tx, jid, id, "twitch_compilation", "compilation", "", "", req.Title, f.AccountID, f.Timezone, m, now, flowMetadataInput(f, "compilation", req.Title, sources))
 	if err != nil {
-		return domain.Compilation{}, err
-	}
-	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET spec=jsonb_set(spec,'{description}',to_jsonb($2::text))WHERE id=$1`, rid, desc); err != nil {
 		return domain.Compilation{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilations(clip_id,flow_id,local_date,timezone,created_at)VALUES($1,$2,$3,$4,$5)`, id, f.ID, day, f.Timezone, now); err != nil {

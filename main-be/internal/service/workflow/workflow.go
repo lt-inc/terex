@@ -16,6 +16,8 @@ import (
 
 	"github.com/google/uuid"
 	"terex/main-be/internal/domain"
+	"terex/proto/publicationmetadata"
+	"terex/proto/twitch"
 	w "terex/proto/workflow"
 )
 
@@ -196,6 +198,11 @@ func validateMetadata(e domain.EditSpec) error {
 	if len(e.Description) > 5000 {
 		return fmt.Errorf("%w: description exceeds 5000 bytes", domain.ErrInvalid)
 	}
+	if e.MetadataSnapshot != nil {
+		if err := publicationmetadata.Validate(e.Title, publicationmetadata.Compose(e.Description, e.Hashtags)); err != nil {
+			return fmt.Errorf("%w: %s", domain.ErrInvalid, err)
+		}
+	}
 	return nil
 }
 func validateEdit(e domain.EditSpec, duration float64) error {
@@ -235,6 +242,31 @@ func (s *Service) SaveEditor(ctx context.Context, id string, u domain.EditReques
 	}
 	if prev.Cues == nil {
 		prev.Cues = []domain.Cue{}
+	}
+	// Only the editable introduction and tag settings come from the browser.
+	// Sources, category and language remain pinned to this release's snapshot.
+	if prev.MetadataSnapshot != nil {
+		requested := u.MetadataSnapshot
+		sources := make([]twitch.Source, 0, len(prev.MetadataSnapshot.Sources))
+		for _, source := range prev.MetadataSnapshot.Sources {
+			sources = append(sources, twitch.Source{BroadcasterLogin: source.Login, Language: source.Language, LanguageSource: source.LanguageSource})
+		}
+		input := prev.MetadataSnapshot.ToInput(u.Title, sources)
+		if requested != nil {
+			input.Settings = &requested.Settings
+			if requested.IntroEdited {
+				input.IntroOverride = &requested.Intro
+			} else {
+				input.IntroOverride = nil
+			}
+		}
+		generated := twitch.GenerateMetadata(input)
+		if len(generated.Errors) > 0 {
+			return domain.Editor{}, fmt.Errorf("%w: %s", domain.ErrInvalid, strings.Join(generated.Errors, "; "))
+		}
+		u.Description, u.Hashtags, u.MetadataSnapshot = generated.Description, generated.Hashtags, &generated.Snapshot
+	} else {
+		u.MetadataSnapshot = nil
 	}
 	if err = validateMetadata(u.EditSpec); err != nil {
 		return domain.Editor{}, err

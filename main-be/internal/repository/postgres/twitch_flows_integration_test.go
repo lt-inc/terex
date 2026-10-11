@@ -331,7 +331,9 @@ func TestTwitchFlowsScheduleAtomicallyAndKeepEditedCompilationsManual(t *testing
 	if updated.FlowConfig == nil || updated.FlowConfig.CompilationMaxDurationSec != 84 {
 		t.Fatal(updated)
 	}
-	completeRender(t, s, updated.RevisionID, secondAt, nil)
+	if updated.State != "ready" || updated.Object == "" {
+		t.Fatal("title-only update did not reuse ready compilation", updated)
+	}
 	if err = s.TickTwitchFlows(ctx, secondAt.Add(2*time.Minute)); err != nil {
 		t.Fatal(err)
 	}

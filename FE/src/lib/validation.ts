@@ -61,8 +61,8 @@ export function validateEditor(draft: ClipEditor) {
     return "Clip extends beyond the source video";
   if (!draft.title.trim() || draft.title.length > 100)
     return "Title must contain 1–100 characters";
-  if (draft.description.length > 5000)
-    return "Description must not exceed 5,000 characters";
+  if (new TextEncoder().encode(draft.description).length > 5000)
+    return "Полное описание не должно превышать 5000 байт (русские символы занимают больше одного байта).";
   const ids = new Set<string>();
   for (const c of draft.cues) {
     if (ids.has(c.id)) return "Subtitle cue IDs must be unique";

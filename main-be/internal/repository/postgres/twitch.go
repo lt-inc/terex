@@ -343,7 +343,12 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 		}
 		title = string(runes) + suffix
 	}
-	rid, err := createTwitchDraft(ctx, tx, jobID, clipID, "twitch", "short", out.Source.URL, out.Source.ClipID, title, out.AccountID, settings.Timezone, manifest, now)
+	title = publicTwitchTitle(title)
+	f, err := flowByID(ctx, tx, "default")
+	if err != nil {
+		return out, err
+	}
+	rid, err := createTwitchDraft(ctx, tx, jobID, clipID, "twitch", "short", out.Source.URL, out.Source.ClipID, title, out.AccountID, settings.Timezone, manifest, now, flowMetadataInput(f, "short", title, []twitch.Source{out.Source}))
 	if err != nil {
 		return out, err
 	}
@@ -379,7 +384,7 @@ func (s *Store) FinishTwitchImport(ctx context.Context, id string, v *workflow.V
 	return out, tx.Commit(ctx)
 }
 
-func createTwitchDraft(ctx context.Context, tx pgx.Tx, jobID, clipID, kind, format, sourceURL, sourceID, title string, accountID int64, zone string, manifest workflow.SourceManifest, now time.Time) (int64, error) {
+func createTwitchDraft(ctx context.Context, tx pgx.Tx, jobID, clipID, kind, format, sourceURL, sourceID, title string, accountID int64, zone string, manifest workflow.SourceManifest, now time.Time, metadata ...twitch.MetadataInput) (int64, error) {
 	if _, err := tx.Exec(ctx, `INSERT INTO jobs(job_id,youtube_url,source_kind,source_url,source_id,output_format,is_vertical,is_subtitles,slice_mode,approve_mode,status)VALUES($1,NULL,$2,$3,$4,$5,$6,FALSE,'full_clip','by_approve','processing')`, jobID, kind, sourceURL, sourceID, format, manifest.Options.Vertical); err != nil {
 		return 0, err
 	}
@@ -394,6 +399,11 @@ func createTwitchDraft(ctx context.Context, tx pgx.Tx, jobID, clipID, kind, form
 		return 0, err
 	}
 	spec := domain.EditSpec{StartSec: 0, EndSec: manifest.DurationSec, Title: title, Description: sourceURL, Visibility: "public", Hashtags: []string{}, Cues: []domain.Cue{}}
+	if len(metadata) > 0 {
+		if err := applyTwitchMetadata(&spec, metadata[0]); err != nil {
+			return 0, err
+		}
+	}
 	var rid int64
 	if err := tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,render_state,manifest)VALUES($1,1,$2,'pending',$3) RETURNING id`, clipID, mustJSON(spec), mustJSON(manifest)).Scan(&rid); err != nil {
 		return 0, err

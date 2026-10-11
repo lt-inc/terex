@@ -101,6 +101,35 @@ func (s *Store) ListTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
 	return out, rows.Err()
 }
 func validateFlow(f twitch.Flow) error {
+	if problems := twitch.ValidateMetadataSettings(f.Metadata); len(problems) > 0 {
+		return fmt.Errorf("%w: %s", domain.ErrInvalid, strings.Join(problems, "; "))
+	}
+	if f.Metadata != nil && f.Metadata.HashtagMode == "custom" {
+		// Reserve space for the automatic format/nickname/category tags, using
+		// a real-shaped login that cannot collide with an explicitly chosen tag.
+		login := "terex_preview_streamer"
+		for n := 0; n < 21; n++ {
+			candidate := fmt.Sprintf("terex_preview_%d", n)
+			collision := false
+			for _, tag := range f.Metadata.CustomHashtags {
+				if strings.EqualFold(strings.TrimLeft(tag, "#"), candidate) {
+					collision = true
+				}
+			}
+			if !collision {
+				login = candidate
+				break
+			}
+		}
+		format := "compilation"
+		if f.ShortsEnabled {
+			format = "short"
+		}
+		preview := twitch.GenerateMetadata(flowMetadataInput(f, format, "Preview", []twitch.Source{{BroadcasterLogin: login, Language: "en", LanguageSource: "clip"}}))
+		if len(preview.Hashtags) > twitch.MaxMetadataHashtags {
+			return fmt.Errorf("%w: собственный набор должен оставлять место для автоматических тегов формата, стримера и категории; максимум %d итоговых хештегов", domain.ErrInvalid, twitch.MaxMetadataHashtags)
+		}
+	}
 	if f.RankingMode != "views" && f.RankingMode != "growth" {
 		return fmt.Errorf("%w: рейтинг клипов должен быть views или growth", domain.ErrInvalid)
 	}

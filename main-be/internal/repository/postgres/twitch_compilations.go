@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"math"
+	"reflect"
 	"strings"
 	"terex/main-be/internal/domain"
 	"terex/proto/msg"
@@ -170,15 +171,16 @@ func createCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.CompilationR
 		return domain.Compilation{}, err
 	}
 	jid, id := uuid.NewString(), "compilation-"+uuid.NewString()
-	rid, err := createTwitchDraft(ctx, tx, jid, id, "twitch_compilation", "compilation", "", id, req.Title, settings.TargetAccountID, settings.Timezone, manifest, now)
+	f, err := flowByID(ctx, tx, "default")
 	if err != nil {
 		return domain.Compilation{}, err
 	}
-	provenance, err := assemblyProvenance(ctx, tx, manifest.Assembly)
+	sources, err := assemblyMetadataSources(ctx, tx, manifest.Assembly)
 	if err != nil {
 		return domain.Compilation{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET spec=spec||jsonb_build_object('description',$2::text) WHERE id=$1`, rid, provenance); err != nil {
+	rid, err := createTwitchDraft(ctx, tx, jid, id, "twitch_compilation", "compilation", "", id, req.Title, settings.TargetAccountID, settings.Timezone, manifest, now, flowMetadataInput(f, "compilation", req.Title, sources))
+	if err != nil {
 		return domain.Compilation{}, err
 	}
 	var date any
@@ -190,10 +192,6 @@ func createCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.CompilationR
 		return domain.Compilation{}, err
 	}
 	if err = saveAssemblyItems(ctx, tx, rid, manifest.Assembly); err != nil {
-		return domain.Compilation{}, err
-	}
-	f, err := flowByID(ctx, tx, "default")
-	if err != nil {
 		return domain.Compilation{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,account_id,youtube_channel_id,format,config,initial_revision_id,created_at)VALUES($1,'default',$2,$3,'compilation',$4,$5,$6)`, id, settings.TargetAccountID, f.YouTubeChannelID, mustJSON(f), rid, now); err != nil {
@@ -298,27 +296,40 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 	if err = storageRevisionAvailable(ctx, tx, prev.RevisionID); err != nil {
 		return prev, err
 	}
-	if prev.FlowID != "" {
-		current, e := currentFlowPolicy(ctx, tx, prev.FlowID)
+	spec := old.EditSpec
+	spec.StartSec, spec.EndSec, spec.Title, spec.Cues, spec.SubtitlesEnabled = 0, m.DurationSec, u.Title, []domain.Cue{}, false
+	if spec.MetadataSnapshot != nil {
+		sources, e := assemblyMetadataSources(ctx, tx, m.Assembly)
 		if e != nil {
 			return prev, e
 		}
-		ids := []string{}
-		for _, item := range m.Assembly.Items {
-			ids = append(ids, item.TwitchSourceID)
-		}
-		if _, e = reserveOutputPreparationTx(ctx, tx, current, id, "compilation", ids, now); e != nil {
+		if e = applyTwitchMetadata(&spec, spec.MetadataSnapshot.ToInput(u.Title, sources)); e != nil {
 			return prev, e
 		}
 	}
-	spec := old.EditSpec
-	spec.StartSec, spec.EndSec, spec.Title, spec.Cues, spec.SubtitlesEnabled = 0, m.DurationSec, u.Title, []domain.Cue{}, false
-	spec.Description, err = assemblyProvenance(ctx, tx, m.Assembly)
-	if err != nil {
-		return prev, err
+	rerender := !reflect.DeepEqual(m.Assembly, oldSource.Assembly) || old.StartSec != spec.StartSec || old.EndSec != spec.EndSec || old.SubtitlesEnabled || len(old.Cues) > 0 || prev.State != "ready" || prev.Object == ""
+	state, bucket, object := prev.State, prev.Bucket, prev.Object
+	if rerender {
+		state, bucket, object = "pending", "", ""
+		if prev.FlowID != "" {
+			current, e := currentFlowPolicy(ctx, tx, prev.FlowID)
+			if e != nil {
+				return prev, e
+			}
+			ids := []string{}
+			for _, item := range m.Assembly.Items {
+				ids = append(ids, item.TwitchSourceID)
+			}
+			if _, e = reserveOutputPreparationTx(ctx, tx, current, id, "compilation", ids, now); e != nil {
+				return prev, e
+			}
+		}
+	} else {
+		// Keep the rendered assembly's saved original for later editor trims.
+		m = oldSource
 	}
 	var rid int64
-	if err = tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,render_state,manifest)VALUES($1,$2,$3,'pending',$4) RETURNING id`, id, prev.Version+1, mustJSON(spec), mustJSON(m)).Scan(&rid); err != nil {
+	if err = tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,render_state,manifest,bucket,object)VALUES($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,'')) RETURNING id`, id, prev.Version+1, mustJSON(spec), state, mustJSON(m), bucket, object).Scan(&rid); err != nil {
 		return prev, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=0,end_sec=$3,title=$4 WHERE clip_id=$1`, id, rid, m.DurationSec, u.Title); err != nil {
@@ -338,8 +349,10 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 			return prev, err
 		}
 	}
-	if err = queueInitialRender(ctx, tx, rid, prev.Version+1, now); err != nil {
-		return prev, err
+	if rerender {
+		if err = queueInitialRender(ctx, tx, rid, prev.Version+1, now); err != nil {
+			return prev, err
+		}
 	}
 	out, err := compilationByID(ctx, tx, id)
 	if err != nil {

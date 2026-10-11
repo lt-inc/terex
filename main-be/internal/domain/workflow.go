@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"terex/proto/twitch"
 	"terex/proto/workflow"
 	"time"
 )
@@ -19,14 +20,15 @@ type Cue struct {
 }
 
 type EditSpec struct {
-	StartSec         float64  `json:"start_sec"`
-	EndSec           float64  `json:"end_sec"`
-	Title            string   `json:"title"`
-	Description      string   `json:"description"`
-	Visibility       string   `json:"visibility"`
-	Hashtags         []string `json:"hashtags"`
-	Cues             []Cue    `json:"cues"`
-	SubtitlesEnabled bool     `json:"subtitles_enabled"`
+	StartSec         float64                  `json:"start_sec"`
+	EndSec           float64                  `json:"end_sec"`
+	Title            string                   `json:"title"`
+	Description      string                   `json:"description"`
+	Visibility       string                   `json:"visibility"`
+	Hashtags         []string                 `json:"hashtags"`
+	Cues             []Cue                    `json:"cues"`
+	SubtitlesEnabled bool                     `json:"subtitles_enabled"`
+	MetadataSnapshot *twitch.MetadataSnapshot `json:"metadata_snapshot,omitempty"`
 }
 
 type Revision struct {
@@ -85,12 +87,13 @@ type TargetsRequest struct {
 }
 
 type PublicationMetadata struct {
-	Visibility  string   `json:"visibility"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Hashtags    []string `json:"hashtags"`
-	CategoryID  string   `json:"category_id,omitempty"`
-	MadeForKids bool     `json:"made_for_kids"`
+	Visibility       string                   `json:"visibility"`
+	Title            string                   `json:"title"`
+	Description      string                   `json:"description"`
+	Hashtags         []string                 `json:"hashtags"`
+	CategoryID       string                   `json:"category_id,omitempty"`
+	MadeForKids      bool                     `json:"made_for_kids"`
+	MetadataSnapshot *twitch.MetadataSnapshot `json:"metadata_snapshot,omitempty"`
 }
 
 type PublicationRecord struct {

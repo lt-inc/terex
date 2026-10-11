@@ -135,6 +135,8 @@ type Flow struct {
 	FoundClips                int        `json:"found_clips"`
 	ReadyOutputs              int        `json:"ready_outputs"`
 	NextPublicationAt         *time.Time `json:"next_publication_at,omitempty"`
+
+	Metadata *MetadataSettings `json:"metadata,omitempty"`
 }
 
 type CollectorConfig struct {

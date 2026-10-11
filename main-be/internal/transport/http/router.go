@@ -42,6 +42,7 @@ func (a *API) Router() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Use(a.Auth.Protect)
 		if a.Twitch != nil {
+			r.Post("/twitch/metadata/preview", a.twitchMetadataPreview)
 			r.Get("/twitch/flows", a.twitchFlows)
 			r.Post("/twitch/flows", a.saveTwitchFlow)
 			r.Get("/twitch/flows/{id}", a.twitchFlow)
