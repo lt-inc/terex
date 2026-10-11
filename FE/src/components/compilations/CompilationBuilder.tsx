@@ -49,6 +49,8 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
   const [flowID, setFlowID] = useState("");
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const requestID = useRef(0);
+  const pending = useRef<AbortController | null>(null);
+  const selectedFlow = useRef("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -102,23 +104,27 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
   );
 
   const load = useCallback(async () => {
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
     const attempt = ++requestID.current;
     setLoading(true);
     setError("");
     try {
       const [availableFlows, existing] = await Promise.all([
-        fetchTwitchFlows(),
-        clipID ? fetchCompilation(clipID) : Promise.resolve(null),
+        fetchTwitchFlows(false, controller.signal),
+        clipID ? fetchCompilation(clipID, controller.signal) : Promise.resolve(null),
       ]);
       const selectedID =
         existing?.flow_id ||
-        flowID ||
+        selectedFlow.current ||
         new URLSearchParams(window.location.search).get("flow") ||
         availableFlows?.[0]?.id ||
         "";
-      const available = await fetchImports("ready", selectedID);
+      const available = await fetchImports("ready", selectedID, controller.signal);
       if (attempt !== requestID.current) return;
       setFlows(availableFlows || []);
+      selectedFlow.current = selectedID;
       setFlowID(selectedID);
       setImports(available ?? []);
       setSettings(
@@ -137,13 +143,14 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
     } catch (failure) {
       if (attempt === requestID.current) setError(messageOf(failure));
     } finally {
-      if (attempt === requestID.current) setLoading(false);
+      if (attempt === requestID.current) {setLoading(false); pending.current = null;}
     }
-  }, [clipID, flowID]);
+  }, [clipID]);
   useEffect(() => {
     void load();
     return () => {
       requestID.current++;
+      pending.current?.abort();
     };
   }, [load]);
   useEffect(() => {
@@ -154,37 +161,9 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
-  useEffect(() => {
-    if (
-      !clipID ||
-      !saved ||
-      !["pending", "queued", "rendering"].includes(saved.state)
-    )
-      return;
-    let active = true;
-    const timer = setInterval(() => {
-      fetchCompilation(clipID)
-        .then((latest) => {
-          if (!active) return;
-          if (latest.version !== saved.version) {
-            setError(
-              "Подборка изменена в другом окне. Ваши правки сохранены на экране; обновите версию перед повторным сохранением.",
-            );
-            return;
-          }
-          setSaved(latest);
-        })
-        .catch((failure) => {
-          if (active) setError(messageOf(failure));
-        });
-    }, 5000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [clipID, saved?.state, saved?.version]);
 
   function add() {
+    if (busy || loading || pending.current || !settings) return;
     const source = candidates.find((item) => item.import_id === candidateID);
     if (!source || duration(source) <= 0) return;
     setItems((previous) => [
@@ -200,7 +179,7 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
     setCandidateID("");
   }
   async function save() {
-    if (!settings) return;
+    if (!settings || busy || loading || pending.current || settings.id !== flowID) return;
     setError("");
     setNotice("");
     const issue = validateCompilation(
@@ -277,6 +256,7 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
         добавляется секундная перебивка. Изменение состава создаёт новую версию
         и удерживает будущий выпуск до готовности нового рендера.
       </p>
+      <p className="text-xs text-slate-400">Автообновление выключено. После рендера нажмите «Обновить». При ошибке ваши правки и предыдущие данные сохраняются.</p>
       {error && (
         <p role="alert" className="text-sm text-red-400">
           {error}
@@ -300,13 +280,14 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
             void save();
           }}
         >
+          <fieldset disabled={busy || loading} className="contents">
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             Поток
             <select
               className={input}
               value={flowID}
-              disabled={!!clipID || busy || dirty}
-              onChange={(event) => setFlowID(event.target.value)}
+              disabled={!!clipID || busy || loading || dirty}
+              onChange={(event) => {selectedFlow.current = event.target.value; setFlowID(event.target.value); setImports([]); setSettings(null); setSaved(null); setTitle(""); setItems([]); setCandidateID(""); setPreview(null); void load();}}
             >
               {flows.map((flow) => (
                 <option key={flow.id} value={flow.id}>
@@ -552,6 +533,7 @@ export default function CompilationBuilder({ clipID }: { clipID?: string }) {
               </span>
             )}
           </div>
+          </fieldset>
         </form>
       </section>
       {saved && (

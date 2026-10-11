@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Toggle from "@/components/ui/Toggle";
 import TwitchNav from "@/components/twitch/TwitchNav";
 import ResetPanel from "@/components/twitch/ResetPanel";
@@ -17,31 +17,39 @@ export default function TwitchServiceSettings() {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(false);
+  const pending = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
+    setLoading(true);
     try {
-      const [value, current] = await Promise.all([
-        fetchTwitchSettings(),
-        fetchTwitchStatus(),
+      const [value, current] = await Promise.allSettled([
+        fetchTwitchSettings(controller.signal),
+        fetchTwitchStatus(controller.signal),
       ]);
-      setSettings({ ...value, compilation_budget_percent: value.compilation_budget_percent ?? 70, admission_mode: value.admission_mode || "shadow" });
-      setStatus(current);
-      setError("");
+      if (controller.signal.aborted) return;
+      if (value.status === "fulfilled") setSettings({ ...value.value, compilation_budget_percent: value.value.compilation_budget_percent ?? 70, admission_mode: value.value.admission_mode || "shadow" });
+      if (current.status === "fulfilled") setStatus(current.value);
+      const failures = [value, current].flatMap((result, index) => result.status === "rejected" ? [`${index ? "Состояние collector" : "Настройки"}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []);
+      setError(failures.join(" · "));
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      if (!controller.signal.aborted) {setLoading(false); pending.current = null;}
     }
   }, []);
   useEffect(() => {
     void load();
+    return () => pending.current?.abort();
   }, [load]);
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible")
-        void fetchTwitchStatus()
-          .then(setStatus)
-          .catch(() => {});
-    }, 10000);
-    return () => clearInterval(timer);
-  }, []);
+  async function refreshStatus() {
+    setLoading(true);
+    try {setStatus(await fetchTwitchStatus()); setError("");}
+    catch (failure) {setError(failure instanceof Error ? failure.message : String(failure));}
+    finally {setLoading(false);}
+  }
   async function save() {
     if (!settings) return;
     if (
@@ -80,6 +88,10 @@ export default function TwitchServiceSettings() {
     <div className="flex flex-col gap-5 p-4 sm:p-6">
       <h1 className="text-xl font-semibold">Настройки Twitch collector</h1>
       <TwitchNav />
+      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+        <p>Автообновление выключено. Обновление состояния не изменяет ваши правки настроек.</p>
+        <button type="button" className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-slate-100 disabled:opacity-40" disabled={loading || busy} onClick={() => void (settings ? refreshStatus() : load())}>{loading ? "Загружаем…" : settings ? "Обновить состояние" : "Повторить загрузку"}</button>
+      </div>
       <p className="text-sm text-slate-400">
         Общий бюджет защищает очередь скачивания. Форматы, фильтры и расписание
         задаются внутри каждого потока.

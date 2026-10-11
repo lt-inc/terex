@@ -28,12 +28,14 @@ const button =
 export default function TwitchClipsPage() {
   const [flows, setFlows] = useState<TwitchFlow[]>([]),
     [flowID, setFlowID] = useState("");
-  const [page, setPage] = useState<TwitchFlowClipPage>({
+  const [loadedPage, setPage] = useState<TwitchFlowClipPage>({
     items: [],
     total: 0,
     limit: 50,
     offset: 0,
   });
+  const [loadedFlowID, setLoadedFlowID] = useState("");
+  const page = loadedFlowID === flowID ? loadedPage : {items: [], total: 0, limit: 50, offset: 0};
   const [search, setSearch] = useState(""),
     [q, setQ] = useState(""),
     [state, setState] = useState(""),
@@ -48,9 +50,12 @@ export default function TwitchClipsPage() {
   const [preview, setPreview] = useState<PreviewTarget | null>(null),
     [globalReject, setGlobalReject] = useState<TwitchFlowClip | null>(null);
   const requestID = useRef(0);
+  const pending = useRef<AbortController | null>(null);
+  const [flowLoad, setFlowLoad] = useState(0);
   useEffect(() => {
     let active = true;
-    fetchTwitchFlows()
+    const controller = new AbortController();
+    fetchTwitchFlows(false, controller.signal)
       .then((value) => {
         if (!active) return;
         setFlows(value || []);
@@ -76,8 +81,9 @@ export default function TwitchClipsPage() {
       });
     return () => {
       active = false;
+      controller.abort();
     };
-  }, []);
+  }, [flowLoad]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setQ(search.trim());
@@ -88,6 +94,9 @@ export default function TwitchClipsPage() {
   const load = useCallback(
     async (quiet = false) => {
       if (!flowID) return;
+      pending.current?.abort();
+      const controller = new AbortController();
+      pending.current = controller;
       const attempt = ++requestID.current;
       if (!quiet) setLoading(true);
       try {
@@ -98,9 +107,10 @@ export default function TwitchClipsPage() {
           format,
           broadcaster_id: broadcaster,
           show_filtered: String(showFiltered),
-        });
+        }, controller.signal);
         if (attempt === requestID.current) {
           setPage(value);
+          setLoadedFlowID(flowID);
           setError("");
         }
       } catch (failure) {
@@ -109,7 +119,7 @@ export default function TwitchClipsPage() {
             failure instanceof Error ? failure.message : String(failure),
           );
       } finally {
-        if (attempt === requestID.current) setLoading(false);
+        if (attempt === requestID.current) {setLoading(false); pending.current = null;}
       }
     },
     [flowID, offset, q, state, format, broadcaster, showFiltered],
@@ -118,20 +128,15 @@ export default function TwitchClipsPage() {
     void load();
     return () => {
       requestID.current++;
+      pending.current?.abort();
     };
   }, [load]);
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible" && !busy) void load(true);
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [load, busy]);
   const selectedFlow = flows.find((flow) => flow.id === flowID);
   async function action(
     item: TwitchFlowClip,
     kind: "retry" | "exclude" | "global",
   ) {
-    if (!item.import_id) return;
+    if (!item.import_id || loadedFlowID !== flowID || busy) return;
     setBusy(item.source.clip_id);
     setNotice("");
     setError("");
@@ -156,6 +161,7 @@ export default function TwitchClipsPage() {
     }
   }
   async function keep(item: TwitchFlowClip) {
+    if (loadedFlowID !== flowID || busy) return;
     setBusy(item.source.clip_id); setError(""); setNotice("");
     try {
       await keepTwitchMaterial("imports", item.import_id, !item.keep);
@@ -170,13 +176,14 @@ export default function TwitchClipsPage() {
         <h1 className="text-xl font-semibold">Клипы: состояние и выпуски</h1>
         <button
           className={button}
-          disabled={loading || !!busy || !flowID}
-          onClick={() => void load()}
+          disabled={loading || !!busy}
+          onClick={() => {if (flowID) void load(); else {setLoading(true); setFlowLoad((value) => value + 1);}}}
         >
           Обновить
         </button>
       </div>
       <TwitchNav />
+      <p className="text-xs text-slate-400">Автообновление выключено. Чтобы увидеть новые клипы и состояния, нажмите «Обновить». При ошибке последние загруженные данные остаются на экране.</p>
       <p className="text-sm text-slate-400">
         Исходник скачивается один раз. Shorts и подборки имеют собственные
         версии и расписание. Готовые версии допускаются автоматически. Ниже видно, что происходит и что
@@ -188,10 +195,15 @@ export default function TwitchClipsPage() {
           <select
             className={input}
             value={flowID}
+            disabled={!!busy}
             onChange={(event) => {
               setFlowID(event.target.value);
               setOffset(0);
               setBroadcaster("");
+              setPreview(null);
+              setGlobalReject(null);
+              setNotice("");
+              setError("");
             }}
           >
             {!flows.length && <option value="">Нет потоков</option>}

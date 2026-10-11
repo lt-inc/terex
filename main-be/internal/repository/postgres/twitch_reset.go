@@ -218,6 +218,23 @@ func (s *Store) StartTwitchReset(ctx context.Context, q twitch.ResetRequest, now
 	}
 	return s.TwitchReset(ctx)
 }
+
+// Return only the durable fence, without aggregating deletion progress for the UI.
+func (s *Store) TwitchCollectorReset(ctx context.Context) (int64, *twitch.ResetMaintenance, error) {
+	var epoch int64
+	var active bool
+	var id, state string
+	err := s.pool.QueryRow(ctx, `SELECT c.epoch,c.active,COALESCE(c.reset_id,''),COALESCE(r.state,'')
+ FROM twitch_reset_control c LEFT JOIN twitch_reset_runs r ON r.id=c.reset_id WHERE c.id=1`).Scan(&epoch, &active, &id, &state)
+	if err != nil {
+		return 0, nil, err
+	}
+	if active {
+		return epoch, &twitch.ResetMaintenance{ID: id, Epoch: epoch, State: state}, nil
+	}
+	return epoch, nil, nil
+}
+
 func (s *Store) TwitchReset(ctx context.Context) (out twitch.ResetStatus, err error) {
 	var counts, blockers []byte
 	err = s.pool.QueryRow(ctx, `SELECT id,state,epoch,collector_ack,gpu_drained,counts,blockers,error,created_at,updated_at,completed_at FROM twitch_reset_runs ORDER BY epoch DESC LIMIT 1`).Scan(&out.ID, &out.State, &out.Epoch, &out.CollectorAck, &out.GPUDrained, &counts, &blockers, &out.Error, &out.CreatedAt, &out.UpdatedAt, &out.CompletedAt)

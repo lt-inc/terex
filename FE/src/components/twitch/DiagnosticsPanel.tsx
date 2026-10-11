@@ -26,19 +26,26 @@ function Coverage({ value }: { value?: TwitchDiscoveryCoverage }) {
 export default function DiagnosticsPanel({ flowID, timezone = "Asia/Tomsk" }: { flowID: string; timezone?: string }) {
   const [data, setData] = useState<TwitchFlowDiagnostics | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const requestID = useRef(0);
+  const pending = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
     const attempt = ++requestID.current;
-    try { const next = await fetchTwitchDiagnostics(flowID); if (attempt === requestID.current) {setData(next); setError("");} }
+    setLoading(true);
+    try { const next = await fetchTwitchDiagnostics(flowID, controller.signal); if (attempt === requestID.current) {setData(next); setError("");} }
     catch (failure) {if (attempt === requestID.current) setError(failure instanceof Error ? failure.message : String(failure));}
+    finally {if (attempt === requestID.current) {setLoading(false); pending.current = null;}}
   }, [flowID]);
-  useEffect(() => {setData(null); void load(); const timer = setInterval(() => {if (document.visibilityState === "visible") void load();},30000); return () => {clearInterval(timer); requestID.current++;};},[load]);
+  useEffect(() => {setData(null); setError(""); void load(); return () => {requestID.current++; pending.current?.abort();};},[load]);
   const stamp = (value?: string) => value && !value.startsWith("0001-") ? new Intl.DateTimeFormat("ru",{timeZone: timezone,dateStyle:"short",timeStyle:"short"}).format(new Date(value)) : "место пока не найдено";
-  if (!data) return <p className="text-xs text-amber-200">{error ? `Диагностика недоступна: ${error}` : "Проверяем исходники и ближайшие места…"}</p>;
+  if (!data) return <section className="flex flex-wrap items-center gap-3 text-xs text-amber-200"><p>{error ? `Диагностика недоступна: ${error}` : "Проверяем исходники и ближайшие места…"}</p><button type="button" disabled={loading} className="text-indigo-300 disabled:opacity-40" onClick={() => void load()}>{loading ? "Загружаем…" : "Повторить"}</button></section>;
   const c = data.compilation;
   return <section className="rounded-xl border border-slate-700 bg-slate-900/40 p-4 text-sm">
-    <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold">Готовность потока</h2><button type="button" className="text-xs text-indigo-300" onClick={() => void load()}>Обновить</button></div>
-    <p className="mt-1 text-xs text-slate-400">Расчёт на {stamp(data.generated_at)}. Обновляется каждые 30 секунд, пока страница открыта. Просмотр не расходует квоту.</p>
+    <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold">Готовность потока</h2><button type="button" disabled={loading} className="text-xs text-indigo-300 disabled:opacity-40" onClick={() => void load()}>{loading ? "Обновляем…" : "Обновить"}</button></div>
+    <p className="mt-1 text-xs text-slate-400">Расчёт на {stamp(data.generated_at)}. Автообновление выключено; нажмите «Обновить» для нового расчёта. Просмотр не расходует квоту.</p>
     {error && <p className="mt-2 text-amber-200">Последнее обновление не удалось; ниже предыдущие данные: {error}</p>}
     <p className="mt-3">Для ближайшей подборки: <strong>{c.selected_clips ?? 0} клипов · {durationLabel(c.ready_duration_sec)}</strong> из {durationLabel(c.minimum_duration_sec)}; минимум {c.minimum_clips} клипов.</p>
     <p className="mt-1 text-xs text-slate-400">Ближайшая дата: {stamp(c.scheduled_at)}. Учитываются целые клипы, секундные переходы, баланс и отсутствие повторов.</p>

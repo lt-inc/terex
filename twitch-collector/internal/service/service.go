@@ -303,12 +303,15 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 	out.Paused = !out.ConfigAvailable || !config.settings.Enabled || config.maintenance
 	out.BlockReason = config.reason
 	if config.err != nil {
-		out.LastError = config.reason
+		out.LastError = "Не удалось обновить настройки Terex: " + safeErrorMessage(config.err, "проверьте связь и служебный токен")
 	}
 	if config.observedAt.IsZero() {
 		out.BlockReason = "Настройки Terex ещё не получены; ожидание первого цикла коллектора"
-	} else if !out.ConfigAvailable && config.err == nil {
+	} else if !out.ConfigAvailable {
 		out.BlockReason = "Нет свежих настроек Terex; показано только локальное состояние коллектора"
+		if config.err != nil {
+			out.BlockReason += ": " + safeErrorMessage(config.err, "проверьте связь и служебный токен")
+		}
 	} else if out.BlockReason == "" && time.Since(workerGate.observedAt) <= configFreshness {
 		out.BlockReason = workerGate.reason
 	}

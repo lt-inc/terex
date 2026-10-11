@@ -52,7 +52,14 @@ func (s *Service) CollectorConfig(ctx context.Context) (t.CollectorConfig, error
 	if e != nil {
 		return t.CollectorConfig{}, e
 	}
-	flows, e := s.Flows(ctx)
+	var flows []t.Flow
+	if repo, ok := s.Repo.(interface {
+		ListCollectorTwitchFlows(context.Context) ([]t.Flow, error)
+	}); ok {
+		flows, e = repo.ListCollectorTwitchFlows(ctx)
+	} else {
+		flows, e = s.Flows(ctx)
+	}
 	if e != nil {
 		return t.CollectorConfig{}, e
 	}
@@ -63,6 +70,13 @@ func (s *Service) CollectorConfig(ctx context.Context) (t.CollectorConfig, error
 	}
 	out := t.CollectorConfig{Settings: settings, Flows: flows}
 	if repo, ok := s.Repo.(interface {
+		TwitchCollectorReset(context.Context) (int64, *t.ResetMaintenance, error)
+	}); ok {
+		out.Epoch, out.Maintenance, e = repo.TwitchCollectorReset(ctx)
+		if e != nil {
+			return out, e
+		}
+	} else if repo, ok := s.Repo.(interface {
 		TwitchReset(context.Context) (t.ResetStatus, error)
 	}); ok {
 		reset, err := repo.TwitchReset(ctx)

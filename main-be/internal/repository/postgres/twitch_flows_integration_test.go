@@ -266,6 +266,48 @@ func TestTwitchFlowsScheduleAtomicallyAndKeepEditedCompilationsManual(t *testing
 	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.format='short' AND p.publish_at::date=$1::date`, now.Format("2006-01-02")).Scan(&shorts); err != nil || shorts != 2 {
 		t.Fatal(shorts, err)
 	}
+	// Calendar policy keeps the oldest source, including historical assembly
+	// items linked only through source_clip_id, and matches the detail response.
+	var oldestImport, legacyClip string
+	if err = s.pool.QueryRow(ctx, `SELECT source_id FROM twitch_compilation_items WHERE compilation_revision_id=$1 AND ordinal=0`, comp.Compilation.RevisionID).Scan(&oldestImport); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT clip_id FROM twitch_outputs WHERE source_id=$1 AND format='short' LIMIT 1`, oldestImport).Scan(&legacyClip); err != nil {
+		t.Fatal(err)
+	}
+	oldest := now.Add(-6 * time.Hour)
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_imports SET clip_id=$3,request=jsonb_set(request,'{source,created_at}',to_jsonb($2::timestamptz)) WHERE id=$1`, oldestImport, oldest, legacyClip); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_compilation_items SET source_id=NULL,source_clip_id=$2 WHERE compilation_revision_id=$1 AND ordinal=0`, comp.Compilation.RevisionID, legacyClip); err != nil {
+		t.Fatal(err)
+	}
+	calendar, err := s.ListPublicationRecords(ctx, domain.PublicationFilter{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenCompilation := false
+	for _, event := range calendar {
+		detail, e := s.GetPublicationRecord(ctx, event.ID)
+		if e != nil || event.TwitchPolicy == nil || detail.TwitchPolicy == nil || event.TwitchPolicy.SourceCreatedAt == nil || detail.TwitchPolicy.SourceCreatedAt == nil || !event.TwitchPolicy.SourceCreatedAt.Equal(*detail.TwitchPolicy.SourceCreatedAt) || event.FreshnessOverride != detail.FreshnessOverride {
+			t.Fatal("calendar policy differs from detail", event, detail, e)
+		}
+		if event.ClipID == comp.Compilation.ClipID {
+			seenCompilation = true
+			if !event.TwitchPolicy.SourceCreatedAt.Equal(oldest) || !event.TwitchPolicy.Deadline.Equal(oldest.Add(72*time.Hour)) {
+				t.Fatal("oldest legacy source lost", event.TwitchPolicy)
+			}
+		}
+	}
+	if !seenCompilation {
+		t.Fatal("compilation missing from calendar")
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_compilation_items SET source_id=$2,source_clip_id=NULL WHERE compilation_revision_id=$1 AND ordinal=0`, comp.Compilation.RevisionID, oldestImport); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_imports SET clip_id=NULL WHERE id=$1`, oldestImport); err != nil {
+		t.Fatal(err)
+	}
 	// The scheduler uses an injected clock while next_attempt_at defaults to the
 	// database clock. Make eligibility explicit rather than racing those clocks.
 	if _, err = s.pool.Exec(ctx, `UPDATE publications SET next_attempt_at=$1`, now); err != nil {

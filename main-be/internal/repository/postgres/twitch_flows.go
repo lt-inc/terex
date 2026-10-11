@@ -19,13 +19,22 @@ func defaultFlow() twitch.Flow {
 	return twitch.Flow{ScheduleHorizonHours: 48, MaxSourceAgeHours: 72, Name: "Новый поток", SourceMode: "channels", Version: 1, PollIntervalMinutes: s.PollIntervalMinutes, WindowHours: s.WindowHours, MinViews: s.MinViews, MinAgeMinutes: s.MinAgeMinutes, MinDurationSec: s.MinDurationSec, MaxDurationSec: s.MaxDurationSec, ShortsEnabled: true, CompilationsEnabled: true, CompilationMinDurationSec: 480, CompilationMaxDurationSec: 720, CompilationMinClips: 3, CompilationMaxClips: 60, CompilationHour: 21, BalanceByTime: true, Timezone: s.Timezone, DailyShorts: s.DailyShorts, DailyCompilations: s.DailyCompilations, ShortsSlots: []string{"09:00", "12:00", "15:00", "18:00", "21:00"}, CompilationSlots: []string{"21:30"}, BroadcasterIDs: []string{}}
 }
 
-const flowCols = `config,version,COALESCE(account_id,0),youtube_channel_id,enabled,auto_publish,auto_enabled_at,created_at,updated_at,work_started_at,last_checked_at,
- (SELECT count(*) FROM twitch_flow_sources fs WHERE fs.flow_id=twitch_flows.id),
- (SELECT count(*) FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id WHERE o.flow_id=twitch_flows.id AND r.render_state='ready'),
- (SELECT min(p.publish_at) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=twitch_flows.id AND p.started_at IS NULL AND p.status IN('scheduled','queued','retry_wait')),
+const flowBaseCols = `config,version,COALESCE(account_id,0),youtube_channel_id,enabled,auto_publish,auto_enabled_at,created_at,updated_at,work_started_at,last_checked_at,`
+
+const flowAccessCols = `
  CASE WHEN account_id IS NULL THEN 'Выберите YouTube-канал' WHEN NOT EXISTS(SELECT 1 FROM accounts a WHERE a.id=twitch_flows.account_id AND a.connection_state='connected' AND COALESCE(a.remote_account_id,'')=twitch_flows.youtube_channel_id AND twitch_flows.youtube_channel_id<>'') THEN 'Подключите подтверждённый YouTube-канал; назначение потока закреплено' ELSE '' END,
  COALESCE((SELECT jsonb_agg(i.twitch_clip_id) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=twitch_flows.id AND fs.excluded),'[]'::jsonb),archived,
  COALESCE((SELECT schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=twitch_flows.youtube_channel_id),48)`
+
+const flowCols = flowBaseCols + `
+ (SELECT count(*) FROM twitch_flow_sources fs WHERE fs.flow_id=twitch_flows.id),
+ (SELECT count(*) FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id WHERE o.flow_id=twitch_flows.id AND r.render_state='ready'),
+ (SELECT min(p.publish_at) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=twitch_flows.id AND p.started_at IS NULL AND p.status IN('scheduled','queued','retry_wait')),
+ ` + flowAccessCols
+
+// Collector control reads must not calculate UI counts or scan the calendar on
+// every five-second refresh. Authorization and exclusions remain live reads.
+const collectorFlowCols = flowBaseCols + `0,0,NULL::timestamptz,` + flowAccessCols
 
 func scanFlow(row pgx.Row) (twitch.Flow, error) {
 	f := defaultFlow()
@@ -85,7 +94,13 @@ func (s *Store) GetTwitchFlow(ctx context.Context, id string) (twitch.Flow, erro
 	return scanFlow(s.pool.QueryRow(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE id=$1`, id))
 }
 func (s *Store) ListTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE NOT archived ORDER BY created_at,id`)
+	return s.listTwitchFlows(ctx, flowCols)
+}
+func (s *Store) ListCollectorTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
+	return s.listTwitchFlows(ctx, collectorFlowCols)
+}
+func (s *Store) listTwitchFlows(ctx context.Context, columns string) ([]twitch.Flow, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+columns+` FROM twitch_flows WHERE NOT archived ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}

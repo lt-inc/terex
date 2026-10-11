@@ -241,7 +241,8 @@ jobs:
           KUBE_TOKEN: ${{ secrets.KUBE_TOKEN }}
           KUBE_CERTIFICATE: ${{ secrets.KUBE_CA }}
         with:
-          args: rollout status deployment/terex-fe -n admin --timeout=180s
+          # Cold image pulls on staging can take over two minutes before startup.
+          args: rollout status deployment/terex-fe -n admin --timeout=360s
 
       - name: Update Twitch collector image
         uses: actions-hub/kubectl@master

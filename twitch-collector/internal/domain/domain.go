@@ -167,6 +167,8 @@ type Download struct {
 type Failure struct {
 	Kind        string
 	Message     string
+	Operation   string
+	DurationMS  int64
 	Retryable   bool
 	RetryAfter  time.Duration
 	HTTPStatus  int

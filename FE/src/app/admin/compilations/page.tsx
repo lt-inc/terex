@@ -33,6 +33,7 @@ export default function CompilationsPage() {
     useState<AutoCompilationResult | null>(null);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const requestID = useRef(0);
+  const pending = useRef<AbortController | null>(null);
   useEffect(() => {
     let active = true;
     fetchTwitchFlows()
@@ -57,10 +58,13 @@ export default function CompilationsPage() {
   }, []);
   const load = useCallback(
     async (quiet = false) => {
+      pending.current?.abort();
+      const controller = new AbortController();
+      pending.current = controller;
       const attempt = ++requestID.current;
       if (!quiet) setLoading(true);
       try {
-        const value = await fetchCompilations(flowID);
+        const value = await fetchCompilations(flowID, controller.signal);
         if (attempt === requestID.current) {
           setCompilations(value ?? []);
           setError("");
@@ -68,7 +72,7 @@ export default function CompilationsPage() {
       } catch (failure) {
         if (attempt === requestID.current) setError(messageOf(failure));
       } finally {
-        if (attempt === requestID.current) setLoading(false);
+        if (attempt === requestID.current) {setLoading(false); pending.current = null;}
       }
     },
     [flowID],
@@ -77,14 +81,9 @@ export default function CompilationsPage() {
     void load();
     return () => {
       requestID.current++;
+      pending.current?.abort();
     };
   }, [load]);
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible" && !busy) void load(true);
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [load, busy]);
   async function automatic() {
     if (!flowID) return;
     setBusy(true);
@@ -144,6 +143,7 @@ export default function CompilationsPage() {
         </div>
       </div>
       <TwitchNav />
+      <p className="text-xs text-slate-400">Автообновление выключено. Новые состояния подборок доступны по кнопке «Обновить». При ошибке последние загруженные данные сохраняются.</p>
       {flowID && <DiagnosticsPanel flowID={flowID} timezone={selectedFlow?.timezone} />}
       <label className="flex max-w-lg flex-col gap-1 text-xs text-slate-400">
         Поток
