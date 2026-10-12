@@ -54,11 +54,12 @@ export default function TwitchServiceSettings() {
     if (!settings) return;
     if (
       !Number.isSafeInteger(settings.daily_downloads) ||
-      settings.daily_downloads < 1 ||
+      settings.daily_downloads < 0 ||
       settings.daily_downloads > 100 ||
       !Number.isSafeInteger(settings.per_channel_daily_downloads) ||
       settings.per_channel_daily_downloads < 1 ||
-      settings.per_channel_daily_downloads > settings.daily_downloads ||
+      settings.per_channel_daily_downloads > 100 ||
+      (settings.daily_downloads > 0 && settings.per_channel_daily_downloads > settings.daily_downloads) ||
       !Number.isSafeInteger(settings.backlog_limit) ||
       settings.backlog_limit < 1 ||
       settings.backlog_limit > 1000 ||
@@ -66,7 +67,7 @@ export default function TwitchServiceSettings() {
       settings.compilation_budget_percent! < 0 || settings.compilation_budget_percent! > 100
     ) {
       setError(
-        "Проверьте бюджет: 1–100 скачиваний, лимит стримера не выше общего, очередь 1–1000.",
+        "Общий суточный лимит: 0 — без ограничения, либо 1–100. Лимит стримера: 1–100 и не выше общего, если он включён. Очередь: 1–1000; доля подборок: 0–100%.",
       );
       return;
     }
@@ -93,8 +94,9 @@ export default function TwitchServiceSettings() {
         <button type="button" className="rounded-lg bg-slate-700 px-3 py-2 text-sm text-slate-100 disabled:opacity-40" disabled={loading || busy} onClick={() => void (settings ? refreshStatus() : load())}>{loading ? "Загружаем…" : settings ? "Обновить состояние" : "Повторить загрузку"}</button>
       </div>
       <p className="text-sm text-slate-400">
-        Общий бюджет защищает очередь скачивания. Форматы, фильтры и расписание
-        задаются внутри каждого потока.
+        Общий суточный лимит скачиваний необязателен. Календарь, размер очереди и
+        свободное место продолжают ограничивать подготовку. Форматы, фильтры и
+        расписание задаются внутри каждого потока.
       </p>
       {error && (
         <p role="alert" className="text-sm text-red-400">
@@ -150,14 +152,15 @@ export default function TwitchServiceSettings() {
             Для отдельного потока используйте его переключатель.
           </p>
           <p className="text-xs text-slate-400">
-            Общий бюджет скачиваний обновляется по календарным суткам в{" "}
-            {settings.timezone}. Часовой пояс публикаций задаётся для каждого
+            Счётчики скачиваний и лимит одного стримера обновляются по календарным
+            суткам в {settings.timezone}. Значение 0 отключает только общий
+            суточный лимит. Часовой пояс публикаций задаётся для каждого
             YouTube-канала отдельно.
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             {(
               [
-                ["daily_downloads", "Всего новых скачиваний в сутки", 100],
+                ["daily_downloads", "Общий суточный лимит · 0 — без ограничения", 100],
                 [
                   "per_channel_daily_downloads",
                   "Скачиваний одного стримера в сутки",
@@ -174,7 +177,7 @@ export default function TwitchServiceSettings() {
                 <input
                   className={input}
                   type="number"
-                  min={1}
+                  min={field === "daily_downloads" ? 0 : 1}
                   max={max}
                   required
                   value={settings[field]}
@@ -195,7 +198,7 @@ export default function TwitchServiceSettings() {
           >
             {busy ? "Сохраняем…" : "Сохранить настройки"}
           </button>
-          <label className="flex flex-col gap-1 text-sm">Целевая доля скачиваний для подборок, %<input type="number" className={input} min={0} max={100} value={settings.compilation_budget_percent ?? 70} onChange={event=>setSettings({...settings,compilation_budget_percent:Number(event.target.value)})}/><span className="text-xs text-slate-400">Общий бюджет распределяется по ближайшим выпускам. 70% — ориентир для исходников подборок; неиспользованный остаток доступен Shorts. Один файл для двух форматов расходует одно скачивание.</span></label>
+          <label className="flex flex-col gap-1 text-sm">Целевая доля скачиваний для подборок, %<input type="number" className={input} min={0} max={100} value={settings.compilation_budget_percent ?? 70} onChange={event=>setSettings({...settings,compilation_budget_percent:Number(event.target.value)})}/><span className="text-xs text-slate-400">Скачивания распределяются по ближайшим выпускам, в том числе без общего суточного лимита. 70% — ориентир для исходников подборок; неиспользованный остаток доступен Shorts. Один файл для двух форматов учитывается один раз.</span></label>
           <label className="flex flex-col gap-1 text-sm">Режим допуска скачиваний<select className={input} value={settings.admission_mode || "shadow"} onChange={event=>setSettings({...settings,admission_mode:event.target.value as "shadow"|"enforce"})}><option value="shadow">Только расчёт и диагностика</option><option value="enforce">Применять план ближайших выпусков</option></select><span className="text-xs text-slate-400">Сначала проверьте диагностику в режиме расчёта. После включения файлы скачиваются для ближайших выпусков, а не просто по количеству найденных клипов.</span></label>
         </form>
       ) : (

@@ -67,4 +67,9 @@ func TestAdmissionsTimeoutBacksOffAndRecoveryQueuesOnlyOnce(t *testing.T) {
 	if _, err := s.queueAdmissions(context.Background(), cfg); err != nil || api.limit != 3 {
 		t.Fatal("buffer exceeded the configured daily quota", api.limit, err)
 	}
+	cfg.Settings.DailyDownloads = 0
+	s.lastAdmissionsAt = time.Time{}
+	if _, err := s.queueAdmissions(context.Background(), cfg); err != nil || api.limit != admissionBufferSize {
+		t.Fatal("unlimited daily quota disabled or expanded the executable buffer", api.limit, err)
+	}
 }

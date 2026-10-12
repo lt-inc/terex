@@ -195,7 +195,7 @@ func (s *Service) check(parent context.Context) {
 		return
 	}
 	var candidates []domain.Clip
-	s.log.InfoContext(ctx, "collector discovery settings", "check_every_minutes", cfg.PollIntervalMinutes, "window_hours", cfg.WindowHours, "min_views", cfg.MinViews, "min_age_minutes", cfg.MinAgeMinutes, "min_duration_seconds", cfg.MinDurationSec, "max_duration_seconds", cfg.MaxDurationSec, "daily_downloads", cfg.DailyDownloads, "per_channel_daily_downloads", cfg.PerChannelDailyDownloads)
+	s.log.InfoContext(ctx, "collector discovery settings", "check_every_minutes", cfg.PollIntervalMinutes, "window_hours", cfg.WindowHours, "min_views", cfg.MinViews, "min_age_minutes", cfg.MinAgeMinutes, "min_duration_seconds", cfg.MinDurationSec, "max_duration_seconds", cfg.MaxDurationSec, "daily_unlimited", cfg.DownloadsUnlimited(), "daily_downloads", cfg.DailyDownloads, "per_channel_daily_downloads", cfg.PerChannelDailyDownloads)
 	for _, ch := range channels {
 		if ch.Paused || ch.Archived {
 			continue

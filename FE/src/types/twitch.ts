@@ -405,7 +405,7 @@ export interface TwitchFlowDiagnostics {
   capacity: TwitchCapacity;
   sources: Record<string, number>;
   competitors: { flow_id: string; name: string; format: string; scheduled: number; preparing: number; nearest_at?: string }[];
-  collector: { available: boolean; message?: string; spent: number; daily_limit: number; remaining: number; timezone: string; compilation_budget_percent: number; admission_mode: string; by_flow: {flow_id: string; name: string; format: string; spent: number}[]; discovery?: {fetched:number;language_matched:number;language_rejected:number;language_unknown:number;page_limit_reached:boolean;checked_at:string;broadcaster_id:string;error?:string;coverage?:TwitchDiscoveryCoverage}[] };
+  collector: { available: boolean; message?: string; spent: number; daily_limit: number; daily_unlimited?: boolean; remaining: number; timezone: string; compilation_budget_percent: number; admission_mode: string; by_flow: {flow_id: string; name: string; format: string; spent: number}[]; discovery?: {fetched:number;language_matched:number;language_rejected:number;language_unknown:number;page_limit_reached:boolean;checked_at:string;broadcaster_id:string;error?:string;coverage?:TwitchDiscoveryCoverage}[] };
   average_duration_sec: number;
   average_estimated: boolean;
   estimated_additional_clips: number;

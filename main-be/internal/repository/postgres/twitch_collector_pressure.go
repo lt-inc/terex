@@ -158,7 +158,7 @@ func (s *Store) TwitchCollectorPressure(ctx context.Context, q twitch.PressureRe
 			v.ReasonCode = "assignment_released"
 		case !settings.Enabled:
 			v.ReasonCode = "collector_disabled"
-		case total >= settings.DailyDownloads:
+		case settings.DailyDownloadLimitReached(total):
 			v.ReasonCode = "daily_download_limit"
 		case spent[broadcaster] >= settings.PerChannelDailyDownloads:
 			v.ReasonCode = "broadcaster_daily_limit"

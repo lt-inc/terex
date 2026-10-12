@@ -14,7 +14,7 @@ export const DEFAULT_TWITCH_SETTINGS: TwitchSettings = {
   min_age_minutes: 60,
   min_duration_sec: 5,
   max_duration_sec: 60,
-  daily_downloads: 10,
+  daily_downloads: 0,
   per_channel_daily_downloads: 2,
   daily_shorts: 5,
   daily_compilations: 1,
@@ -35,7 +35,7 @@ export function validateTwitchSettings(
     ["first", 1, 100],
     ["min_views", 0, Number.MAX_SAFE_INTEGER],
     ["min_age_minutes", 0, Number.MAX_SAFE_INTEGER],
-    ["daily_downloads", 1, 100],
+    ["daily_downloads", 0, 100],
     ["per_channel_daily_downloads", 1, 100],
     ["daily_shorts", 1, 100],
     ["daily_compilations", 1, 10],
@@ -68,7 +68,7 @@ export function validateTwitchSettings(
   ) {
     return "Clip durations must be greater than zero and no longer than 180 seconds; maximum must cover minimum.";
   }
-  if (settings.per_channel_daily_downloads > settings.daily_downloads)
+  if (settings.daily_downloads > 0 && settings.per_channel_daily_downloads > settings.daily_downloads)
     return "The per-channel download limit must not exceed the total daily limit.";
   if (settings.compilation_min_clips > settings.compilation_max_clips)
     return "Maximum compilation size must cover the minimum.";

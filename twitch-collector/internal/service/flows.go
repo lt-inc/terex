@@ -282,7 +282,9 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 					}
 				}
 			} else {
-				clips, e = helix.GetFlowClips(ctx, flow, ch, started.Add(-time.Duration(flow.WindowHours)*time.Hour), started, cfg.Settings.DailyDownloads*2, flowKnown)
+				// Discovery needs a bounded supply of candidates, not a daily
+				// download cap. A disabled cap must not mean unlimited paging.
+				clips, e = helix.GetFlowClips(ctx, flow, ch, started.Add(-time.Duration(flow.WindowHours)*time.Hour), started, admissionBufferSize*2, flowKnown)
 			}
 			if e != nil {
 				message = safeErrorMessage(e, "Twitch недоступен")
@@ -420,7 +422,7 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 	if api, ok := api.(interface {
 		Admissions(context.Context, twitch.AdmissionRequest) (twitch.AdmissionResult, error)
 	}); ok {
-		_, _ = api.Admissions(ctx, twitch.AdmissionRequest{Epoch: cfg.Epoch, Limit: cfg.Settings.DailyDownloads})
+		_, _ = api.Admissions(ctx, twitch.AdmissionRequest{Epoch: cfg.Epoch, Limit: admissionBufferLimit(cfg.Settings)})
 	}
 	selected := []domain.Clip{}
 	seen := map[string]bool{}

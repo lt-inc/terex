@@ -61,9 +61,11 @@ test("Twitch defaults stay disabled and contradictory budgets or windows are rej
   const defaults = twitch.DEFAULT_TWITCH_SETTINGS;
   assert.equal(defaults.enabled, false);
   assert.equal(defaults.target_account_id, 0);
+  assert.equal(defaults.daily_downloads, 0);
   assert.equal(twitch.validateTwitchSettings(defaults), null);
+  assert.equal(twitch.validateTwitchSettings({ ...defaults, per_channel_daily_downloads: 100 }), null);
   assert.match(twitch.validateTwitchSettings({ ...defaults, enabled: true }), /account/);
-  assert.match(twitch.validateTwitchSettings({ ...defaults, per_channel_daily_downloads: 11 }), /per-channel/);
+  assert.match(twitch.validateTwitchSettings({ ...defaults, daily_downloads: 10, per_channel_daily_downloads: 11 }), /per-channel/);
   assert.match(twitch.validateTwitchSettings({ ...defaults, min_age_minutes: 72 * 60 }), /discovery window/);
   assert.match(twitch.validateTwitchSettings({ ...defaults, min_duration_sec: NaN }), /durations/);
   assert.match(twitch.validateTwitchSettings({ ...defaults, timezone: "invalid" }), /timezone/);

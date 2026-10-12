@@ -301,7 +301,7 @@ func Enrich(out *domain.TwitchFlowDiagnostics, collector domain.TwitchDiagnostic
 	out.Collector.Available = true
 	out.Collector.Message = collector.Message
 	out.Collector.Discovery = collector.Discovery
-	if out.EstimatedAdditionalClips > out.Collector.Remaining && out.Feasibility == "needs_sources" {
+	if !out.Collector.DailyUnlimited && out.EstimatedAdditionalClips > out.Collector.Remaining && out.Feasibility == "needs_sources" {
 		out.Feasibility = "budget_insufficient"
 		out.Messages = append(out.Messages, "Оставшегося общего дневного бюджета может не хватить на подборку. Сократите минимальную длину или увеличьте бюджет; оценка не гарантирует доступность подходящих клипов")
 	}

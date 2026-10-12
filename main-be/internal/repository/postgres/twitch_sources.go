@@ -425,7 +425,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	if err = tx.QueryRow(ctx, `WITH reserved AS(SELECT import_id,broadcaster_id FROM twitch_download_reservations WHERE(created_at AT TIME ZONE $1)::date=$2::date AND import_id<>$4 UNION SELECT g.import_id,i.request->'source'->>'broadcaster_id' FROM twitch_download_grants g JOIN twitch_imports i ON i.id=g.import_id WHERE(g.created_at AT TIME ZONE $1)::date=$2::date AND g.import_id<>$4 AND g.state<>'released') SELECT count(DISTINCT import_id),count(DISTINCT import_id)FILTER(WHERE broadcaster_id=$3)FROM reserved`, settings.Timezone, day, r.Source.BroadcasterID, id).Scan(&total, &channel); err != nil {
 		return out, err
 	}
-	if total >= settings.DailyDownloads {
+	if settings.DailyDownloadLimitReached(total) {
 		return out, waitPreparation("daily_download_limit", "Достигнут общий дневной лимит скачиваний", now)
 	}
 	if channel >= settings.PerChannelDailyDownloads {

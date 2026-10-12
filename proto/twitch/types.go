@@ -19,7 +19,7 @@ type Settings struct {
 	MinAgeMinutes            int     `json:"min_age_minutes"`
 	MinDurationSec           float64 `json:"min_duration_sec"`
 	MaxDurationSec           float64 `json:"max_duration_sec"`
-	DailyDownloads           int     `json:"daily_downloads"`
+	DailyDownloads           int     `json:"daily_downloads"` // 0 disables the global daily cap.
 	CompilationBudgetPercent int     `json:"compilation_budget_percent"`
 	AdmissionMode            string  `json:"admission_mode"`
 	PerChannelDailyDownloads int     `json:"per_channel_daily_downloads"`
@@ -34,7 +34,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{PollIntervalMinutes: 144, WindowHours: 72, First: 100, MinViews: 100, MinAgeMinutes: 60,
-		MinDurationSec: 5, MaxDurationSec: 60, DailyDownloads: 10, CompilationBudgetPercent: 70, AdmissionMode: "shadow", PerChannelDailyDownloads: 2,
+		MinDurationSec: 5, MaxDurationSec: 60, DailyDownloads: 0, CompilationBudgetPercent: 70, AdmissionMode: "shadow", PerChannelDailyDownloads: 2,
 		DailyShorts: 5, DailyCompilations: 1, CompilationMinClips: 3, CompilationMaxClips: 10,
 		CompilationHour: 21, BacklogLimit: 40, Timezone: "Asia/Tomsk"}
 }
@@ -42,6 +42,18 @@ func DefaultSettings() Settings {
 // MaxClipDurationSec is the longest source clip the pipeline accepts. Twitch
 // reports some clips slightly over 60 s; 180 s is the YouTube Shorts limit.
 const MaxClipDurationSec = 180
+
+func (s Settings) DownloadsUnlimited() bool { return s.DailyDownloads == 0 }
+
+func (s Settings) DailyDownloadLimitReached(spent int) bool {
+	return !s.DownloadsUnlimited() && spent >= s.DailyDownloads
+}
+
+// RemainingDownloads is meaningful only for a capped configuration. Responses
+// carry daily_unlimited explicitly instead of representing infinity as a count.
+func (s Settings) RemainingDownloads(spent int) int {
+	return max(0, s.DailyDownloads-spent)
+}
 
 func (s Settings) Validate() error {
 	if s.CompilationBudgetPercent < 0 || s.CompilationBudgetPercent > 100 || (s.AdmissionMode != "" && s.AdmissionMode != "shadow" && s.AdmissionMode != "enforce") {
@@ -53,7 +65,7 @@ func (s Settings) Validate() error {
 	if math.IsNaN(s.MinDurationSec) || math.IsNaN(s.MaxDurationSec) || math.IsInf(s.MinDurationSec, 0) || math.IsInf(s.MaxDurationSec, 0) || s.MinDurationSec <= 0 || s.MaxDurationSec < s.MinDurationSec || s.MaxDurationSec > MaxClipDurationSec {
 		return fmt.Errorf("duration must be between 0 and %d seconds", MaxClipDurationSec)
 	}
-	if s.DailyDownloads < 1 || s.DailyDownloads > 100 || s.PerChannelDailyDownloads < 1 || s.PerChannelDailyDownloads > s.DailyDownloads || s.DailyShorts < 1 || s.DailyShorts > 100 || s.DailyCompilations < 1 || s.DailyCompilations > 10 || s.BacklogLimit < 1 || s.BacklogLimit > 1000 {
+	if s.DailyDownloads < 0 || s.DailyDownloads > 100 || s.PerChannelDailyDownloads < 1 || s.PerChannelDailyDownloads > 100 || (!s.DownloadsUnlimited() && s.PerChannelDailyDownloads > s.DailyDownloads) || s.DailyShorts < 1 || s.DailyShorts > 100 || s.DailyCompilations < 1 || s.DailyCompilations > 10 || s.BacklogLimit < 1 || s.BacklogLimit > 1000 {
 		return fmt.Errorf("invalid daily or backlog limits")
 	}
 	if s.CompilationMinClips < 3 || s.CompilationMaxClips < s.CompilationMinClips || s.CompilationMaxClips > 10 || s.CompilationHour < 0 || s.CompilationHour > 23 {

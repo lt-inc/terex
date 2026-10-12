@@ -85,8 +85,12 @@ defaults to 70% for compilations, with shadow admission before enforcement.
 
 The single collector download worker maintains a buffer of at most ten returned
 grants per admissions request (or the smaller configured daily limit), rather
-than requesting the entire daily quota in one transaction. The daily quota and
-format allocation remain in main-be. Discovery windows and their saved cursors
+than requesting the entire daily quota in one transaction. The global daily
+download cap defaults to disabled (`daily_downloads=0`); existing positive caps
+remain optional. The per-broadcaster cap, format allocation, backlog, calendar
+and storage gates remain in main-be. Diagnostics retain daily spent accounting
+and expose `daily_unlimited=true` rather than reporting an exhausted zero cap.
+Discovery windows and their saved cursors
 are independent of this executable buffer. Failed allocation requests back off
 15/30/60 seconds; `COLLECTOR_ADMISSIONS_TIMEOUT` defaults to 15 seconds.
 
