@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"terex/proto/twitch"
 	"testing"
 	"time"
@@ -94,5 +96,42 @@ func TestGrowthMeasurementsCounterResetAndRankingBeforeLimit(t *testing.T) {
 	admission, err := s.AllocateTwitchDownloads(ctx, twitch.AdmissionRequest{Limit: 1}, src.ObservedAt)
 	if err != nil || len(admission.Grants) != 1 || admission.Grants[0].ClipID != src.ClipID {
 		t.Fatal("eligible clip starved by foreign-language metadata", admission, err)
+	}
+	// Bulk observations keep the sequential broadcaster baseline: the final
+	// clip sees the ten measurements before it in this very same transaction.
+	batchAt := now.Add(20 * time.Minute)
+	batch := make([]twitch.Source, 11)
+	for n := range batch {
+		batch[n] = flowSource(fmt.Sprintf("bulk-growth-%02d", n), "123", 20, batchAt)
+		batch[n].CreatedAt = batchAt.Add(-3 * time.Hour)
+		batch[n].ObservedAt = batchAt.Add(-time.Hour)
+	}
+	request := twitch.ObservationRequest{FlowID: f.ID, FlowVersion: f.Version, Sources: batch}
+	if _, err = s.ObserveTwitchSources(ctx, request, batchAt.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for n := range batch {
+		batch[n].ObservedAt = batchAt
+		batch[n].ViewCount += 10
+	}
+	batch[10].ViewCount += 140
+	measuredBatch, err := s.ObserveTwitchSources(ctx, request, batchAt)
+	if err != nil || len(measuredBatch) != len(batch) || !measuredBatch[10].Source.Growth.Anomalous {
+		t.Fatal("bulk growth lost its within-batch baseline", measuredBatch, err)
+	}
+	versions := func() []string {
+		t.Helper()
+		var out []string
+		if err := s.pool.QueryRow(ctx, `SELECT array_agg(fs.xmin::text||':'||i.xmin::text ORDER BY i.twitch_clip_id) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=$1 AND i.twitch_clip_id LIKE 'bulk-growth-%'`, f.ID).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	before := versions()
+	if _, err = s.ObserveTwitchSources(ctx, request, batchAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if after := versions(); !reflect.DeepEqual(before, after) {
+		t.Fatal("replayed metadata rewrote unchanged imports/flow configuration", before, after)
 	}
 }

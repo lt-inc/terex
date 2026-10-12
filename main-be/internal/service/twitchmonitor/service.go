@@ -21,13 +21,14 @@ type Diagnostics interface {
 	Diagnostics(context.Context, string) (domain.TwitchFlowDiagnostics, error)
 }
 type Service struct {
-	Repo        domain.TwitchMonitoringRepo
-	Flows       domain.TwitchFlowRepo
-	Diagnostics Diagnostics
-	Collector   domain.TwitchCollectorMonitoring
-	AppURL      string
-	flowMu      sync.Mutex
-	nextFlowID  string
+	Repo         domain.TwitchMonitoringRepo
+	Flows        domain.TwitchFlowRepo
+	Diagnostics  Diagnostics
+	Collector    domain.TwitchCollectorMonitoring
+	AppURL       string
+	FlowsPerTick int
+	flowMu       sync.Mutex
+	nextFlowID   string
 }
 
 func (s *Service) Tick(ctx context.Context) error {
@@ -101,15 +102,28 @@ func (s *Service) Tick(ctx context.Context) error {
 		addFailure("flow_list", "", "", err)
 	}
 	flows = s.orderedFlows(flows)
+	limit := s.FlowsPerTick
+	if limit <= 0 {
+		limit = 2
+	}
+	out.FlowsTotal = len(flows)
+	out.FlowsPerTick = limit
 	attempted, observed := 0, 0
 	for i, flow := range flows {
+		// Leaving flows for the next minute is intentional. Their independently
+		// timestamped snapshots remain unchanged rather than appearing newly read.
+		if attempted >= limit {
+			break
+		}
 		if diagnosticCtx.Err() != nil {
 			addFailure("flow_batch", flow.ID, flow.Name, fmt.Errorf("В этом цикле не опрошено %d потоков: исчерпан бюджет диагностики; следующий цикл начнёт с этого потока", len(flows)-i))
 			break
 		}
 		attempted++
+		out.FlowsAttempted = attempted
 		s.flowMu.Lock()
 		s.nextFlowID = flows[(i+1)%len(flows)].ID
+		out.NextFlowID = s.nextFlowID
 		s.flowMu.Unlock()
 		func() {
 			// Keep main and collector reads sequential with separate deadlines.
@@ -120,6 +134,11 @@ func (s *Service) Tick(ctx context.Context) error {
 			if e != nil {
 				addFailure("flow_main", flow.ID, flow.Name, e)
 				return
+			}
+			// Use the actual main observation timestamp, not this cycle's time
+			// or a later collector response, for per-flow freshness.
+			if d.GeneratedAt.IsZero() {
+				d.GeneratedAt = time.Now().UTC()
 			}
 			d.Collector.Available = false
 			d.Collector.ObservedAt = nil
@@ -137,13 +156,14 @@ func (s *Service) Tick(ctx context.Context) error {
 				// collector response must not prevent their durable publication.
 				saveCtx, saveCancel := context.WithTimeout(ctx, 2*time.Second)
 				defer saveCancel()
-				return s.Repo.SaveTwitchMonitoring(saveCtx, "flow", flow.ID, work.Epoch, now, payload)
+				return s.Repo.SaveTwitchMonitoring(saveCtx, "flow", flow.ID, work.Epoch, d.GeneratedAt, payload)
 			}
 			if e = save(); e != nil {
 				addFailure("flow_save", flow.ID, flow.Name, e)
 				return
 			}
 			observed++
+			out.MainFlowsObserved = observed
 			if statusErr != nil {
 				// One failed status request should not repeat its remote timeout
 				// for every flow. Their main diagnostics remain independently fresh.
@@ -192,7 +212,7 @@ func (s *Service) Tick(ctx context.Context) error {
 	if err = s.Repo.CleanupTwitchMonitoring(ctx, work.Epoch); err != nil {
 		failures = append(failures, err)
 	}
-	slog.InfoContext(ctx, "twitch monitoring snapshot refreshed", "epoch", work.Epoch, "flows", len(flows), "flows_attempted", attempted, "main_flows_observed", observed, "active_total", out.ActiveTotal, "collector_available", status.Available, "diagnostic_failures", len(out.DiagnosticsErrors), "duration_ms", time.Since(started).Milliseconds(), "cycle_budget_ms", 50000, "main_read_budget_ms", 5000, "collector_read_budget_ms", 3000)
+	slog.InfoContext(ctx, "twitch monitoring snapshot refreshed", "epoch", work.Epoch, "flows", len(flows), "flows_per_tick", limit, "flows_attempted", attempted, "main_flows_observed", observed, "flows_deferred", max(0, len(flows)-attempted), "next_flow_id", out.NextFlowID, "active_total", out.ActiveTotal, "collector_available", status.Available, "diagnostic_failures", len(out.DiagnosticsErrors), "duration_ms", time.Since(started).Milliseconds(), "cycle_budget_ms", 50000, "main_read_budget_ms", 5000, "collector_read_budget_ms", 3000)
 	return errors.Join(failures...)
 }
 

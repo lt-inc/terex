@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"terex/main-be/internal/domain"
 	"terex/proto/twitch"
 	"time"
@@ -22,6 +23,48 @@ type allocationFlow struct {
 	LastSequence    int64
 	ShortSlots      int
 	Recoveries      map[string]string
+}
+
+// Build explicit predicates so PostgreSQL can use the category/language
+// partial index even after pgx switches a prepared query to a generic plan.
+// Values are always parameters; only server-defined SQL fragments are joined.
+func allocationCandidateQuery(f twitch.Flow, now time.Time, dailyRemaining int, spentIDs, blockedChannels, recoveryIDs []string, newDemand bool) (string, []any) {
+	args := []any{f.ID, f.RankingMode, now, twitch.GrowthStaleAfter(f.PollIntervalMinutes).Seconds(), min(f.WindowHours, f.MaxSourceAgeHours), f.MinAgeMinutes, f.MinViews, f.MinDurationSec, f.MaxDurationSec}
+	predicates := []string{
+		`fs.flow_id=$1 AND NOT fs.excluded AND NOT i.rejected`,
+		`i.media_state NOT IN('ready','expired') AND i.state IN('discovered','upload_failed')`,
+		`(i.request->'source'->>'created_at')::timestamptz BETWEEN $3::timestamptz-make_interval(hours=>$5) AND $3::timestamptz-make_interval(mins=>$6)`,
+		`COALESCE((i.request->'source'->>'view_count')::bigint,0)>=$7`,
+		`COALESCE((i.request->'source'->>'duration_sec')::float8,0) BETWEEN $8 AND $9`,
+		`NOT EXISTS(SELECT 1 FROM twitch_download_grants g WHERE g.clip_id=i.twitch_clip_id AND g.state IN('active','consumed'))`,
+	}
+	parameter := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if f.Language != "" {
+		predicates = append(predicates, `i.request->'source'->>'language'=`+parameter(f.Language)+` AND i.request->'source'->>'language_source'='clip'`)
+	}
+	if f.SourceMode == "category" {
+		predicates = append(predicates, `i.request->'source'->>'game_id'=`+parameter(f.CategoryID))
+	} else if !(f.LegacyLength && len(f.BroadcasterIDs) == 0) {
+		predicates = append(predicates, `i.request->'source'->>'broadcaster_id'=ANY(`+parameter(f.BroadcasterIDs)+`::text[])`)
+	}
+	spentParameter := ""
+	if dailyRemaining <= 0 || len(blockedChannels) > 0 {
+		spentParameter = parameter(spentIDs)
+	}
+	if dailyRemaining <= 0 {
+		predicates = append(predicates, `i.id=ANY(`+spentParameter+`::text[])`)
+	}
+	recoveryParameter := parameter(recoveryIDs)
+	if !newDemand {
+		predicates = append(predicates, `i.id=ANY(`+recoveryParameter+`::text[])`)
+	}
+	if len(blockedChannels) > 0 {
+		predicates = append(predicates, `(i.request->'source'->>'broadcaster_id'<>ALL(`+parameter(blockedChannels)+`::text[]) OR i.id=ANY(`+spentParameter+`::text[]))`)
+	}
+	return `SELECT i.id,i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE ` + strings.Join(predicates, " AND ") + ` ORDER BY CASE WHEN i.id=ANY(` + recoveryParameter + `::text[]) THEN 0 ELSE 1 END,` + twitchGrowthOrder("i", "$2", "$3::timestamptz", "$4") + ` LIMIT 1000`, args
 }
 
 func allocationFormat(compUsed, totalUsed, percent int, hasComp, hasShort bool) string {
@@ -326,7 +369,8 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 		if !newDemand && len(recoveryIDs) == 0 {
 			continue
 		}
-		candidates, e := tx.Query(ctx, `SELECT i.id,i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=$1 AND NOT fs.excluded AND NOT i.rejected AND i.media_state NOT IN('ready','expired') AND i.state IN('discovered','upload_failed') AND (i.request->'source'->>'created_at')::timestamptz BETWEEN $3::timestamptz-make_interval(hours=>$5) AND $3::timestamptz-make_interval(mins=>$6) AND COALESCE((i.request->'source'->>'view_count')::bigint,0)>=$7 AND COALESCE((i.request->'source'->>'duration_sec')::float8,0) BETWEEN $8 AND $9 AND($10='' OR(i.request->'source'->>'language'=$10 AND i.request->'source'->>'language_source'='clip')) AND(($11='category' AND i.request->'source'->>'game_id'=$12) OR($11<>'category' AND(i.request->'source'->>'broadcaster_id'=ANY($13::text[]) OR $14))) AND($15 OR i.id=ANY($16::text[])) AND($19 OR i.id=ANY($18::text[])) AND(i.request->'source'->>'broadcaster_id'<>ALL($17::text[]) OR i.id=ANY($16::text[])) AND NOT EXISTS(SELECT 1 FROM twitch_download_grants g WHERE g.clip_id=i.twitch_clip_id AND g.state IN('active','consumed')) ORDER BY CASE WHEN i.id=ANY($18::text[]) THEN 0 ELSE 1 END,`+twitchGrowthOrder("i", "$2", "$3::timestamptz", "$4")+` LIMIT 1000`, id, f.RankingMode, now, twitch.GrowthStaleAfter(f.PollIntervalMinutes).Seconds(), min(f.WindowHours, f.MaxSourceAgeHours), f.MinAgeMinutes, f.MinViews, f.MinDurationSec, f.MaxDurationSec, f.Language, f.SourceMode, f.CategoryID, f.BroadcasterIDs, f.LegacyLength && len(f.BroadcasterIDs) == 0, out.DailyRemaining > 0, spentIDs, blockedChannels, recoveryIDs, newDemand)
+		candidateSQL, candidateArgs := allocationCandidateQuery(f, now, out.DailyRemaining, spentIDs, blockedChannels, recoveryIDs, newDemand)
+		candidates, e := tx.Query(ctx, candidateSQL, candidateArgs...)
 		if e != nil {
 			return out, e
 		}

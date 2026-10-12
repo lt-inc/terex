@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+// Keep coordinator transactions short without changing Helix page sizes.
+const observationBatchSize = 20
+
 func flowBlockReason(c twitch.CollectorConfig, err error, ready bool) string {
 	if err != nil {
 		return "Не удалось получить настройки Terex: " + safeErrorMessage(err, "проверьте связь и служебный токен")
@@ -332,8 +335,8 @@ func (s *Service) checkFlows(parent context.Context, only string, force bool) {
 				observationFailed = true
 			}
 		}
-		for offset := 0; offset < len(all); offset += 100 {
-			end := offset + 100
+		for offset := 0; offset < len(all); offset += observationBatchSize {
+			end := offset + observationBatchSize
 			if end > len(all) {
 				end = len(all)
 			}

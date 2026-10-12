@@ -149,6 +149,9 @@ export interface Channel {
   enabled: boolean;
   spec: Partial<VideoCardData>;
   last_checked_at: string | null;
+  feed_error_code?: string;
+  last_feed_error?: string;
+  next_feed_check_at?: string | null;
 }
 
 export interface Clip {

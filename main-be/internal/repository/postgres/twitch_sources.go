@@ -37,6 +37,14 @@ func sourceMatches(f twitch.Flow, src twitch.Source) bool {
 func sourceEligible(f twitch.Flow, src twitch.Source, now time.Time) bool {
 	return sourceMatches(f, src) && src.ViewCount >= f.MinViews && src.DurationSec >= f.MinDurationSec && src.DurationSec <= f.MaxDurationSec && !src.CreatedAt.Before(now.Add(-time.Duration(f.WindowHours)*time.Hour)) && !src.CreatedAt.After(now.Add(-time.Duration(f.MinAgeMinutes)*time.Minute)) && preparationSourceFresh(f, src, now, now)
 }
+func flowSourceConfig(f twitch.Flow) []byte {
+	// Runtime display fields are not settings. In particular last_checked_at
+	// changes for every discovery and must not rewrite every source snapshot.
+	f.LastCheckedAt, f.NextPublicationAt = nil, nil
+	f.FoundClips, f.ReadyOutputs = 0, 0
+	f.BlockReason, f.ExcludedSourceIDs = "", nil
+	return mustJSON(f)
+}
 func attachFlowSource(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twitch.Source, now time.Time) (string, error) {
 	matchConfig := f
 	matchConfig.Language = ""
@@ -71,46 +79,98 @@ func attachFlowSource(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twitch.
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_import_keys(idempotency_key,import_id)VALUES($1,$2)ON CONFLICT DO NOTHING`, "source:"+src.ClipID, id); err != nil {
 		return "", err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO twitch_flow_sources(id,flow_id,import_id,config,flow_version,created_at)VALUES($1,$2,$3,$4,$5,$6)ON CONFLICT(flow_id,import_id)DO UPDATE SET config=EXCLUDED.config,flow_version=EXCLUDED.flow_version WHERE twitch_flow_sources.reserved_at IS NULL`, uuid.NewString(), f.ID, id, mustJSON(f), f.Version, now)
+	_, err = tx.Exec(ctx, `INSERT INTO twitch_flow_sources(id,flow_id,import_id,config,flow_version,created_at)VALUES($1,$2,$3,$4,$5,$6)ON CONFLICT(flow_id,import_id)DO UPDATE SET config=EXCLUDED.config,flow_version=EXCLUDED.flow_version WHERE twitch_flow_sources.reserved_at IS NULL AND (twitch_flow_sources.config IS DISTINCT FROM EXCLUDED.config OR twitch_flow_sources.flow_version IS DISTINCT FROM EXCLUDED.flow_version)`, uuid.NewString(), f.ID, id, flowSourceConfig(f), f.Version, now)
 	return id, err
 }
-func flowImport(ctx context.Context, q interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}, id, flow string) (twitch.Import, error) {
-	out, err := importByID(ctx, q, id)
+
+// The import and its flow-specific output/grant are read in one query. The
+// wrapper appends columns while reusing the canonical import decoder.
+type flowImportRow struct {
+	row   pgx.Row
+	extra []any
+}
+
+func (r flowImportRow) Scan(dest ...any) error { return r.row.Scan(append(dest, r.extra...)...) }
+
+const flowImportJoins = ` FROM twitch_imports i LEFT JOIN clips c ON c.clip_id=i.clip_id JOIN twitch_flow_sources fs ON fs.import_id=i.id LEFT JOIN twitch_outputs o ON o.flow_id=fs.flow_id AND o.source_id=fs.import_id AND o.format='short' LEFT JOIN clips fc ON fc.clip_id=o.clip_id LEFT JOIN twitch_download_grants g ON g.clip_id=i.twitch_clip_id AND g.import_id=i.id`
+const flowImportExtraCols = `,fs.id,fs.config,fs.excluded,COALESCE(o.clip_id,''),COALESCE(fc.job_id,''),COALESCE(fc.latest_revision_id,0),fs.flow_version,COALESCE(g.primary_format,''),COALESCE(g.sequence,0),COALESCE(i.revalidation->>'failure_token','')`
+
+func scanFlowImport(row pgx.Row, flow string) (twitch.Import, error) {
+	var config []byte
+	var reservationID, clipID, jobID, format, revalidationToken string
+	var excluded bool
+	var revisionID, sequence int64
+	var version int
+	out, err := scanImport(flowImportRow{row: row, extra: []any{&reservationID, &config, &excluded, &clipID, &jobID, &revisionID, &version, &format, &sequence, &revalidationToken}})
 	if err != nil {
 		return out, err
-	}
-	var config []byte
-	var excluded bool
-	err = q.QueryRow(ctx, `SELECT fs.id,fs.config,fs.excluded,COALESCE(o.clip_id,''),COALESCE(c.job_id,''),COALESCE(c.latest_revision_id,0),fs.flow_version FROM twitch_flow_sources fs LEFT JOIN twitch_outputs o ON o.flow_id=fs.flow_id AND o.source_id=fs.import_id AND o.format='short' LEFT JOIN clips c ON c.clip_id=o.clip_id WHERE fs.flow_id=$1 AND fs.import_id=$2`, flow, id).Scan(&out.ReservationID, &config, &excluded, &out.ClipID, &out.JobID, &out.RevisionID, &out.FlowVersion)
-	if err != nil {
-		return out, mapErr(err)
 	}
 	var f twitch.Flow
 	if err = json.Unmarshal(config, &f); err != nil {
 		return out, err
 	}
-	out.FlowID = flow
-	out.AccountID = f.AccountID
-	out.Excluded = excluded
-	if err = q.QueryRow(ctx, `SELECT COALESCE((SELECT primary_format FROM twitch_download_grants WHERE import_id=$1),''),COALESCE((SELECT sequence FROM twitch_download_grants WHERE import_id=$1),0),COALESCE((SELECT revalidation->>'failure_token' FROM twitch_imports WHERE id=$1),'')`, id).Scan(&out.PreparationFormat, &out.AdmissionSequence, &out.RevalidationToken); err != nil {
-		return out, err
+	out.FlowID, out.AccountID, out.Excluded = flow, f.AccountID, excluded
+	out.ReservationID, out.ClipID, out.JobID = reservationID, clipID, jobID
+	out.RevisionID, out.FlowVersion = revisionID, version
+	out.PreparationFormat, out.AdmissionSequence, out.RevalidationToken = format, sequence, revalidationToken
+	return out, nil
+}
+func flowImport(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, id, flow string) (twitch.Import, error) {
+	return scanFlowImport(q.QueryRow(ctx, `SELECT `+importCols+flowImportExtraCols+flowImportJoins+` WHERE fs.flow_id=$1 AND i.id=$2`, flow, id), flow)
+}
+func flowImports(ctx context.Context, tx pgx.Tx, ids []string, flow string) ([]twitch.Import, error) {
+	rows, err := tx.Query(ctx, `SELECT `+importCols+flowImportExtraCols+flowImportJoins+` WHERE fs.flow_id=$1 AND i.id=ANY($2::text[])`, flow, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	imports := make(map[string]twitch.Import, len(ids))
+	for rows.Next() {
+		out, e := scanFlowImport(rows, flow)
+		if e != nil {
+			return nil, e
+		}
+		imports[out.ImportID] = out
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]twitch.Import, 0, len(ids))
+	for _, id := range ids {
+		v, ok := imports[id]
+		if !ok {
+			return nil, domain.ErrNotFound
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
 func (s *Store) GetFlowImport(ctx context.Context, id, flow string) (twitch.Import, error) {
 	return flowImport(ctx, s.pool, id, flow)
 }
-func (s *Store) ObserveTwitchSources(ctx context.Context, r twitch.ObservationRequest, now time.Time) ([]twitch.Import, error) {
+func (s *Store) ObserveTwitchSources(ctx context.Context, r twitch.ObservationRequest, now time.Time) (out []twitch.Import, err error) {
+	started := time.Now()
+	phase, committed := "pool_acquire", false
+	var poolWaitMS, lockMS, preloadMS, writeMS int64
+	defer func() {
+		slog.InfoContext(ctx, "twitch observations finished", "flow_id", r.FlowID, "flow_version", r.FlowVersion, "source_count", len(r.Sources), "phase", phase, "committed", committed, "pool_wait_ms", poolWaitMS, "lock_ms", lockMS, "preload_ms", preloadMS, "write_ms", writeMS, "duration_ms", time.Since(started).Milliseconds(), "err", err)
+	}()
 	tx, err := s.pool.Begin(ctx)
+	poolWaitMS = time.Since(started).Milliseconds()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	phase = "coordinator_lock"
+	lockStarted := time.Now()
 	if err = lockTwitch(ctx, tx); err != nil {
+		lockMS = time.Since(lockStarted).Milliseconds()
 		return nil, err
 	}
+	lockMS = time.Since(lockStarted).Milliseconds()
+	phase = "validate_flow"
 	if err = twitchResetRequestAllowed(ctx, tx, r.Epoch); err != nil {
 		return nil, err
 	}
@@ -127,22 +187,77 @@ func (s *Store) ObserveTwitchSources(ctx context.Context, r twitch.ObservationRe
 	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET last_checked_at=$2 WHERE id=$1`, f.ID, now); err != nil {
 		return nil, err
 	}
-	out := []twitch.Import{}
+	matchConfig := f
+	matchConfig.Language = ""
 	for _, src := range r.Sources {
-		id, e := attachFlowSource(ctx, tx, f, src, now)
-		if e != nil {
-			return nil, e
+		if !sourceMatches(matchConfig, src) {
+			return nil, fmt.Errorf("%w: исходник не соответствует источникам потока", domain.ErrInvalid)
 		}
-		if e = createFlowShortWithCurrent(ctx, tx, id, f, now); e != nil {
-			return nil, e
-		}
-		v, e := flowImport(ctx, tx, id, f.ID)
-		if e != nil {
-			return nil, e
-		}
-		out = append(out, v)
 	}
-	return out, tx.Commit(ctx)
+	phase = "preload_growth"
+	preloadStarted := time.Now()
+	growth, err := loadTwitchGrowthBatch(ctx, tx, f, r.Sources, now)
+	preloadMS = time.Since(preloadStarted).Milliseconds()
+	if err != nil {
+		return nil, err
+	}
+	epoch, _, err := twitchResetEpoch(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	writes := &pgx.Batch{}
+	ids := make([]string, 0, len(r.Sources))
+	ready := map[string]bool{}
+	config := flowSourceConfig(f)
+	phase = "write_observations"
+	writeStarted := time.Now()
+	for _, src := range r.Sources {
+		src, err = growth.record(ctx, tx, writes, src)
+		if err != nil {
+			return nil, err
+		}
+		c := growth.clips[src.ClipID]
+		id := c.ImportID
+		if id == "" {
+			id = uuid.NewString()
+			c.ImportID = id
+			request := twitch.ImportRequest{SchemaVersion: 2, IdempotencyKey: "source:" + src.ClipID, Source: src, FlowID: f.ID, FlowVersion: f.Version, AccountID: f.AccountID, Epoch: epoch}
+			writes.Queue(`INSERT INTO twitch_imports(id,idempotency_key,twitch_clip_id,request,state,created_at,updated_at,epoch)VALUES($1,$2,$3,$4,'discovered',$5,$5,$6)`, id, request.IdempotencyKey, src.ClipID, mustJSON(request), now, epoch)
+		} else if !src.ObservedAt.IsZero() {
+			writes.Queue(`UPDATE twitch_imports SET request=jsonb_set(request,'{source}',$2::jsonb),updated_at=$3 WHERE id=$1 AND COALESCE((request->'source'->>'observed_at')::timestamptz,'epoch')<=$3 AND request->'source' IS DISTINCT FROM $2::jsonb`, id, mustJSON(src), src.ObservedAt)
+		}
+		growth.metadataUpdated(src)
+		writes.Queue(`INSERT INTO twitch_import_keys(idempotency_key,import_id)VALUES($1,$2)ON CONFLICT DO NOTHING`, "source:"+src.ClipID, id)
+		writes.Queue(`INSERT INTO twitch_flow_sources(id,flow_id,import_id,config,flow_version,created_at)VALUES($1,$2,$3,$4,$5,$6)ON CONFLICT(flow_id,import_id)DO UPDATE SET config=EXCLUDED.config,flow_version=EXCLUDED.flow_version WHERE twitch_flow_sources.reserved_at IS NULL AND (twitch_flow_sources.config IS DISTINCT FROM EXCLUDED.config OR twitch_flow_sources.flow_version IS DISTINCT FROM EXCLUDED.flow_version)`, uuid.NewString(), f.ID, id, config, f.Version, now)
+		ids = append(ids, id)
+		ready[id] = c.MediaState == "ready"
+	}
+	if writes.Len() > 0 {
+		if err = tx.SendBatch(ctx, writes).Close(); err != nil {
+			writeMS = time.Since(writeStarted).Milliseconds()
+			return nil, err
+		}
+	}
+	writeMS = time.Since(writeStarted).Milliseconds()
+	phase = "ready_outputs"
+	// Most discoveries have no file. Only verified sources need the release
+	// path; re-reading ready candidates preserves its existing atomic checks.
+	for _, id := range ids {
+		if ready[id] {
+			if err = createFlowShortWithCurrent(ctx, tx, id, f, now); err != nil {
+				return nil, err
+			}
+		}
+	}
+	phase = "response"
+	out, err = flowImports(ctx, tx, ids, f.ID)
+	if err != nil {
+		return nil, err
+	}
+	phase = "commit"
+	err = tx.Commit(ctx)
+	committed = err == nil
+	return out, err
 }
 func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, now time.Time) (twitch.Import, error) {
 	tx, err := s.pool.Begin(ctx)

@@ -81,7 +81,7 @@ func (f *Feed) get(ctx context.Context, u string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", u, resp.Status)
+		return nil, &domain.FeedHTTPError{StatusCode: resp.StatusCode, URL: u}
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }

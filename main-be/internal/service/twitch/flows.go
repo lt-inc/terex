@@ -48,6 +48,11 @@ func (s *Service) DeleteFlow(ctx context.Context, id string) error {
 	return r.DeleteTwitchFlow(ctx, id, s.now())
 }
 func (s *Service) CollectorConfig(ctx context.Context) (t.CollectorConfig, error) {
+	if repo, ok := s.Repo.(interface {
+		TwitchCollectorConfig(context.Context) (t.CollectorConfig, error)
+	}); ok {
+		return repo.TwitchCollectorConfig(ctx)
+	}
 	settings, e := s.Settings(ctx)
 	if e != nil {
 		return t.CollectorConfig{}, e

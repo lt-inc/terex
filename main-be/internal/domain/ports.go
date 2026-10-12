@@ -66,6 +66,7 @@ type ChannelRepo interface {
 	// MarkSeen records video ids; returns the ones not seen before.
 	MarkSeen(ctx context.Context, channelID int64, ids []string) ([]string, error)
 	TouchChannel(ctx context.Context, id int64, at time.Time) error
+	RecordChannelFeedFailure(ctx context.Context, id int64, code, message string, nextCheck time.Time) error
 }
 
 // Broker publishes to RabbitMQ (implemented by proto/amqpx).

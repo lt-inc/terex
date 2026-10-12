@@ -12,38 +12,172 @@ import (
 	"terex/proto/twitch"
 )
 
+type twitchGrowthSample struct {
+	ObservedAt   time.Time `json:"observed_at"`
+	ViewCount    int64     `json:"view_count"`
+	CounterEpoch int64     `json:"counter_epoch"`
+}
+type twitchGrowthClip struct {
+	ImportID, MediaState string
+	MetadataAt           time.Time
+	MetadataViews        int64
+	Latest               *twitchGrowthSample
+	Samples              []twitchGrowthSample
+}
+type twitchGrowthBatch struct {
+	clips     map[string]*twitchGrowthClip
+	baselines map[string]map[string]float64
+	flow      twitch.Flow
+	now       time.Time
+}
+
+// Preload history once per observation batch. The ranges are bounded per clip;
+// old samples cannot turn a large catalog into a full-table read.
+func loadTwitchGrowthBatch(ctx context.Context, tx pgx.Tx, f twitch.Flow, sources []twitch.Source, now time.Time) (*twitchGrowthBatch, error) {
+	out := &twitchGrowthBatch{clips: map[string]*twitchGrowthClip{}, baselines: map[string]map[string]float64{}, flow: f, now: now}
+	type wantedClip struct {
+		ClipID  string    `json:"clip_id"`
+		StartAt time.Time `json:"start_at"`
+		EndAt   time.Time `json:"end_at"`
+	}
+	wanted := map[string]wantedClip{}
+	broadcasters := []string{}
+	for _, src := range sources {
+		at := src.ObservedAt
+		if at.IsZero() || at.After(now) {
+			at = now
+		}
+		w, exists := wanted[src.ClipID]
+		if !exists {
+			w = wantedClip{src.ClipID, at, at}
+		}
+		if at.Before(w.StartAt) {
+			w.StartAt = at
+		}
+		if at.After(w.EndAt) {
+			w.EndAt = at
+		}
+		wanted[src.ClipID] = w
+		if _, exists = out.baselines[src.BroadcasterID]; !exists {
+			out.baselines[src.BroadcasterID] = map[string]float64{}
+			broadcasters = append(broadcasters, src.BroadcasterID)
+		}
+	}
+	if len(wanted) == 0 {
+		return out, nil
+	}
+	windows := make([]wantedClip, 0, len(wanted))
+	for _, w := range wanted {
+		windows = append(windows, w)
+	}
+	rows, err := tx.Query(ctx, `WITH wanted AS(SELECT * FROM jsonb_to_recordset($1::jsonb) AS w(clip_id text,start_at timestamptz,end_at timestamptz)) SELECT w.clip_id,COALESCE(i.id,''),COALESCE(i.media_state,''),COALESCE((i.request->'source'->>'observed_at')::timestamptz,'epoch'),COALESCE((i.request->'source'->>'view_count')::bigint,0),latest.observed_at,COALESCE(latest.view_count,0),COALESCE(latest.counter_epoch,0),COALESCE((SELECT jsonb_agg(jsonb_build_object('observed_at',s.observed_at,'view_count',s.view_count,'counter_epoch',s.counter_epoch)) FROM twitch_view_samples s WHERE s.clip_id=w.clip_id AND s.observed_at BETWEEN w.start_at-interval '6 hours' AND w.end_at), '[]'::jsonb) FROM wanted w LEFT JOIN twitch_imports i ON i.twitch_clip_id=w.clip_id LEFT JOIN LATERAL(SELECT observed_at,view_count,counter_epoch FROM twitch_view_samples WHERE clip_id=w.clip_id ORDER BY observed_at DESC LIMIT 1) latest ON true`, mustJSON(windows))
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var clipID string
+		var latestAt *time.Time
+		var latestViews, epoch int64
+		var samples []byte
+		c := &twitchGrowthClip{}
+		if err = rows.Scan(&clipID, &c.ImportID, &c.MediaState, &c.MetadataAt, &c.MetadataViews, &latestAt, &latestViews, &epoch, &samples); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if latestAt != nil {
+			c.Latest = &twitchGrowthSample{*latestAt, latestViews, epoch}
+		}
+		if err = json.Unmarshal(samples, &c.Samples); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out.clips[clipID] = c
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	// One lookup for all broadcasters replaces a whole-catalog scan per clip.
+	rows, err = tx.Query(ctx, `SELECT request->'source'->>'broadcaster_id',twitch_clip_id,(request->'source'->'growth'->>'views_per_hour')::float8 FROM twitch_imports WHERE request->'source'->>'broadcaster_id'=ANY($1::text[]) AND request->'source'->'growth'->>'state'='measured' AND (request->'source'->'growth'->>'observed_at')::timestamptz>=$2 AND (request->'source'->>'created_at')::timestamptz>=$3`, broadcasters, now.Add(-twitch.GrowthStaleAfter(f.PollIntervalMinutes)), now.Add(-time.Duration(f.WindowHours)*time.Hour))
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var broadcaster, clipID string
+		var rate float64
+		if err = rows.Scan(&broadcaster, &clipID, &rate); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !math.IsNaN(rate) && !math.IsInf(rate, 0) && rate >= 0 {
+			out.baselines[broadcaster][clipID] = rate
+		}
+	}
+	rows.Close()
+	return out, rows.Err()
+}
+
+func (b *twitchGrowthBatch) metadataUpdated(src twitch.Source) {
+	c := b.clips[src.ClipID]
+	if src.ObservedAt.IsZero() || src.ObservedAt.Before(c.MetadataAt) {
+		return
+	}
+	c.MetadataAt, c.MetadataViews = src.ObservedAt, int64(src.ViewCount)
+	baseline := b.baselines[src.BroadcasterID]
+	delete(baseline, src.ClipID)
+	if g := src.Growth; g != nil && g.State == "measured" && !g.ObservedAt.Before(b.now.Add(-twitch.GrowthStaleAfter(b.flow.PollIntervalMinutes))) && !src.CreatedAt.Before(b.now.Add(-time.Duration(b.flow.WindowHours)*time.Hour)) {
+		baseline[src.ClipID] = g.ViewsPerHour
+	}
+}
+
 // Samples and scores are authored here, rather than trusting scores from clients.
-func recordTwitchGrowthTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twitch.Source, now time.Time) (twitch.Source, error) {
+// Queuing the writes lets Observe send one batch instead of round-tripping for
+// every sample; Reserve still executes its single-source write synchronously.
+func (b *twitchGrowthBatch) record(ctx context.Context, tx pgx.Tx, writes *pgx.Batch, src twitch.Source) (twitch.Source, error) {
 	src.Growth = nil
 	if src.ObservedAt.IsZero() || src.ViewCount < 0 {
 		return src, nil
 	}
-	if src.ObservedAt.After(now) {
-		src.ObservedAt = now
+	if src.ObservedAt.After(b.now) {
+		src.ObservedAt = b.now
 	}
+	c := b.clips[src.ClipID]
 	var lastAt time.Time
 	var lastViews, epoch int64
-	err := tx.QueryRow(ctx, `SELECT observed_at,view_count,counter_epoch FROM twitch_view_samples WHERE clip_id=$1 ORDER BY observed_at DESC LIMIT 1`, src.ClipID).Scan(&lastAt, &lastViews, &epoch)
-	if err != nil && err != pgx.ErrNoRows {
-		return src, err
+	if c.Latest != nil {
+		lastAt, lastViews, epoch = c.Latest.ObservedAt, c.Latest.ViewCount, c.Latest.CounterEpoch
 	}
 	lastCounterAt, lastCounterViews := lastAt, lastViews
-	var metadataAt time.Time
-	var metadataViews int64
-	metaErr := tx.QueryRow(ctx, `SELECT COALESCE((request->'source'->>'observed_at')::timestamptz,'epoch'),COALESCE((request->'source'->>'view_count')::bigint,0) FROM twitch_imports WHERE twitch_clip_id=$1`, src.ClipID).Scan(&metadataAt, &metadataViews)
-	if metaErr != nil && metaErr != pgx.ErrNoRows {
-		return src, metaErr
-	}
-	if metadataAt.After(lastCounterAt) {
-		lastCounterAt, lastCounterViews = metadataAt, metadataViews
+	if c.MetadataAt.After(lastCounterAt) {
+		lastCounterAt, lastCounterViews = c.MetadataAt, c.MetadataViews
 	}
 	reset := src.ObservedAt.After(lastCounterAt) && !lastCounterAt.IsZero() && int64(src.ViewCount) < lastCounterViews
 	if reset {
 		epoch++
 	}
-	if err == pgx.ErrNoRows || reset || src.ObservedAt.Sub(lastAt) >= 5*time.Minute {
-		if _, err = tx.Exec(ctx, `INSERT INTO twitch_view_samples(clip_id,observed_at,view_count,counter_epoch) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, src.ClipID, src.ObservedAt, src.ViewCount, epoch); err != nil {
+	if c.Latest == nil || reset || src.ObservedAt.Sub(lastAt) >= 5*time.Minute {
+		const insert = `INSERT INTO twitch_view_samples(clip_id,observed_at,view_count,counter_epoch) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`
+		if writes != nil {
+			writes.Queue(insert, src.ClipID, src.ObservedAt, src.ViewCount, epoch)
+		} else if _, err := tx.Exec(ctx, insert, src.ClipID, src.ObservedAt, src.ViewCount, epoch); err != nil {
 			return src, err
+		}
+		exists := false
+		for _, sample := range c.Samples {
+			if sample.ObservedAt.Equal(src.ObservedAt) {
+				exists = true
+				break
+			}
+		}
+		if c.Latest != nil && c.Latest.ObservedAt.Equal(src.ObservedAt) {
+			exists = true
+		}
+		if !exists {
+			sample := twitchGrowthSample{src.ObservedAt, int64(src.ViewCount), epoch}
+			c.Samples = append(c.Samples, sample)
+			if c.Latest == nil || src.ObservedAt.After(c.Latest.ObservedAt) {
+				c.Latest = &sample
+			}
 		}
 	}
 	g := &twitch.ClipGrowth{State: "warming", ObservedAt: src.ObservedAt}
@@ -52,42 +186,32 @@ func recordTwitchGrowthTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twi
 		g.State = "counter_reset"
 		return src, nil
 	}
-	var previousAt time.Time
-	var previousViews int64
-	err = tx.QueryRow(ctx, `SELECT observed_at,view_count FROM twitch_view_samples WHERE clip_id=$1 AND counter_epoch=$2 AND observed_at BETWEEN $3::timestamptz-interval '6 hours' AND $3::timestamptz-interval '15 minutes' ORDER BY abs(extract(epoch FROM observed_at-($3::timestamptz-interval '1 hour'))),observed_at DESC LIMIT 1`, src.ClipID, epoch, src.ObservedAt).Scan(&previousAt, &previousViews)
-	if err == pgx.ErrNoRows {
-		return src, nil
+	var previous *twitchGrowthSample
+	start, end, target := src.ObservedAt.Add(-6*time.Hour), src.ObservedAt.Add(-15*time.Minute), src.ObservedAt.Add(-time.Hour)
+	for n := range c.Samples {
+		sample := &c.Samples[n]
+		if sample.CounterEpoch != epoch || sample.ObservedAt.Before(start) || sample.ObservedAt.After(end) {
+			continue
+		}
+		distance := math.Abs(sample.ObservedAt.Sub(target).Seconds())
+		if previous == nil || distance < math.Abs(previous.ObservedAt.Sub(target).Seconds()) || (distance == math.Abs(previous.ObservedAt.Sub(target).Seconds()) && sample.ObservedAt.After(previous.ObservedAt)) {
+			previous = sample
+		}
 	}
-	if err != nil {
-		return src, err
-	}
-	if int64(src.ViewCount) < previousViews {
+	if previous == nil || int64(src.ViewCount) < previous.ViewCount {
 		return src, nil
 	}
 	g.State = "measured"
-	g.DeltaViews = src.ViewCount - int(previousViews)
-	g.IntervalSec = src.ObservedAt.Sub(previousAt).Seconds()
+	g.DeltaViews = src.ViewCount - int(previous.ViewCount)
+	g.IntervalSec = src.ObservedAt.Sub(previous.ObservedAt).Seconds()
 	g.ViewsPerHour = float64(g.DeltaViews) * 3600 / g.IntervalSec
 	// The badge is contextual evidence, never an admission filter or rank boost.
 	if g.DeltaViews >= 25 && g.ViewsPerHour >= 75 {
-		rows, e := tx.Query(ctx, `SELECT (request->'source'->'growth'->>'views_per_hour')::float8 FROM twitch_imports WHERE twitch_clip_id<>$1 AND request->'source'->>'broadcaster_id'=$2 AND request->'source'->'growth'->>'state'='measured' AND (request->'source'->'growth'->>'observed_at')::timestamptz>=$3 AND (request->'source'->>'created_at')::timestamptz>=$4`, src.ClipID, src.BroadcasterID, now.Add(-twitch.GrowthStaleAfter(f.PollIntervalMinutes)), now.Add(-time.Duration(f.WindowHours)*time.Hour))
-		if e != nil {
-			return src, e
-		}
 		baseline := []float64{}
-		for rows.Next() {
-			var v float64
-			if e = rows.Scan(&v); e != nil {
-				rows.Close()
-				return src, e
+		for clipID, rate := range b.baselines[src.BroadcasterID] {
+			if clipID != src.ClipID {
+				baseline = append(baseline, rate)
 			}
-			if !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 {
-				baseline = append(baseline, v)
-			}
-		}
-		rows.Close()
-		if e = rows.Err(); e != nil {
-			return src, e
 		}
 		if len(baseline) >= 10 {
 			sort.Float64s(baseline)
@@ -99,6 +223,13 @@ func recordTwitchGrowthTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twi
 		}
 	}
 	return src, nil
+}
+func recordTwitchGrowthTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, src twitch.Source, now time.Time) (twitch.Source, error) {
+	b, err := loadTwitchGrowthBatch(ctx, tx, f, []twitch.Source{src}, now)
+	if err != nil {
+		return src, err
+	}
+	return b.record(ctx, tx, nil, src)
 }
 
 // Mode and observation freshness participate before LIMIT in every SQL reader.

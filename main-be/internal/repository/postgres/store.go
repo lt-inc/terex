@@ -5,6 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,6 +25,7 @@ import (
 
 type Store struct {
 	pool          *pgxpool.Pool
+	controlPool   *pgxpool.Pool
 	pressureMu    sync.Mutex
 	pressureCount int
 	pressureAt    time.Time
@@ -39,7 +44,15 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		cfg.ConnConfig.RuntimeParams["jit"] = "off"
 	}
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer() // a span per SQL query
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	reserved := int64(1)
+	if raw := os.Getenv("DB_CONTROL_POOL_RESERVED_CONNS"); raw != "" {
+		reserved, err = strconv.ParseInt(raw, 10, 32)
+		if err != nil || reserved < 0 {
+			return nil, fmt.Errorf("DB_CONTROL_POOL_RESERVED_CONNS must be a non-negative integer")
+		}
+	}
+	workCfg, controlCfg := splitControlPool(cfg, int32(reserved))
+	pool, err := pgxpool.NewWithConfig(ctx, workCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -47,10 +60,56 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	control := pool
+	if controlCfg != nil {
+		control, err = pgxpool.NewWithConfig(ctx, controlCfg)
+		if err == nil {
+			err = pgxutil.WaitPing(ctx, control.Ping)
+		}
+		if err != nil {
+			if control != nil {
+				control.Close()
+			}
+			pool.Close()
+			return nil, err
+		}
+	}
+	slog.InfoContext(ctx, "PostgreSQL connection budget", "total_max", cfg.MaxConns, "work_max", workCfg.MaxConns, "control_max", cfg.MaxConns-workCfg.MaxConns)
+	if reserved > 0 && controlCfg == nil {
+		slog.WarnContext(ctx, "PostgreSQL control isolation disabled", "reason_code", "pool_budget_too_small", "total_max", cfg.MaxConns)
+	}
+	return &Store{pool: pool, controlPool: control}, nil
 }
 
-func (s *Store) Close() { s.pool.Close() }
+func splitControlPool(cfg *pgxpool.Config, reserved int32) (*pgxpool.Config, *pgxpool.Config) {
+	work := cfg.Copy()
+	reserved = min(reserved, max(0, cfg.MaxConns-1))
+	if reserved == 0 {
+		return work, nil
+	}
+	control := cfg.Copy()
+	work.MaxConns = cfg.MaxConns - reserved
+	control.MaxConns = reserved
+	work.MinConns = min(cfg.MinConns, work.MaxConns)
+	control.MinConns = cfg.MinConns - work.MinConns
+	work.MinIdleConns = min(cfg.MinIdleConns, work.MaxConns)
+	control.MinIdleConns = cfg.MinIdleConns - work.MinIdleConns
+	return work, control
+}
+
+func (s *Store) controlDB() *pgxpool.Pool {
+	if s.controlPool != nil {
+		return s.controlPool
+	}
+	return s.pool
+}
+
+func (s *Store) Close() {
+	if s.controlPool != nil && s.controlPool != s.pool {
+		s.controlPool.Close()
+	}
+	s.pool.Close()
+}
 
 // Migrate applies embedded goose migrations.
 func Migrate(dsn string) error {

@@ -14,13 +14,14 @@ import (
 type snapshotRepo struct {
 	work      twitch.RuntimeWork
 	saved     map[string]json.RawMessage
+	savedAt   map[string]time.Time
 	saveError func(string, any) error
 }
 
 func (r *snapshotRepo) TwitchRuntimeWork(context.Context, time.Time) (twitch.RuntimeWork, error) {
 	return r.work, nil
 }
-func (r *snapshotRepo) SaveTwitchMonitoring(ctx context.Context, scope, key string, _ int64, _ time.Time, v any) error {
+func (r *snapshotRepo) SaveTwitchMonitoring(ctx context.Context, scope, key string, _ int64, at time.Time, v any) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -31,6 +32,9 @@ func (r *snapshotRepo) SaveTwitchMonitoring(ctx context.Context, scope, key stri
 	}
 	raw, err := json.Marshal(v)
 	r.saved[scope+"/"+key] = raw
+	if r.savedAt != nil {
+		r.savedAt[scope+"/"+key] = at
+	}
 	return err
 }
 func (r *snapshotRepo) CleanupTwitchMonitoring(context.Context, int64) error { return nil }
@@ -79,8 +83,9 @@ func (c *monitorCollector) Diagnostics(ctx context.Context, id string) (domain.T
 
 func monitorFixture(c *monitorCollector) (*Service, *snapshotRepo) {
 	r := &snapshotRepo{
-		work:  twitch.RuntimeWork{Epoch: 3, Counts: []twitch.StageCount{{Stage: "render", Count: 2}}, ActiveTasks: []twitch.ActiveTask{{ClipID: "short", Stage: "render"}}, ActiveTotal: 2},
-		saved: map[string]json.RawMessage{},
+		work:    twitch.RuntimeWork{Epoch: 3, Counts: []twitch.StageCount{{Stage: "render", Count: 2}}, ActiveTasks: []twitch.ActiveTask{{ClipID: "short", Stage: "render"}}, ActiveTotal: 2},
+		saved:   map[string]json.RawMessage{},
+		savedAt: map[string]time.Time{},
 	}
 	s := &Service{Repo: r, Flows: monitorFlows{items: []twitch.Flow{{ID: "a", Name: "First"}, {ID: "b", Name: "Second"}}}, Diagnostics: monitorDiagnostics{}, Collector: c}
 	return s, r
@@ -156,6 +161,47 @@ func TestFlowCollectorFailureDoesNotHideOtherFlows(t *testing.T) {
 		if flow.Sources["ready"] != 2 || flow.Collector.Available != (id == "b") || (flow.Collector.ObservedAt != nil) != (id == "b") {
 			t.Fatalf("wrong component freshness for %s: %+v", id, flow)
 		}
+	}
+}
+
+func TestFlowBatchRotatesWithoutRefreshingUnvisitedSnapshots(t *testing.T) {
+	c := &monitorCollector{status: domain.TwitchCollectorStatus{Runtime: &twitch.RuntimeWork{Epoch: 3}}}
+	s, r := monitorFixture(c)
+	s.Flows = monitorFlows{items: []twitch.Flow{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}}}
+	observedAt := time.Now().UTC().Add(-2 * time.Minute)
+	var calls []string
+	s.Diagnostics = monitorDiagnosticsFunc(func(ctx context.Context, id string) (domain.TwitchFlowDiagnostics, error) {
+		calls = append(calls, id)
+		out, err := monitorDiagnostics{}.Diagnostics(ctx, id)
+		out.GeneratedAt = observedAt
+		return out, err
+	})
+	if err := s.Tick(context.Background()); err != nil {
+		t.Fatalf("intentional batching must not be an error: %v", err)
+	}
+	first := string(r.saved["flow/a"])
+	if len(calls) != 2 || calls[0] != "a" || calls[1] != "b" || len(r.saved["flow/c"]) != 0 {
+		t.Fatalf("unexpected first batch: %v", calls)
+	}
+	if err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 4 || calls[2] != "c" || calls[3] != "d" || first != string(r.saved["flow/a"]) {
+		t.Fatalf("rotation starved or rewrote unvisited flow: %v", calls)
+	}
+	var flow domain.TwitchFlowDiagnostics
+	if err := json.Unmarshal(r.saved["flow/a"], &flow); err != nil {
+		t.Fatal(err)
+	}
+	if !flow.GeneratedAt.Equal(observedAt) || !r.savedAt["flow/a"].Equal(observedAt) {
+		t.Fatalf("flow timestamp was refreshed without observation: payload=%v stored=%v", flow.GeneratedAt, r.savedAt["flow/a"])
+	}
+	var system domain.TwitchMonitoringSnapshot
+	if err := json.Unmarshal(r.saved["system/current"], &system); err != nil {
+		t.Fatal(err)
+	}
+	if system.FlowsTotal != 4 || system.FlowsAttempted != 2 || system.MainFlowsObserved != 2 || system.NextFlowID != "a" || len(system.DiagnosticsErrors) != 0 {
+		t.Fatalf("batch progress was reported as a failure or lost: %+v", system)
 	}
 }
 

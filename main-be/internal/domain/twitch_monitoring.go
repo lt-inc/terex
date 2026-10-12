@@ -50,6 +50,11 @@ type TwitchMonitoringSnapshot struct {
 	OldestRenderQueuedAt *time.Time                `json:"oldest_render_queued_at,omitempty"`
 	Discovery            []json.RawMessage         `json:"discovery"`
 	DiagnosticsErrors    []TwitchMonitoringFailure `json:"diagnostics_errors"`
+	FlowsTotal           int                       `json:"flows_total"`
+	FlowsPerTick         int                       `json:"flows_per_tick"`
+	FlowsAttempted       int                       `json:"flows_attempted"`
+	MainFlowsObserved    int                       `json:"main_flows_observed"`
+	NextFlowID           string                    `json:"next_flow_id,omitempty"`
 }
 
 type TwitchMonitoringFailure struct {
