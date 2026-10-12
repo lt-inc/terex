@@ -19,6 +19,16 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS twitch_imports_admission_broadcaster_vie
  WHERE NOT rejected AND media_state NOT IN('ready','expired')
  AND state IN('discovered','upload_failed');
 
+-- PostgreSQL severely underestimates the old JSON category/language lookup and
+-- otherwise keeps choosing it, loading thousands of low-view requests. The new
+-- category index covers its predicates as well as the admission view threshold.
+DROP INDEX CONCURRENTLY IF EXISTS twitch_imports_admission_category;
+
 -- +goose Down
+CREATE INDEX CONCURRENTLY IF NOT EXISTS twitch_imports_admission_category
+ ON twitch_imports((request->'source'->>'game_id'),
+  (request->'source'->>'language'),id)
+ WHERE NOT rejected AND media_state NOT IN('ready','expired')
+ AND state IN('discovered','upload_failed');
 DROP INDEX CONCURRENTLY IF EXISTS twitch_imports_admission_broadcaster_views;
 DROP INDEX CONCURRENTLY IF EXISTS twitch_imports_admission_category_views;
