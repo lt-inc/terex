@@ -235,7 +235,7 @@ func TestPipelineEndToEnd(t *testing.T) {
 	if len(arts) != 3 {
 		t.Fatalf("expected 3 ingested articles, got %d", len(arts))
 	}
-	posts, _ := svc.ListPosts(ctx, flow.ID, "", 10)
+	posts, _ := svc.ListPosts(ctx, flow.ID, "", nil, nil, 10)
 	if len(posts) != 1 || posts[0].Status != domain.PostPending {
 		t.Fatalf("by_approve flow must leave one pending draft: %+v", posts)
 	}
@@ -261,7 +261,7 @@ func TestPipelineEndToEnd(t *testing.T) {
 	svc.pipeMu.Lock()
 	_ = svc.pipeline(ctx)
 	svc.pipeMu.Unlock()
-	if again, _ := svc.ListPosts(ctx, flow.ID, "", 10); len(again) != 1 || llmCalls != 1 {
+	if again, _ := svc.ListPosts(ctx, flow.ID, "", nil, nil, 10); len(again) != 1 || llmCalls != 1 {
 		t.Fatalf("the same story must not be drafted twice: %d posts, %d calls", len(again), llmCalls)
 	}
 

@@ -273,14 +273,21 @@ func (s *Store) MarkFetched(ctx context.Context, id int64, fetchErr string) erro
 
 // ---- articles ----
 
+// InsertArticle stores a new article and reports whether it was new. An article that is already
+// known only gets its picture filled in when it had none (so articles stored before pictures were
+// collected are repaired on the next feed pass); that is not counted as new.
 func (s *Store) InsertArticle(ctx context.Context, a domain.Article, urlHash string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `INSERT INTO news_collector.articles(source_id,url,url_hash,title,summary,publisher,lang,published_at,image_url)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (url_hash) DO NOTHING`,
-		a.SourceID, a.URL, urlHash, a.Title, a.Summary, a.Publisher, a.Lang, a.PublishedAt, a.ImageURL)
-	if err != nil {
-		return false, err
+	var inserted bool
+	err := s.pool.QueryRow(ctx, `INSERT INTO news_collector.articles(source_id,url,url_hash,title,summary,publisher,lang,published_at,image_url)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+ ON CONFLICT (url_hash) DO UPDATE SET image_url = EXCLUDED.image_url
+   WHERE news_collector.articles.image_url = '' AND EXCLUDED.image_url <> ''
+ RETURNING (xmax = 0)`,
+		a.SourceID, a.URL, urlHash, a.Title, a.Summary, a.Publisher, a.Lang, a.PublishedAt, a.ImageURL).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // known article, nothing to repair
 	}
-	return tag.RowsAffected() == 1, nil
+	return inserted, err
 }
 
 const articleCols = `a.id, a.source_id, a.url, a.title, a.summary, a.text, a.publisher, a.lang, a.published_at, a.status, a.simhash, a.embedding, a.dup_of, a.image_url`
@@ -766,22 +773,49 @@ func (s *Store) Post(ctx context.Context, id int64) (domain.Post, error) {
 	return p, mapErr(err)
 }
 
-func (s *Store) ListPosts(ctx context.Context, flowID int64, status string, limit int) ([]domain.Post, error) {
+// ListPosts lists posts newest first. With a from/to range it returns the posts whose calendar time
+// (published_at, else scheduled_at) falls inside it, oldest first; drafts without a time are excluded.
+func (s *Store) ListPosts(ctx context.Context, flowID int64, status string, from, to *time.Time, limit int) ([]domain.Post, error) {
 	var where []string
 	var args []any
+	add := func(cond string, v any) {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf(cond, len(args)))
+	}
 	if flowID > 0 {
-		args = append(args, flowID)
-		where = append(where, fmt.Sprintf("p.flow_id=$%d", len(args)))
+		add("p.flow_id=$%d", flowID)
 	}
 	if status != "" {
-		args = append(args, status)
-		where = append(where, fmt.Sprintf("p.status=$%d", len(args)))
+		add("p.status=$%d", status)
+	}
+	const when = "COALESCE(p.published_at, p.scheduled_at)"
+	if from != nil {
+		add(when+" >= $%d", *from)
+	}
+	if to != nil {
+		add(when+" < $%d", *to)
 	}
 	tail := ""
 	if len(where) > 0 {
 		tail = "WHERE " + strings.Join(where, " AND ")
 	}
-	return s.posts(ctx, tail+fmt.Sprintf(" ORDER BY p.created_at DESC, p.id DESC LIMIT %d", limit), args...)
+	order := "ORDER BY p.created_at DESC, p.id DESC"
+	if from != nil || to != nil {
+		order = "ORDER BY " + when + ", p.id"
+	}
+	return s.posts(ctx, tail+" "+order+fmt.Sprintf(" LIMIT %d", limit), args...)
+}
+
+// Hold takes a queued post back to review and forgets its time.
+func (s *Store) Hold(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE news_collector.posts SET status='pending', scheduled_at=NULL, error='', updated_at=now() WHERE id=$1 AND status='approved'`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: only a queued post can be taken back to review", domain.ErrConflict)
+	}
+	return nil
 }
 
 func (s *Store) CreatePost(ctx context.Context, p domain.Post) (int64, error) {

@@ -105,7 +105,8 @@ function PostCard({ post, footer, busy, onAction }: { post: NewsPost; footer: st
 function Posts() {
   const params = useSearchParams();
   const [flowID, setFlowID] = useState(Number(params.get("flow")) || 0);
-  const [status, setStatus] = useState<NewsPostStatus | "">("pending");
+  const initialStatus = params.get("status");
+  const [status, setStatus] = useState<NewsPostStatus | "">(TABS.includes(initialStatus as NewsPostStatus) && initialStatus ? (initialStatus as NewsPostStatus) : "pending");
   const [posts, setPosts] = useState<NewsPost[]>([]);
   const [flows, setFlows] = useState<NewsFlow[]>([]);
   const [busy, setBusy] = useState(false);

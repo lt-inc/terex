@@ -396,8 +396,16 @@ func (s *Service) RecentArticles(ctx context.Context, flowID int64, limit int) (
 
 // ---- posts ----
 
-func (s *Service) ListPosts(ctx context.Context, flowID int64, status string, limit int) ([]domain.Post, error) {
-	return s.store.ListPosts(ctx, flowID, status, limit)
+func (s *Service) ListPosts(ctx context.Context, flowID int64, status string, from, to *time.Time, limit int) ([]domain.Post, error) {
+	return s.store.ListPosts(ctx, flowID, status, from, to, limit)
+}
+
+// HoldPost takes a queued post back to review (and drops its time) so it can be rescheduled or edited.
+func (s *Service) HoldPost(ctx context.Context, id int64) (domain.Post, error) {
+	if err := s.store.Hold(ctx, id); err != nil {
+		return domain.Post{}, err
+	}
+	return s.store.Post(ctx, id)
 }
 
 func (s *Service) GetPost(ctx context.Context, id int64) (domain.Post, error) {
@@ -541,13 +549,14 @@ func (s *Service) PostImages(ctx context.Context, id int64, query string) ([]ima
 	return out, nil
 }
 
-// Approve queues a draft; without a time it goes out immediately.
+// Approve queues a draft; without a time it goes out immediately. On an already queued post it
+// reschedules it (or publishes it now), which is what the calendar uses.
 func (s *Service) ApprovePost(ctx context.Context, id int64, at *time.Time) (domain.Post, error) {
 	when := s.now()
 	if at != nil {
 		when = *at
 	}
-	if err := s.store.Transition(ctx, id, []string{domain.PostPending, domain.PostFailed}, domain.PostApproved, &when); err != nil {
+	if err := s.store.Transition(ctx, id, []string{domain.PostPending, domain.PostFailed, domain.PostApproved}, domain.PostApproved, &when); err != nil {
 		return domain.Post{}, err
 	}
 	if !when.After(s.now()) {

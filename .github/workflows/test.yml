@@ -22,6 +22,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:workflow_test@localhost:5432/workflow_test?sslmode=disable
       COLLECTOR_TEST_DATABASE_URL: postgres://postgres:workflow_test@localhost:5432/workflow_test?sslmode=disable
+      NEWS_TEST_DATABASE_URL: postgres://postgres:workflow_test@localhost:5432/workflow_test?sslmode=disable
       TEST_AMQP_URL: amqp://guest:guest@localhost:5672/
       CGO_ENABLED: '0'
     steps:
@@ -34,7 +35,7 @@ jobs:
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           sh -n docker/collector-db-init.sh
-      - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/... ./stats-collector/...
+      - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/... ./stats-collector/... ./news-collector/...
       - name: Verify real DB bootstrap, restricted login and repeated provisioning
         env:
           PGHOST: localhost
@@ -54,6 +55,8 @@ jobs:
         run: docker build -f twitch-collector/Dockerfile -t terex-twitch-collector:ci .
       - name: Build stats collector image
         run: docker build -f stats-collector/Dockerfile -t terex-stats-collector:ci .
+      - name: Build news collector image
+        run: docker build -f news-collector/Dockerfile -t terex-news-collector:ci .
       - name: Media smoke with runtime media packages
         run: |
           go test -c -o /tmp/media-smoke ./gpu-be/internal/repository/ffmpeg

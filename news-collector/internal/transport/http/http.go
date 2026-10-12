@@ -69,6 +69,7 @@ func Handler(a *API) http.Handler {
 	api.HandleFunc("PATCH /api/posts/{id}", a.editPost)
 	api.HandleFunc("POST /api/posts/{id}/approve", a.approvePost)
 	api.HandleFunc("POST /api/posts/{id}/reject", a.rejectPost)
+	api.HandleFunc("POST /api/posts/{id}/hold", a.holdPost)
 	api.HandleFunc("GET /api/posts/{id}/preview", a.previewPost)
 	api.HandleFunc("GET /api/posts/{id}/images", a.postImages)
 
@@ -459,13 +460,30 @@ func (a *API) articles(w http.ResponseWriter, r *http.Request) {
 // ---- posts ----
 
 func (a *API) listPosts(w http.ResponseWriter, r *http.Request) {
-	flow, _ := strconv.ParseInt(r.URL.Query().Get("flow_id"), 10, 64)
-	status := r.URL.Query().Get("status")
+	q := r.URL.Query()
+	flow, _ := strconv.ParseInt(q.Get("flow_id"), 10, 64)
+	status := q.Get("status")
 	if status != "" && !validStatus(status) {
 		a.badBody(w, errors.New("unknown status"))
 		return
 	}
-	out, err := a.Svc.ListPosts(r.Context(), flow, status, limit(r, 50, 200))
+	// from/to (RFC 3339) switch to calendar mode: posts by their publication time, up to 1000.
+	var from, to *time.Time
+	for key, dst := range map[string]**time.Time{"from": &from, "to": &to} {
+		if raw := q.Get(key); raw != "" {
+			t, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				a.badBody(w, errors.New(key+" must be an RFC 3339 time"))
+				return
+			}
+			*dst = &t
+		}
+	}
+	maxLimit := 200
+	if from != nil || to != nil {
+		maxLimit = 1000
+	}
+	out, err := a.Svc.ListPosts(r.Context(), flow, status, from, to, limit(r, 50, maxLimit))
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -581,6 +599,20 @@ func (a *API) postImages(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	out, err := a.Svc.PostImages(ctx, n, r.URL.Query().Get("query"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	write(w, 200, out)
+}
+
+func (a *API) holdPost(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(r)
+	if !ok {
+		write(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	out, err := a.Svc.HoldPost(r.Context(), n)
 	if err != nil {
 		a.fail(w, r, err)
 		return
