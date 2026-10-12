@@ -54,7 +54,7 @@ type Service struct {
 	pages            *extract.Client
 	llm              *llm.Client
 	tg               *telegram.Client
-	pexels           *images.Pexels
+	stock            []images.Searcher
 	checker          *images.Checker
 	sealer           *Sealer
 	log              *slog.Logger
@@ -71,10 +71,20 @@ func New(cfg Config, store *postgres.Store, feeds *feed.Client, pages *extract.C
 	return &Service{cfg: cfg, store: store, feeds: feeds, pages: pages, llm: l, tg: tg, sealer: sealer, log: log, now: time.Now}
 }
 
-// WithImages enables stock photos (Pexels) and the image URL check. Both are optional.
-func (s *Service) WithImages(p *images.Pexels, c *images.Checker) *Service {
-	s.pexels, s.checker = p, c
+// WithImages enables stock photo providers (tried in order) and the image check/download. Both are optional.
+func (s *Service) WithImages(stock []images.Searcher, c *images.Checker) *Service {
+	s.stock, s.checker = stock, c
 	return s
+}
+
+// stockReady reports whether at least one stock photo provider has a key.
+func (s *Service) stockReady() bool {
+	for _, p := range s.stock {
+		if p.Ready() {
+			return true
+		}
+	}
+	return false
 }
 
 // Run drives the pipeline until the context is cancelled.
@@ -189,7 +199,7 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 		return st, err
 	}
 	st.LLMReady = s.llm.Ready()
-	st.PexelsReady = s.pexels.Ready()
+	st.StockReady = s.stockReady()
 	st.SecretKeyReady = s.sealer != nil
 	s.stateMu.Lock()
 	if !s.lastTick.IsZero() {

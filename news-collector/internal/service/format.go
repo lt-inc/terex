@@ -104,7 +104,7 @@ func RenderHTML(p domain.Post, o RenderOptions) string {
 		}
 		tail = append(tail, label+strings.Join(parts, " · "))
 	}
-	if p.ImageCredit != "" {
+	if p.ImageSource == "pexels" && p.ImageCredit != "" { // Pexels asks for attribution; other sources do not
 		credit := html.EscapeString(p.ImageCredit)
 		if p.ImageCreditURL != "" {
 			credit = `<a href="` + html.EscapeString(p.ImageCreditURL) + `">` + credit + `</a>`

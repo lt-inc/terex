@@ -227,27 +227,27 @@ func (s *Service) pickImage(ctx context.Context, f domain.Flow, arts []domain.Ar
 		}
 	}
 	if f.ImageMode == domain.ImageWeb || f.ImageMode == domain.ImageAuto {
-		if !s.pexels.Ready() {
-			return none()
-		}
 		q := query
 		if q == "" {
 			q = strings.TrimSpace(f.Topic)
 		}
-		if q != "" {
+		for _, prov := range s.stock {
+			if !prov.Ready() || q == "" {
+				continue
+			}
 			pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			photos, err := s.pexels.Search(pctx, q, f.Language, 5)
+			photos, err := prov.Search(pctx, q, f.Language, 5)
 			cancel()
 			switch {
 			case err != nil:
-				metrics.ImageLookups.WithLabelValues("pexels", "error").Inc()
-				s.log.Warn("stock photo search failed", "flow", f.ID, "err", err)
+				metrics.ImageLookups.WithLabelValues(prov.Name(), "error").Inc()
+				s.log.Warn("stock photo search failed", "flow", f.ID, "provider", prov.Name(), "err", err)
 			case len(photos) > 0:
-				metrics.ImageLookups.WithLabelValues("pexels", "ok").Inc()
-				metrics.ImagesSelected.WithLabelValues("pexels").Inc()
-				return pickedImage{URL: photos[0].URL, Source: "pexels", Credit: photos[0].Credit, CreditURL: photos[0].CreditURL}
+				metrics.ImageLookups.WithLabelValues(prov.Name(), "ok").Inc()
+				metrics.ImagesSelected.WithLabelValues(prov.Name()).Inc()
+				return pickedImage{URL: photos[0].URL, Source: prov.Name(), Credit: photos[0].Credit, CreditURL: photos[0].CreditURL}
 			default:
-				metrics.ImageLookups.WithLabelValues("pexels", "empty").Inc()
+				metrics.ImageLookups.WithLabelValues(prov.Name(), "empty").Inc()
 			}
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -49,26 +50,32 @@ var tokenPattern = regexp.MustCompile(`^\d{5,}:[A-Za-z0-9_-]{30,}$`)
 
 func ValidToken(t string) bool { return tokenPattern.MatchString(t) }
 
+func observe(method string, started time.Time, err error) {
+	result := "ok"
+	var tg *Error
+	switch {
+	case errors.As(err, &tg) && tg.Code == 429:
+		result = "rate_limited"
+	case err != nil:
+		result = "error"
+	}
+	metrics.TelegramRequests.WithLabelValues(method, result).Inc()
+	metrics.TelegramDuration.WithLabelValues(method).Observe(time.Since(started).Seconds())
+}
+
 func (c *Client) call(ctx context.Context, token, method string, params map[string]any, out any) (err error) {
 	started := time.Now()
-	defer func() {
-		result := "ok"
-		var tg *Error
-		switch {
-		case errors.As(err, &tg) && tg.Code == 429:
-			result = "rate_limited"
-		case err != nil:
-			result = "error"
-		}
-		metrics.TelegramRequests.WithLabelValues(method, result).Inc()
-		metrics.TelegramDuration.WithLabelValues(method).Observe(time.Since(started).Seconds())
-	}()
+	defer func() { observe(method, started, err) }()
 	body, _ := json.Marshal(params)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Base+"/bot"+token+"/"+method, bytes.NewReader(body))
+	return c.callRaw(ctx, token, method, "application/json", bytes.NewReader(body), out)
+}
+
+func (c *Client) callRaw(ctx context.Context, token, method, contentType string, body io.Reader, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Base+"/bot"+token+"/"+method, body)
 	if err != nil {
 		return errors.New("telegram: invalid request")
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	res, err := c.HTTP.Do(req)
 	if err != nil {
 		if ue, ok := err.(*url.Error); ok { // the wrapped URL contains the token
@@ -162,6 +169,29 @@ func (c *Client) SendPhoto(ctx context.Context, token, chatID, photoURL, caption
 	err := c.call(ctx, token, "sendPhoto", map[string]any{
 		"chat_id": ChatParam(chatID), "photo": photoURL, "caption": caption, "parse_mode": "HTML",
 	}, &msg)
+	return msg.MessageID, err
+}
+
+// SendPhotoUpload posts picture bytes with an HTML caption (at most 1024 characters). Uploading
+// avoids Telegram having to fetch the URL itself.
+func (c *Client) SendPhotoUpload(ctx context.Context, token, chatID, filename string, data []byte, caption string) (int64, error) {
+	started := time.Now()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("chat_id", chatID)
+	_ = mw.WriteField("caption", caption)
+	_ = mw.WriteField("parse_mode", "HTML")
+	part, err := mw.CreateFormFile("photo", filename)
+	if err != nil {
+		return 0, err
+	}
+	_, _ = part.Write(data)
+	_ = mw.Close()
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	err = c.callRaw(ctx, token, "sendPhoto", mw.FormDataContentType(), &buf, &msg)
+	observe("sendPhoto", started, err)
 	return msg.MessageID, err
 }
 

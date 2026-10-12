@@ -3,6 +3,8 @@ import type {
   NewsArticle,
   NewsChannel,
   NewsFeedPreview,
+  NewsImageCandidate,
+  NewsImageEdit,
   NewsFlow,
   NewsPost,
   NewsPostStatus,
@@ -50,7 +52,12 @@ export const fetchNewsPosts = (status: NewsPostStatus | "" = "", flowID = 0, sig
   if (flowID) query.set("flow_id", String(flowID));
   return request<NewsPost[]>(`${base}/posts?${query}`, { signal });
 };
-export const editNewsPost = (id: number, patch: { title?: string; text?: string }) => request<NewsPost>(`${base}/posts/${id}`, json("PATCH", patch));
+export const editNewsPost = (
+  id: number,
+  patch: { title?: string; text?: string; emoji?: string; hashtags?: string; image?: NewsImageEdit },
+) => request<NewsPost>(`${base}/posts/${id}`, json("PATCH", patch));
+export const fetchNewsPostImages = (id: number, query = "", signal?: AbortSignal) =>
+  request<NewsImageCandidate[]>(`${base}/posts/${id}/images${query ? `?query=${encodeURIComponent(query)}` : ""}`, { signal });
 export const approveNewsPost = (id: number, scheduledAt?: string) =>
   request<NewsPost>(`${base}/posts/${id}/approve`, json("POST", scheduledAt ? { scheduled_at: scheduledAt } : {}));
 export const rejectNewsPost = (id: number) => request<NewsPost>(`${base}/posts/${id}/reject`, json("POST", {}));

@@ -183,7 +183,7 @@ func TestMarkupToHTML(t *testing.T) {
 func TestRenderLayout(t *testing.T) {
 	p := domain.Post{Title: "Заголовок", Emoji: "🔥", Text: "Лид с **фактом**.", Hashtags: "#Крипто #Биткоин",
 		Links:       []domain.Link{{Title: "РБК", URL: "https://rbc.ru/1"}},
-		ImageCredit: "Ann", ImageCreditURL: "https://www.pexels.com/photo/1/"}
+		ImageSource: "pexels", ImageCredit: "Ann", ImageCreditURL: "https://www.pexels.com/photo/1/"}
 	got := RenderHTML(p, RenderOptions{Lang: "ru", Footer: "Подписаться: @news & co"})
 	order := []string{"🔥 <b>Заголовок</b>", "Лид с <b>фактом</b>.", "#Крипто #Биткоин", "Источники: <a", "Фото: <a", "/ Pexels", "Подписаться: @news &amp; co"}
 	last := -1

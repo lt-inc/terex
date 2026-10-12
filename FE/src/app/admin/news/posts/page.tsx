@@ -1,7 +1,9 @@
 "use client";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
+import ImagePicker from "@/components/news/ImagePicker";
 import NewsNav from "@/components/news/NewsNav";
+import PostPreview from "@/components/news/PostPreview";
 import { approveNewsPost, editNewsPost, fetchNewsFlows, fetchNewsPosts, rejectNewsPost } from "@/lib/news";
 import { POST_STATUS_LABEL, POST_STATUS_STYLE, relativeTime } from "@/lib/news-flow";
 import type { NewsFlow, NewsPost, NewsPostStatus } from "@/types/news";
@@ -11,20 +13,26 @@ const button = "rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 dis
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const TABS: (NewsPostStatus | "")[] = ["pending", "approved", "published", "failed", "rejected", ""];
 
-function PostCard({ post, busy, onAction }: { post: NewsPost; busy: boolean; onAction: (work: () => Promise<unknown>, done: string) => void }) {
+function PostCard({ post, footer, busy, onAction }: { post: NewsPost; footer: string; busy: boolean; onAction: (work: () => Promise<unknown>, done: string) => void }) {
   const editable = post.status === "pending" || post.status === "approved" || post.status === "failed";
   const [title, setTitle] = useState(post.title);
   const [text, setText] = useState(post.text);
+  const [emoji, setEmoji] = useState(post.emoji);
+  const [hashtags, setHashtags] = useState(post.hashtags);
   const [when, setWhen] = useState("");
-  const dirty = title !== post.title || text !== post.text;
+  const [picking, setPicking] = useState(false);
+  const dirty = title !== post.title || text !== post.text || emoji !== post.emoji || hashtags !== post.hashtags;
   useEffect(() => {
     setTitle(post.title);
     setText(post.text);
-  }, [post.title, post.text]);
+    setEmoji(post.emoji);
+    setHashtags(post.hashtags);
+  }, [post.title, post.text, post.emoji, post.hashtags]);
 
+  const edits = { title, text, emoji, hashtags };
   // Saving edits first guarantees that what is approved is what the operator is looking at.
   const withEdits = async (next: () => Promise<unknown>) => {
-    if (dirty) await editNewsPost(post.id, { title, text });
+    if (dirty) await editNewsPost(post.id, edits);
     return next();
   };
 
@@ -38,25 +46,32 @@ function PostCard({ post, busy, onAction }: { post: NewsPost; busy: boolean; onA
         {post.scheduled_at && post.status === "approved" && <span>в {new Date(post.scheduled_at).toLocaleString("ru-RU")}</span>}
         {post.published_at && <span>опубликован {new Date(post.published_at).toLocaleString("ru-RU")}</span>}
       </div>
-      {editable ? (
+
+      <PostPreview title={title} emoji={emoji} text={text} hashtags={hashtags} links={post.links} imageURL={post.image_url}
+        credit={post.image_source === "pexels" ? post.image_credit : ""} creditURL={post.image_credit_url} footer={footer} />
+
+      {editable && (
         <>
-          <input className={`${input} font-semibold`} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} aria-label="Заголовок" />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={button} disabled={busy} onClick={() => setPicking((v) => !v)}>{post.image_url ? "Сменить картинку" : "Добавить картинку"}</button>
+            {post.image_url && (
+              <button type="button" className={button} disabled={busy} onClick={() => onAction(() => editNewsPost(post.id, { image: { url: "" } }), "Картинка убрана.")}>Убрать картинку</button>
+            )}
+          </div>
+          {picking && (
+            <ImagePicker postId={post.id} initialQuery={post.image_query} busy={busy} onClose={() => setPicking(false)}
+              onPick={(image) => { setPicking(false); onAction(() => editNewsPost(post.id, { image }), "Картинка заменена."); }} />
+          )}
+          <div className="grid gap-2 sm:grid-cols-[4rem_1fr]">
+            <input className={`${input} text-center`} value={emoji} onChange={(e) => setEmoji(e.target.value)} maxLength={16} aria-label="Эмодзи" placeholder="🔥" />
+            <input className={`${input} font-semibold`} value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} aria-label="Заголовок" />
+          </div>
           <textarea className={input} rows={Math.min(14, Math.max(4, text.split("\n").length + 2))} value={text} onChange={(e) => setText(e.target.value)} aria-label="Текст поста" />
-          <p className={`text-xs ${text.length > 3800 ? "text-red-400" : "text-slate-500"}`}>{text.length} / 3800 символов</p>
+          <p className={`text-xs ${text.length > 3800 ? "text-red-400" : "text-slate-500"}`}>
+            {text.length} / 3800 символов · разметка: **жирный**, __курсив__, «- » список, «&gt; » цитата
+          </p>
+          <input className={input} value={hashtags} onChange={(e) => setHashtags(e.target.value)} aria-label="Хештеги" placeholder="#крипто #биткоин" />
         </>
-      ) : (
-        <div>
-          <h3 className="font-semibold">{post.title}</h3>
-          <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">{post.text}</p>
-        </div>
-      )}
-      {post.links.length > 0 && (
-        <p className="text-xs text-slate-400">
-          Источники:{" "}
-          {post.links.map((l, i) => (
-            <span key={l.url}>{i > 0 && " · "}<a className="text-indigo-300 underline" href={l.url} target="_blank" rel="noopener noreferrer">{l.title}</a></span>
-          ))}
-        </p>
       )}
       {post.error && <p className="text-sm text-red-400">{post.error}</p>}
       <div className="flex flex-wrap items-center gap-2">
@@ -74,7 +89,7 @@ function PostCard({ post, busy, onAction }: { post: NewsPost; busy: boolean; onA
           </>
         )}
         {editable && dirty && (
-          <button type="button" className={button} disabled={busy} onClick={() => onAction(() => editNewsPost(post.id, { title, text }), "Правки сохранены.")}>Сохранить правки</button>
+          <button type="button" className={button} disabled={busy} onClick={() => onAction(() => editNewsPost(post.id, edits), "Правки сохранены.")}>Сохранить правки</button>
         )}
         {editable && (
           <button type="button" className="ml-auto rounded-lg bg-red-900/60 px-3 py-2 text-sm text-red-200 hover:bg-red-800 disabled:opacity-40" disabled={busy}
@@ -152,7 +167,7 @@ function Posts() {
       {notice && <p role="status" className="text-sm text-emerald-400">{notice}</p>}
       {!loading && posts.length === 0 && <p className="text-sm text-slate-400">В этом разделе постов нет.</p>}
       <div className="grid gap-4 xl:grid-cols-2">
-        {posts.map((p) => <PostCard key={p.id} post={p} busy={busy} onAction={(work, done) => void act(work, done)} />)}
+        {posts.map((p) => <PostCard key={p.id} post={p} footer={flows.find((f) => f.id === p.flow_id)?.footer ?? ""} busy={busy} onAction={(work, done) => void act(work, done)} />)}
       </div>
     </div>
   );

@@ -116,19 +116,47 @@ func (s *Service) deliver(ctx context.Context, token, chatID string, p domain.Po
 	var id int64
 	var err error
 	if plainLength(text) <= captionLimit {
-		if id, err = s.tg.SendPhoto(ctx, token, chatID, p.ImageURL, text); err == nil {
+		// Upload the bytes ourselves: Telegram never has to fetch the URL, so hotlink protection
+		// or bot blocking on the image host cannot stop the post.
+		sent := false
+		if s.checker != nil {
+			data, ct, derr := s.checker.Download(ctx, p.ImageURL)
+			if derr == nil {
+				id, err = s.tg.SendPhotoUpload(ctx, token, chatID, "image"+imageExt(ct), data, text)
+				sent = err == nil
+				if err != nil {
+					var tgErr *telegram.Error
+					if !errors.As(err, &tgErr) || tgErr.Code != 400 {
+						return 0, err // network, flood control, kicked bot: the usual retry rules apply
+					}
+					s.log.Warn("photo rejected, sending the text with a preview", "post", p.ID, "err", err)
+				}
+			} else {
+				s.log.Warn("image download failed, sending the text with a preview", "post", p.ID, "err", derr)
+			}
+		} else if id, err = s.tg.SendPhoto(ctx, token, chatID, p.ImageURL, text); err == nil {
+			sent = true
+		}
+		if sent {
 			metrics.PostImages.WithLabelValues("photo").Inc()
 			return id, nil
 		}
-		var tgErr *telegram.Error
-		if !errors.As(err, &tgErr) || tgErr.Code != 400 {
-			return 0, err // network, flood control, kicked bot: the usual retry rules apply
-		}
-		s.log.Warn("photo rejected, sending the text with a preview", "post", p.ID, "err", err)
 	}
 	id, err = s.tg.SendWithImagePreview(ctx, token, chatID, text, p.ImageURL)
 	if err == nil {
 		metrics.PostImages.WithLabelValues("preview").Inc()
 	}
 	return id, err
+}
+
+func imageExt(contentType string) string {
+	switch contentType {
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	}
+	return ".jpg"
 }
