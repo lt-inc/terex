@@ -24,6 +24,13 @@ const (
 )
 
 const (
+	ImageNone    = "none"    // text only
+	ImageArticle = "article" // the picture published with the news itself
+	ImageWeb     = "web"     // a stock photo found by topic (Pexels)
+	ImageAuto    = "auto"    // the article's picture, else a stock photo
+)
+
+const (
 	PostPending   = "pending"
 	PostApproved  = "approved"
 	PostRejected  = "rejected"
@@ -86,6 +93,10 @@ type Flow struct {
 	IncludeLink    bool       `json:"include_link"`
 	MaxChars       int        `json:"max_chars"`
 	Model          string     `json:"model"`
+	ImageMode      string     `json:"image_mode"`
+	UseEmoji       bool       `json:"use_emoji"`
+	UseHashtags    bool       `json:"use_hashtags"`
+	Footer         string     `json:"footer"`
 	SourceIDs      []int64    `json:"source_ids"`
 	LastGenerated  *time.Time `json:"last_generated_at"`
 	LastError      string     `json:"last_error"`
@@ -115,6 +126,7 @@ type Article struct {
 	SimHash     uint64    `json:"-"`
 	Embedding   []float32 `json:"-"`
 	DupOf       *int64    `json:"dup_of"`
+	ImageURL    string    `json:"image_url"`
 }
 
 type Link struct {
@@ -123,23 +135,30 @@ type Link struct {
 }
 
 type Post struct {
-	ID          int64      `json:"id"`
-	FlowID      int64      `json:"flow_id"`
-	FlowName    string     `json:"flow_name,omitempty"`
-	ClusterID   *int64     `json:"cluster_id"`
-	ChannelID   *int64     `json:"channel_id"`
-	Title       string     `json:"title"`
-	Text        string     `json:"text"`
-	Links       []Link     `json:"links"`
-	Status      string     `json:"status"`
-	ScheduledAt *time.Time `json:"scheduled_at"`
-	PublishedAt *time.Time `json:"published_at"`
-	MessageID   *int64     `json:"message_id"`
-	Error       string     `json:"error"`
-	Attempts    int        `json:"attempts"`
-	Score       float64    `json:"score"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID             int64      `json:"id"`
+	FlowID         int64      `json:"flow_id"`
+	FlowName       string     `json:"flow_name,omitempty"`
+	ClusterID      *int64     `json:"cluster_id"`
+	ChannelID      *int64     `json:"channel_id"`
+	Title          string     `json:"title"`
+	Text           string     `json:"text"`
+	Links          []Link     `json:"links"`
+	Status         string     `json:"status"`
+	ScheduledAt    *time.Time `json:"scheduled_at"`
+	PublishedAt    *time.Time `json:"published_at"`
+	MessageID      *int64     `json:"message_id"`
+	Error          string     `json:"error"`
+	Attempts       int        `json:"attempts"`
+	Score          float64    `json:"score"`
+	Emoji          string     `json:"emoji"`
+	Hashtags       string     `json:"hashtags"` // "#tag #other", rendered after the text
+	ImageURL       string     `json:"image_url"`
+	ImageSource    string     `json:"image_source"` // article | pexels | manual | ""
+	ImageCredit    string     `json:"image_credit"`
+	ImageCreditURL string     `json:"image_credit_url"`
+	ImageQuery     string     `json:"image_query"` // English stock-photo search phrase proposed by the model
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 // Cluster is one story: articles about the same event, within one flow.
@@ -159,6 +178,7 @@ type Cluster struct {
 
 type Status struct {
 	LLMReady       bool       `json:"llm_ready"`
+	PexelsReady    bool       `json:"pexels_ready"`
 	SecretKeyReady bool       `json:"secret_key_ready"`
 	Flows          int        `json:"flows"`
 	EnabledFlows   int        `json:"enabled_flows"`

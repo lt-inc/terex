@@ -13,6 +13,7 @@ import (
 	"terex/news-collector/internal/metrics"
 	"terex/news-collector/internal/repository/extract"
 	"terex/news-collector/internal/repository/feed"
+	"terex/news-collector/internal/repository/images"
 	"terex/news-collector/internal/repository/llm"
 	"terex/news-collector/internal/repository/postgres"
 	"terex/news-collector/internal/repository/telegram"
@@ -53,6 +54,8 @@ type Service struct {
 	pages            *extract.Client
 	llm              *llm.Client
 	tg               *telegram.Client
+	pexels           *images.Pexels
+	checker          *images.Checker
 	sealer           *Sealer
 	log              *slog.Logger
 	now              func() time.Time
@@ -66,6 +69,12 @@ type Service struct {
 
 func New(cfg Config, store *postgres.Store, feeds *feed.Client, pages *extract.Client, l *llm.Client, tg *telegram.Client, sealer *Sealer, log *slog.Logger) *Service {
 	return &Service{cfg: cfg, store: store, feeds: feeds, pages: pages, llm: l, tg: tg, sealer: sealer, log: log, now: time.Now}
+}
+
+// WithImages enables stock photos (Pexels) and the image URL check. Both are optional.
+func (s *Service) WithImages(p *images.Pexels, c *images.Checker) *Service {
+	s.pexels, s.checker = p, c
+	return s
 }
 
 // Run drives the pipeline until the context is cancelled.
@@ -180,6 +189,7 @@ func (s *Service) Status(ctx context.Context) (domain.Status, error) {
 		return st, err
 	}
 	st.LLMReady = s.llm.Ready()
+	st.PexelsReady = s.pexels.Ready()
 	st.SecretKeyReady = s.sealer != nil
 	s.stateMu.Lock()
 	if !s.lastTick.IsZero() {

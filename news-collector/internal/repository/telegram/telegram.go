@@ -154,6 +154,30 @@ func (c *Client) SendMessage(ctx context.Context, token, chatID, htmlText string
 	return msg.MessageID, err
 }
 
+// SendPhoto posts a picture by URL with an HTML caption (at most 1024 characters).
+func (c *Client) SendPhoto(ctx context.Context, token, chatID, photoURL, caption string) (int64, error) {
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	err := c.call(ctx, token, "sendPhoto", map[string]any{
+		"chat_id": ChatParam(chatID), "photo": photoURL, "caption": caption, "parse_mode": "HTML",
+	}, &msg)
+	return msg.MessageID, err
+}
+
+// SendWithImagePreview posts a long text message with the picture shown large above it, through
+// Telegram's link preview. It is used when the text does not fit a photo caption.
+func (c *Client) SendWithImagePreview(ctx context.Context, token, chatID, htmlText, imageURL string) (int64, error) {
+	var msg struct {
+		MessageID int64 `json:"message_id"`
+	}
+	err := c.call(ctx, token, "sendMessage", map[string]any{
+		"chat_id": ChatParam(chatID), "text": htmlText, "parse_mode": "HTML",
+		"link_preview_options": map[string]any{"url": imageURL, "show_above_text": true, "prefer_large_media": true, "is_disabled": false},
+	}, &msg)
+	return msg.MessageID, err
+}
+
 // ChatParam turns a stored chat id into the JSON value Telegram expects.
 func ChatParam(chatID string) any {
 	if n, err := strconv.ParseInt(chatID, 10, 64); err == nil {

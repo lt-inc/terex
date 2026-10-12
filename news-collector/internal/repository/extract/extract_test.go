@@ -27,3 +27,16 @@ func TestTextEmptyWhenNoArticle(t *testing.T) {
 		t.Error("a page without a body must return an empty string")
 	}
 }
+
+func TestImage(t *testing.T) {
+	page := `<html><head><meta property="og:title" content="x"><meta property="og:image" content="/img/cover.jpg"><meta name="twitter:image" content="https://other/t.jpg"></head><body></body></html>`
+	if got := Image(page, "https://news.example.com/a/b"); got != "https://news.example.com/img/cover.jpg" {
+		t.Errorf("relative og:image must be resolved: %q", got)
+	}
+	if got := Image(`<meta name="twitter:image" content="https://cdn.x/t.png">`, "https://x"); got != "https://cdn.x/t.png" {
+		t.Errorf("twitter:image fallback: %q", got)
+	}
+	if Image(`<meta property="og:image" content="javascript:alert(1)">`, "https://x") != "" || Image("<p>none</p>", "https://x") != "" {
+		t.Error("unsafe or missing images must return an empty string")
+	}
+}

@@ -102,6 +102,20 @@ CREATE TABLE IF NOT EXISTS news_collector.posts(
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS news_posts_status ON news_collector.posts(status, scheduled_at);
 CREATE INDEX IF NOT EXISTS news_posts_flow ON news_collector.posts(flow_id, created_at DESC);
+ALTER TABLE news_collector.articles ADD COLUMN IF NOT EXISTS image_url text NOT NULL DEFAULT '';
+ALTER TABLE news_collector.flows
+ ADD COLUMN IF NOT EXISTS image_mode text NOT NULL DEFAULT 'auto' CHECK (image_mode IN ('none','article','web','auto')),
+ ADD COLUMN IF NOT EXISTS use_emoji boolean NOT NULL DEFAULT true,
+ ADD COLUMN IF NOT EXISTS use_hashtags boolean NOT NULL DEFAULT true,
+ ADD COLUMN IF NOT EXISTS footer text NOT NULL DEFAULT '';
+ALTER TABLE news_collector.posts
+ ADD COLUMN IF NOT EXISTS emoji text NOT NULL DEFAULT '',
+ ADD COLUMN IF NOT EXISTS hashtags text NOT NULL DEFAULT '',
+ ADD COLUMN IF NOT EXISTS image_url text NOT NULL DEFAULT '',
+ ADD COLUMN IF NOT EXISTS image_source text NOT NULL DEFAULT '',
+ ADD COLUMN IF NOT EXISTS image_credit text NOT NULL DEFAULT '',
+ ADD COLUMN IF NOT EXISTS image_credit_url text NOT NULL DEFAULT '',
+ ADD COLUMN IF NOT EXISTS image_query text NOT NULL DEFAULT '';
 `
 
 func (s *Store) Migrate(ctx context.Context) error {
@@ -260,22 +274,22 @@ func (s *Store) MarkFetched(ctx context.Context, id int64, fetchErr string) erro
 // ---- articles ----
 
 func (s *Store) InsertArticle(ctx context.Context, a domain.Article, urlHash string) (bool, error) {
-	tag, err := s.pool.Exec(ctx, `INSERT INTO news_collector.articles(source_id,url,url_hash,title,summary,publisher,lang,published_at)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (url_hash) DO NOTHING`,
-		a.SourceID, a.URL, urlHash, a.Title, a.Summary, a.Publisher, a.Lang, a.PublishedAt)
+	tag, err := s.pool.Exec(ctx, `INSERT INTO news_collector.articles(source_id,url,url_hash,title,summary,publisher,lang,published_at,image_url)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (url_hash) DO NOTHING`,
+		a.SourceID, a.URL, urlHash, a.Title, a.Summary, a.Publisher, a.Lang, a.PublishedAt, a.ImageURL)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
 }
 
-const articleCols = `a.id, a.source_id, a.url, a.title, a.summary, a.text, a.publisher, a.lang, a.published_at, a.status, a.simhash, a.embedding, a.dup_of`
+const articleCols = `a.id, a.source_id, a.url, a.title, a.summary, a.text, a.publisher, a.lang, a.published_at, a.status, a.simhash, a.embedding, a.dup_of, a.image_url`
 
 func scanArticle(r pgx.Row) (domain.Article, error) {
 	var a domain.Article
 	var sim *int64
 	var emb []byte
-	err := r.Scan(&a.ID, &a.SourceID, &a.URL, &a.Title, &a.Summary, &a.Text, &a.Publisher, &a.Lang, &a.PublishedAt, &a.Status, &sim, &emb, &a.DupOf)
+	err := r.Scan(&a.ID, &a.SourceID, &a.URL, &a.Title, &a.Summary, &a.Text, &a.Publisher, &a.Lang, &a.PublishedAt, &a.Status, &sim, &emb, &a.DupOf, &a.ImageURL)
 	if sim != nil {
 		a.SimHash = uint64(*sim)
 	}
@@ -304,8 +318,10 @@ func (s *Store) ArticlesByStatus(ctx context.Context, status string, limit int) 
 	return s.articles(ctx, `SELECT `+articleCols+` FROM news_collector.articles a WHERE a.status=$1 ORDER BY a.id LIMIT $2`, status, limit)
 }
 
-func (s *Store) SetExtracted(ctx context.Context, id int64, text, lang string, sim uint64) error {
-	_, err := s.pool.Exec(ctx, `UPDATE news_collector.articles SET text=$2, lang=$3, simhash=$4, status='extracted' WHERE id=$1`, id, text, lang, int64(sim))
+// SetExtracted stores the page text; a picture found on the page fills in only when the feed had none.
+func (s *Store) SetExtracted(ctx context.Context, id int64, text, lang string, sim uint64, image string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE news_collector.articles SET text=$2, lang=$3, simhash=$4, status='extracted',
+ image_url = COALESCE(NULLIF(image_url, ''), $5) WHERE id=$1`, id, text, lang, int64(sim), image)
 	return err
 }
 
@@ -388,7 +404,7 @@ func (s *Store) RecentArticles(ctx context.Context, flowID int64, limit int) ([]
 		var a domain.Article
 		var sim *int64
 		var emb []byte
-		if err = rows.Scan(&a.ID, &a.SourceID, &a.URL, &a.Title, &a.Summary, &a.Text, &a.Publisher, &a.Lang, &a.PublishedAt, &a.Status, &sim, &emb, &a.DupOf, &a.SourceName); err != nil {
+		if err = rows.Scan(&a.ID, &a.SourceID, &a.URL, &a.Title, &a.Summary, &a.Text, &a.Publisher, &a.Lang, &a.PublishedAt, &a.Status, &sim, &emb, &a.DupOf, &a.ImageURL, &a.SourceName); err != nil {
 			return nil, err
 		}
 		a.Text = ""
@@ -480,7 +496,7 @@ func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
 // ---- flows ----
 
 const flowCols = `f.id, f.name, f.enabled, f.topic, f.language, f.channel_id, f.approve_mode, f.posts_per_day, f.window_start_hour, f.window_end_hour,
- f.timezone, f.min_interval_min, f.min_sources, f.min_relevance, f.window_hours, f.max_pending, f.style_prompt, f.include_link, f.max_chars, f.model,
+ f.timezone, f.min_interval_min, f.min_sources, f.min_relevance, f.window_hours, f.max_pending, f.style_prompt, f.include_link, f.max_chars, f.model, f.image_mode, f.use_emoji, f.use_hashtags, f.footer,
  COALESCE((SELECT array_agg(fs.source_id ORDER BY fs.source_id) FROM news_collector.flow_sources fs WHERE fs.flow_id=f.id), '{}'),
  f.last_generated_at, f.last_error, f.created_at, f.updated_at, f.topic_embedding,
  COALESCE(c.title,''),
@@ -494,7 +510,7 @@ func scanFlow(r pgx.Row) (domain.Flow, error) {
 	var f domain.Flow
 	var emb []byte
 	err := r.Scan(&f.ID, &f.Name, &f.Enabled, &f.Topic, &f.Language, &f.ChannelID, &f.ApproveMode, &f.PostsPerDay, &f.WindowStart, &f.WindowEnd,
-		&f.Timezone, &f.MinIntervalMin, &f.MinSources, &f.MinRelevance, &f.WindowHours, &f.MaxPending, &f.StylePrompt, &f.IncludeLink, &f.MaxChars, &f.Model,
+		&f.Timezone, &f.MinIntervalMin, &f.MinSources, &f.MinRelevance, &f.WindowHours, &f.MaxPending, &f.StylePrompt, &f.IncludeLink, &f.MaxChars, &f.Model, &f.ImageMode, &f.UseEmoji, &f.UseHashtags, &f.Footer,
 		&f.SourceIDs, &f.LastGenerated, &f.LastError, &f.CreatedAt, &f.UpdatedAt, &emb, &f.ChannelTitle, &f.Pending, &f.PostedToday, &f.OpenClusters)
 	f.TopicEmbedding = DecodeVec(emb)
 	if f.SourceIDs == nil {
@@ -533,18 +549,26 @@ func (s *Store) SaveFlow(ctx context.Context, f domain.Flow) (domain.Flow, error
 	defer tx.Rollback(ctx)
 	if f.ID == 0 {
 		err = tx.QueryRow(ctx, `INSERT INTO news_collector.flows(name,enabled,topic,language,channel_id,approve_mode,posts_per_day,window_start_hour,window_end_hour,timezone,
- min_interval_min,min_sources,min_relevance,window_hours,max_pending,style_prompt,include_link,max_chars,model)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+ min_interval_min,min_sources,min_relevance,window_hours,max_pending,style_prompt,include_link,max_chars,model,image_mode,use_emoji,use_hashtags,footer)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`,
 			f.Name, f.Enabled, f.Topic, f.Language, f.ChannelID, f.ApproveMode, f.PostsPerDay, f.WindowStart, f.WindowEnd, f.Timezone,
-			f.MinIntervalMin, f.MinSources, f.MinRelevance, f.WindowHours, f.MaxPending, f.StylePrompt, f.IncludeLink, f.MaxChars, f.Model).Scan(&f.ID)
+			f.MinIntervalMin, f.MinSources, f.MinRelevance, f.WindowHours, f.MaxPending, f.StylePrompt, f.IncludeLink, f.MaxChars, f.Model,
+			f.ImageMode, f.UseEmoji, f.UseHashtags, f.Footer).Scan(&f.ID)
 	} else {
+		// Articles rejected as off-topic were judged against the old topic and threshold. Forget those
+		// verdicts when either changes, so the next pass evaluates them again instead of ignoring them forever.
+		if _, err = tx.Exec(ctx, `DELETE FROM news_collector.flow_articles fa USING news_collector.flows f
+ WHERE f.id=$1 AND fa.flow_id=f.id AND fa.cluster_id IS NULL AND (f.topic <> $2 OR f.min_relevance <> $3::real)`, f.ID, f.Topic, f.MinRelevance); err != nil {
+			return f, err
+		}
 		var tag pgconn.CommandTag
 		tag, err = tx.Exec(ctx, `UPDATE news_collector.flows SET name=$2,enabled=$3,topic=$4,language=$5,channel_id=$6,approve_mode=$7,posts_per_day=$8,window_start_hour=$9,
  window_end_hour=$10,timezone=$11,min_interval_min=$12,min_sources=$13,min_relevance=$14,window_hours=$15,max_pending=$16,style_prompt=$17,include_link=$18,
- max_chars=$19,model=$20, updated_at=now(),
+ max_chars=$19,model=$20,image_mode=$21,use_emoji=$22,use_hashtags=$23,footer=$24, updated_at=now(),
  topic_embedding = CASE WHEN topic <> $4 THEN NULL ELSE topic_embedding END WHERE id=$1`,
 			f.ID, f.Name, f.Enabled, f.Topic, f.Language, f.ChannelID, f.ApproveMode, f.PostsPerDay, f.WindowStart, f.WindowEnd, f.Timezone,
-			f.MinIntervalMin, f.MinSources, f.MinRelevance, f.WindowHours, f.MaxPending, f.StylePrompt, f.IncludeLink, f.MaxChars, f.Model)
+			f.MinIntervalMin, f.MinSources, f.MinRelevance, f.WindowHours, f.MaxPending, f.StylePrompt, f.IncludeLink, f.MaxChars, f.Model,
+			f.ImageMode, f.UseEmoji, f.UseHashtags, f.Footer)
 		if err == nil && tag.RowsAffected() == 0 {
 			return f, domain.ErrNotFound
 		}
@@ -698,7 +722,7 @@ func (s *Store) ClusterArticles(ctx context.Context, clusterID int64, limit int)
 		var a domain.Article
 		var sim *int64
 		var emb []byte
-		if err = rows.Scan(&a.ID, &a.SourceID, &a.URL, &a.Title, &a.Summary, &a.Text, &a.Publisher, &a.Lang, &a.PublishedAt, &a.Status, &sim, &emb, &a.DupOf, &a.SourceName); err != nil {
+		if err = rows.Scan(&a.ID, &a.SourceID, &a.URL, &a.Title, &a.Summary, &a.Text, &a.Publisher, &a.Lang, &a.PublishedAt, &a.Status, &sim, &emb, &a.DupOf, &a.ImageURL, &a.SourceName); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -708,12 +732,12 @@ func (s *Store) ClusterArticles(ctx context.Context, clusterID int64, limit int)
 
 // ---- posts ----
 
-const postCols = `p.id, p.flow_id, f.name, p.cluster_id, f.channel_id, p.title, p.text, p.links, p.status, p.scheduled_at, p.published_at, p.message_id, p.error, p.attempts, p.score, p.created_at, p.updated_at`
+const postCols = `p.id, p.flow_id, f.name, p.cluster_id, f.channel_id, p.title, p.text, p.links, p.status, p.scheduled_at, p.published_at, p.message_id, p.error, p.attempts, p.score, p.emoji, p.hashtags, p.image_url, p.image_source, p.image_credit, p.image_credit_url, p.image_query, p.created_at, p.updated_at`
 const postFrom = ` FROM news_collector.posts p JOIN news_collector.flows f ON f.id=p.flow_id`
 
 func scanPost(r pgx.Row) (domain.Post, error) {
 	var p domain.Post
-	err := r.Scan(&p.ID, &p.FlowID, &p.FlowName, &p.ClusterID, &p.ChannelID, &p.Title, &p.Text, &p.Links, &p.Status, &p.ScheduledAt, &p.PublishedAt, &p.MessageID, &p.Error, &p.Attempts, &p.Score, &p.CreatedAt, &p.UpdatedAt)
+	err := r.Scan(&p.ID, &p.FlowID, &p.FlowName, &p.ClusterID, &p.ChannelID, &p.Title, &p.Text, &p.Links, &p.Status, &p.ScheduledAt, &p.PublishedAt, &p.MessageID, &p.Error, &p.Attempts, &p.Score, &p.Emoji, &p.Hashtags, &p.ImageURL, &p.ImageSource, &p.ImageCredit, &p.ImageCreditURL, &p.ImageQuery, &p.CreatedAt, &p.UpdatedAt)
 	if p.Links == nil {
 		p.Links = []domain.Link{}
 	}
@@ -762,16 +786,22 @@ func (s *Store) ListPosts(ctx context.Context, flowID int64, status string, limi
 
 func (s *Store) CreatePost(ctx context.Context, p domain.Post) (int64, error) {
 	var id int64
-	err := s.pool.QueryRow(ctx, `INSERT INTO news_collector.posts(flow_id,cluster_id,title,text,links,status,scheduled_at,score) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-		p.FlowID, p.ClusterID, p.Title, p.Text, p.Links, p.Status, p.ScheduledAt, p.Score).Scan(&id)
+	err := s.pool.QueryRow(ctx, `INSERT INTO news_collector.posts(flow_id,cluster_id,title,text,links,status,scheduled_at,score,emoji,hashtags,image_url,image_source,image_credit,image_credit_url,image_query)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+		p.FlowID, p.ClusterID, p.Title, p.Text, p.Links, p.Status, p.ScheduledAt, p.Score, p.Emoji, p.Hashtags, p.ImageURL, p.ImageSource, p.ImageCredit, p.ImageCreditURL, p.ImageQuery).Scan(&id)
 	return id, err
 }
 
-// EditPost changes the content of a post that has not been published yet.
-func (s *Store) EditPost(ctx context.Context, id int64, title, text string, scheduled *time.Time, setSchedule bool) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE news_collector.posts SET title=$2, text=$3,
- scheduled_at = CASE WHEN $5 THEN $4 ELSE scheduled_at END, updated_at=now()
- WHERE id=$1 AND status IN ('pending','approved','failed')`, id, title, text, scheduled, setSchedule)
+// EditPost changes the content of a post that has not been published yet. The picture and the
+// schedule are replaced only when the matching flag is set.
+func (s *Store) EditPost(ctx context.Context, id int64, p domain.Post, setSchedule, setImage bool) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE news_collector.posts SET title=$2, text=$3, emoji=$4, hashtags=$5,
+ scheduled_at = CASE WHEN $7 THEN $6 ELSE scheduled_at END,
+ image_url = CASE WHEN $8 THEN $9 ELSE image_url END, image_source = CASE WHEN $8 THEN $10 ELSE image_source END,
+ image_credit = CASE WHEN $8 THEN $11 ELSE image_credit END, image_credit_url = CASE WHEN $8 THEN $12 ELSE image_credit_url END,
+ updated_at=now()
+ WHERE id=$1 AND status IN ('pending','approved','failed')`, id, p.Title, p.Text, p.Emoji, p.Hashtags, p.ScheduledAt, setSchedule,
+		setImage, p.ImageURL, p.ImageSource, p.ImageCredit, p.ImageCreditURL)
 	if err != nil {
 		return err
 	}

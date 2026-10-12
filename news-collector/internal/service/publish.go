@@ -4,41 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
-	"strings"
 	"time"
 
 	"terex/news-collector/internal/domain"
 	"terex/news-collector/internal/metrics"
 	"terex/news-collector/internal/repository/telegram"
 )
-
-const telegramLimit = 4096
-
-// RenderHTML builds the Telegram message: bold headline, text, and source links.
-func RenderHTML(p domain.Post, lang string) string {
-	var b strings.Builder
-	if p.Title != "" {
-		b.WriteString("<b>" + html.EscapeString(p.Title) + "</b>\n\n")
-	}
-	tail := ""
-	if len(p.Links) > 0 {
-		label := "Источники: "
-		if lang == "en" {
-			label = "Sources: "
-		}
-		parts := make([]string, 0, len(p.Links))
-		for _, l := range p.Links {
-			parts = append(parts, `<a href="`+html.EscapeString(l.URL)+`">`+html.EscapeString(l.Title)+`</a>`)
-		}
-		tail = "\n\n" + label + strings.Join(parts, " · ")
-	}
-	// Telegram counts characters of the rendered text, not markup; stay well under the limit.
-	room := telegramLimit - len([]rune(p.Title)) - len([]rune(tail)) - 200
-	b.WriteString(html.EscapeString(trimToLimit(p.Text, max(room, 200))))
-	b.WriteString(tail)
-	return b.String()
-}
 
 // publishDue sends approved posts whose time has come.
 func (s *Service) publishDue(ctx context.Context) error {
@@ -91,7 +62,7 @@ func (s *Service) send(ctx context.Context, p domain.Post) {
 		fail(err.Error(), nil)
 		return
 	}
-	id, err := s.tg.SendMessage(ctx, token, ch.ChatID, RenderHTML(p, flow.Language), false)
+	id, err := s.deliver(ctx, token, ch.ChatID, p, flow)
 	if err == nil {
 		if err = s.store.MarkPublished(ctx, p.ID, id); err != nil {
 			s.log.Error("published post could not be marked", "post", p.ID, "message", id, "err", err)
@@ -129,4 +100,35 @@ func (s *Service) channelToken(ch domain.Channel) (string, error) {
 		return "", fmt.Errorf("%w: the channel has no bot token", domain.ErrInvalid)
 	}
 	return s.sealer.Open(ch.TokenEnc)
+}
+
+// deliver sends the post: a photo with the text as caption when it fits (1024 characters), otherwise
+// the text with the picture shown above it. A picture Telegram cannot fetch never blocks the post.
+func (s *Service) deliver(ctx context.Context, token, chatID string, p domain.Post, flow domain.Flow) (int64, error) {
+	text := RenderHTML(p, RenderOptions{Lang: flow.Language, Footer: flow.Footer})
+	if p.ImageURL == "" {
+		id, err := s.tg.SendMessage(ctx, token, chatID, text, false)
+		if err == nil {
+			metrics.PostImages.WithLabelValues("none").Inc()
+		}
+		return id, err
+	}
+	var id int64
+	var err error
+	if plainLength(text) <= captionLimit {
+		if id, err = s.tg.SendPhoto(ctx, token, chatID, p.ImageURL, text); err == nil {
+			metrics.PostImages.WithLabelValues("photo").Inc()
+			return id, nil
+		}
+		var tgErr *telegram.Error
+		if !errors.As(err, &tgErr) || tgErr.Code != 400 {
+			return 0, err // network, flood control, kicked bot: the usual retry rules apply
+		}
+		s.log.Warn("photo rejected, sending the text with a preview", "post", p.ID, "err", err)
+	}
+	id, err = s.tg.SendWithImagePreview(ctx, token, chatID, text, p.ImageURL)
+	if err == nil {
+		metrics.PostImages.WithLabelValues("preview").Inc()
+	}
+	return id, err
 }

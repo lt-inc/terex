@@ -287,6 +287,32 @@ func TestPipelineEndToEnd(t *testing.T) {
 		t.Error("a published post cannot be approved again")
 	}
 
+	// the off-topic football article was judged under the old settings; changing the topic or the
+	// threshold must make the flow look at it again, while an unrelated edit must not
+	since := time.Now().Add(-72 * time.Hour)
+	if left, _ := store.UnassignedArticles(ctx, flow.ID, since, 100); len(left) != 0 {
+		t.Fatalf("every article has a verdict before the edit: %d", len(left))
+	}
+	cur, _ := svc.GetFlow(ctx, flow.ID)
+	cur.StylePrompt = "коротко"
+	if _, err = svc.SaveFlow(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := store.UnassignedArticles(ctx, flow.ID, since, 100); len(left) != 0 {
+		t.Fatalf("an unrelated edit must keep the verdicts: %d", len(left))
+	}
+	cur.MinRelevance = 0.3
+	if _, err = svc.SaveFlow(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := store.UnassignedArticles(ctx, flow.ID, since, 100); len(left) != 1 {
+		t.Fatalf("a new threshold must re-open the rejected article, got %d", len(left))
+	}
+	cur.Topic = "football"
+	if _, err = svc.SaveFlow(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+
 	// metrics: event counters moved, and the scrape-time gauges reflect the database
 	fl := flowLabel(flow.ID)
 	for name, got := range map[string]float64{

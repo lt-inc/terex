@@ -56,7 +56,7 @@ func (s *Service) fetchSource(ctx context.Context, src domain.Source) (int, erro
 		}
 		ok, err := s.store.InsertArticle(ctx, domain.Article{
 			SourceID: src.ID, URL: link, Title: it.Title, Summary: truncateRunes(summary, 4000),
-			Publisher: publisher, Lang: src.Lang, PublishedAt: published,
+			Publisher: publisher, Lang: src.Lang, PublishedAt: published, ImageURL: it.Image,
 		}, urlHash(link))
 		if err != nil {
 			_ = s.store.MarkFetched(ctx, src.ID, "storing articles failed")
@@ -77,6 +77,7 @@ func (s *Service) fetchSource(ctx context.Context, src domain.Source) (int, erro
 type extracted struct {
 	article domain.Article
 	text    string
+	image   string
 }
 
 // processNew pulls the article page, picks the best text, and drops near-identical copies.
@@ -109,8 +110,8 @@ func (s *Service) processNew(ctx context.Context) error {
 				metrics.PageFetches.WithLabelValues("skipped").Inc()
 			} else {
 				pctx, cancel := contextWithTimeout(ctx, 20)
-				var err error
-				text, err = s.pages.Fetch(pctx, a.URL)
+				page, err := s.pages.Fetch(pctx, a.URL)
+				text, results[i].image = page.Text, page.Image
 				cancel()
 				switch {
 				case err != nil:
@@ -148,7 +149,7 @@ func (s *Service) processNew(ctx context.Context) error {
 				continue
 			}
 		}
-		if err = s.store.SetExtracted(ctx, a.ID, text, lang, sim); err != nil {
+		if err = s.store.SetExtracted(ctx, a.ID, text, lang, sim, r.image); err != nil {
 			return err
 		}
 		metrics.ArticlesProcessed.WithLabelValues("extracted").Inc()

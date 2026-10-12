@@ -67,7 +67,7 @@ RSS / Google News → извлечение текста → дедуп → эм�
 | `news_oldest_pending_post_age_seconds`, `news_oldest_unembedded_article_age_seconds`, `news_last_post_published_timestamp_seconds{flow}` | возраст очередей и время последней публикации |
 | `news_db_up`, `news_llm_ready`, `news_secret_key_ready` | готовность |
 
-**Логи.** Формат logfmt (`LOG_FORMAT=text`), в Loki лейбл `service="news-collector"` (promtail переименовывает `app=terex-news-collector`, как у twitch-collector) и `level`. Ключевые сообщения: `feed fetched` / `feed fetch failed` (`source`, `new_articles`), `post drafted` (`flow`, `post`, `cluster`, `status`), `post published`, `post not published` (`reason`, `retry`), `model skipped a story`, `pipeline pass failed`, `embedding failed`, `clustering failed`, `generation failed`. Логи с `trace_id` ведут в Tempo, если включён `OTEL_EXPORTER_OTLP_ENDPOINT`.
+**Логи.** Формат logfmt (`LOG_FORMAT=text`), в Loki лейблы `namespace="admin"`, `app="terex-news-collector"` и `level`. Staging-дашборд выбирает логи по `app`, потому что promtail читает ConfigMap только при старте; после его перезапуска появится ещё и `service="news-collector"` (как у twitch-collector). Локально лейбл `service="news-collector"` есть сразу. Ключевые сообщения: `feed fetched` / `feed fetch failed` (`source`, `new_articles`), `post drafted` (`flow`, `post`, `cluster`, `status`), `post published`, `post not published` (`reason`, `retry`), `model skipped a story`, `pipeline pass failed`, `embedding failed`, `clustering failed`, `generation failed`. Логи с `trace_id` ведут в Tempo, если включён `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 ## Ограничения
 

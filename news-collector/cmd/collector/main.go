@@ -13,6 +13,7 @@ import (
 
 	"terex/news-collector/internal/repository/extract"
 	"terex/news-collector/internal/repository/feed"
+	"terex/news-collector/internal/repository/images"
 	"terex/news-collector/internal/repository/llm"
 	"terex/news-collector/internal/repository/postgres"
 	"terex/news-collector/internal/repository/safehttp"
@@ -93,7 +94,8 @@ func main() {
 		&extract.Client{HTTP: web},
 		llm.New(os.Getenv("OPENROUTER_API_KEY"), env("OPENROUTER_MODEL", "deepseek/deepseek-v4.1-flash"), env("NEWS_EMBEDDING_MODEL", "openai/text-embedding-3-small")),
 		telegram.New(os.Getenv("TELEGRAM_API_BASE")),
-		sealer, log)
+		sealer, log).
+		WithImages(images.NewPexels(os.Getenv("PEXELS_API_KEY"), os.Getenv("PEXELS_API_BASE")), &images.Checker{HTTP: web})
 	prometheus.MustRegister(svc.MetricsCollector())
 	go svc.Run(ctx)
 
@@ -109,7 +111,7 @@ func main() {
 		defer done()
 		_ = server.Shutdown(stop)
 	}()
-	log.Info("news collector started", "http", server.Addr, "llm_ready", os.Getenv("OPENROUTER_API_KEY") != "", "secret_key_ready", sealer != nil, "tick", cfg.TickInterval.String())
+	log.Info("news collector started", "http", server.Addr, "llm_ready", os.Getenv("OPENROUTER_API_KEY") != "", "pexels_ready", os.Getenv("PEXELS_API_KEY") != "", "secret_key_ready", sealer != nil, "tick", cfg.TickInterval.String())
 	if err = server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fatal(log, "http server failed")
 	}

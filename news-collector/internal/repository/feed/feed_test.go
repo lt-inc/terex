@@ -54,3 +54,29 @@ func TestGNewsURL(t *testing.T) {
 		t.Error("English edition expected")
 	}
 }
+
+func TestParseImages(t *testing.T) {
+	data := `<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>T</title>
+<item><title>Enclosure</title><link>https://e.com/1</link><enclosure url="https://img.e.com/1.jpg" type="image/jpeg" length="1"/></item>
+<item><title>Media</title><link>https://e.com/2</link><media:content url="https://img.e.com/2.png" medium="image"/></item>
+<item><title>Thumb</title><link>https://e.com/3</link><media:thumbnail url="https://img.e.com/3.jpg"/></item>
+<item><title>Body</title><link>https://e.com/4</link><description>&lt;p&gt;&lt;img src="https://img.e.com/4.jpg?w=1&amp;amp;h=2" alt=""&gt; text&lt;/p&gt;</description></item>
+<item><title>Audio</title><link>https://e.com/5</link><enclosure url="https://cdn.e.com/5.mp3" type="audio/mpeg"/></item>
+<item><title>Relative</title><link>https://e.com/6</link><description>&lt;img src="/local.jpg"&gt;</description></item>
+</channel></rss>`
+	f, err := Parse([]byte(data))
+	if err != nil || len(f.Items) != 6 {
+		t.Fatalf("%v %d", err, len(f.Items))
+	}
+	want := []string{"https://img.e.com/1.jpg", "https://img.e.com/2.png", "https://img.e.com/3.jpg", "https://img.e.com/4.jpg?w=1&h=2", "", ""}
+	for i, w := range want {
+		if f.Items[i].Image != w {
+			t.Errorf("item %d image = %q, want %q", i, f.Items[i].Image, w)
+		}
+	}
+	atom := `<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>A</title><link rel="alternate" href="https://e.com/a"/><link rel="enclosure" type="image/webp" href="https://img.e.com/a.webp"/></entry></feed>`
+	af, _ := Parse([]byte(atom))
+	if len(af.Items) != 1 || af.Items[0].Image != "https://img.e.com/a.webp" {
+		t.Fatalf("atom enclosure: %+v", af.Items)
+	}
+}

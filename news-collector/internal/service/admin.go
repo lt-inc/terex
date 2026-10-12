@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"terex/news-collector/internal/domain"
+	"terex/news-collector/internal/repository/images"
 	"terex/news-collector/internal/repository/telegram"
 )
 
@@ -290,6 +291,9 @@ func ApplyFlowDefaults(f *domain.Flow) {
 	if f.MaxChars == 0 {
 		f.MaxChars = 900
 	}
+	if f.ImageMode == "" {
+		f.ImageMode = domain.ImageAuto
+	}
 }
 
 func validateFlow(f *domain.Flow) error {
@@ -297,6 +301,7 @@ func validateFlow(f *domain.Flow) error {
 	f.Topic = strings.TrimSpace(f.Topic)
 	f.StylePrompt = strings.TrimSpace(f.StylePrompt)
 	f.Model = strings.TrimSpace(f.Model)
+	f.Footer = strings.TrimSpace(f.Footer)
 	ApplyFlowDefaults(f)
 	switch {
 	case f.Name == "" || len([]rune(f.Name)) > 120:
@@ -327,6 +332,10 @@ func validateFlow(f *domain.Flow) error {
 		return invalid("post length must be 200-3500 characters")
 	case len(f.Model) > 100 || strings.ContainsAny(f.Model, " \t\r\n"):
 		return invalid("model id is invalid")
+	case f.ImageMode != domain.ImageNone && f.ImageMode != domain.ImageArticle && f.ImageMode != domain.ImageWeb && f.ImageMode != domain.ImageAuto:
+		return invalid("image mode must be none, article, web or auto")
+	case len([]rune(f.Footer)) > 300:
+		return invalid("footer is too long (300 characters max)")
 	}
 	if _, err := time.LoadLocation(f.Timezone); err != nil {
 		return invalid("unknown timezone %q", f.Timezone)
@@ -395,9 +404,20 @@ func (s *Service) GetPost(ctx context.Context, id int64) (domain.Post, error) {
 	return s.store.Post(ctx, id)
 }
 
+// ImageEdit replaces the post's picture; an empty URL removes it.
+type ImageEdit struct {
+	URL       string `json:"url"`
+	Source    string `json:"source"`
+	Credit    string `json:"credit"`
+	CreditURL string `json:"credit_url"`
+}
+
 type PostEdit struct {
 	Title         *string    `json:"title"`
 	Text          *string    `json:"text"`
+	Emoji         *string    `json:"emoji"`
+	Hashtags      *string    `json:"hashtags"`
+	Image         *ImageEdit `json:"image"`
 	ScheduledAt   *time.Time `json:"scheduled_at"`
 	ClearSchedule bool       `json:"clear_schedule"`
 }
@@ -407,20 +427,112 @@ func (s *Service) EditPost(ctx context.Context, id int64, e PostEdit) (domain.Po
 	if err != nil {
 		return p, err
 	}
-	title, text := p.Title, p.Text
+	next := p
 	if e.Title != nil {
-		title = strings.TrimSpace(*e.Title)
+		next.Title = strings.TrimSpace(*e.Title)
 	}
 	if e.Text != nil {
-		text = strings.TrimSpace(*e.Text)
+		next.Text = strings.TrimSpace(*e.Text)
 	}
-	if text == "" || len([]rune(text)) > 3800 || len([]rune(title)) > 200 {
+	if e.Emoji != nil {
+		next.Emoji = cleanEmoji(*e.Emoji)
+	}
+	if e.Hashtags != nil {
+		next.Hashtags = cleanHashtags(strings.Fields(*e.Hashtags))
+	}
+	if next.Text == "" || len([]rune(next.Text)) > 3800 || len([]rune(next.Title)) > 200 {
 		return p, invalid("text is required (up to 3800 characters), title up to 200")
 	}
-	if err = s.store.EditPost(ctx, id, title, text, e.ScheduledAt, e.ScheduledAt != nil || e.ClearSchedule); err != nil {
+	next.ScheduledAt = e.ScheduledAt
+	setImage := e.Image != nil
+	if setImage {
+		img, err := s.validateImageEdit(ctx, *e.Image)
+		if err != nil {
+			return p, err
+		}
+		next.ImageURL, next.ImageSource, next.ImageCredit, next.ImageCreditURL = img.URL, img.Source, img.Credit, img.CreditURL
+	}
+	if err = s.store.EditPost(ctx, id, next, e.ScheduledAt != nil || e.ClearSchedule, setImage); err != nil {
 		return p, err
 	}
 	return s.store.Post(ctx, id)
+}
+
+// validateImageEdit accepts a picture only if it really is a fetchable image. The Pexels credit
+// is trusted only for Pexels' own CDN, so a hand-pasted URL cannot claim a photographer.
+func (s *Service) validateImageEdit(ctx context.Context, in ImageEdit) (pickedImage, error) {
+	in.URL = strings.TrimSpace(in.URL)
+	if in.URL == "" {
+		return pickedImage{}, nil // remove the picture
+	}
+	if err := s.checkImage(ctx, in.URL); err != nil {
+		return pickedImage{}, invalid("%s", err)
+	}
+	u, err := url.Parse(in.URL)
+	if err != nil {
+		return pickedImage{}, invalid("not a valid image URL")
+	}
+	out := pickedImage{URL: in.URL, Source: "manual"}
+	switch {
+	case strings.HasSuffix(u.Host, ".pexels.com") && in.Source == "pexels":
+		out.Source = "pexels"
+		out.Credit = truncateRunes(strings.TrimSpace(in.Credit), 80)
+		if cu, err := url.Parse(in.CreditURL); err == nil && (cu.Host == "www.pexels.com" || cu.Host == "pexels.com") {
+			out.CreditURL = in.CreditURL
+		}
+	case in.Source == "article":
+		out.Source = "article"
+	}
+	return out, nil
+}
+
+// PostImages lists picture candidates for the editor: images of the story's own articles first,
+// then stock photos for the query (default: the one the model proposed, else the headline).
+func (s *Service) PostImages(ctx context.Context, id int64, query string) ([]images.Photo, error) {
+	p, err := s.store.Post(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := []images.Photo{}
+	if p.ClusterID != nil {
+		arts, err := s.store.ClusterArticles(ctx, *p.ClusterID, 8)
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]bool{}
+		for _, a := range arts {
+			if a.ImageURL == "" || seen[a.ImageURL] {
+				continue
+			}
+			seen[a.ImageURL] = true
+			name := a.Publisher
+			if name == "" {
+				name = a.SourceName
+			}
+			out = append(out, images.Photo{URL: a.ImageURL, Thumb: a.ImageURL, Source: "article", Credit: name, Description: a.Title})
+		}
+	}
+	if s.pexels.Ready() {
+		query = strings.TrimSpace(query)
+		if query == "" {
+			query = p.ImageQuery
+		}
+		if query == "" {
+			query = p.Title
+		}
+		f, err := s.store.Flow(ctx, p.FlowID)
+		if err != nil {
+			return nil, err
+		}
+		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		photos, err := s.pexels.Search(pctx, query, f.Language, 9)
+		if err != nil {
+			return out, nil // article pictures are still useful when Pexels is down
+		}
+		out = append(out, photos...)
+	}
+	return out, nil
 }
 
 // Approve queues a draft; without a time it goes out immediately.

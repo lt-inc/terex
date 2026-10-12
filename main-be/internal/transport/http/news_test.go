@@ -31,7 +31,7 @@ func TestNewsProxyRoutes(t *testing.T) {
 	defer remote.Close()
 	p := &NewsProxy{URL: remote.URL, Token: "t"}
 	for _, ok := range []string{"status", "articles", "sources", "sources/test", "sources/12", "sources/12/fetch", "channels", "channels/3/verify", "channels/3/test",
-		"flows", "flows/9", "flows/9/generate", "flows/9/stories", "posts", "posts/5", "posts/5/approve", "posts/5/reject", "posts/5/preview"} {
+		"flows", "flows/9", "flows/9/generate", "flows/9/stories", "posts", "posts/5", "posts/5/approve", "posts/5/reject", "posts/5/preview", "posts/5/images"} {
 		w := httptest.NewRecorder()
 		p.ServeHTTP(w, httptest.NewRequest("GET", "/api/news/"+ok, nil))
 		if w.Code != 200 {

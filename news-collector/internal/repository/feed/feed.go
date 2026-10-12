@@ -19,6 +19,7 @@ type Item struct {
 	Link      string
 	Summary   string // plain text taken from the feed (description / content)
 	Publisher string // outlet name when the feed carries one (Google News <source>)
+	Image     string // picture URL from enclosure / media:* / the first <img> in the body
 	Published time.Time
 }
 
@@ -85,14 +86,17 @@ type rssDoc struct {
 	Channel struct {
 		Title string `xml:"title"`
 		Items []struct {
-			Title       string `xml:"title"`
-			Link        string `xml:"link"`
-			GUID        string `xml:"guid"`
-			Description string `xml:"description"`
-			Encoded     string `xml:"http://purl.org/rss/1.0/modules/content/ encoded"`
-			PubDate     string `xml:"pubDate"`
-			Source      string `xml:"source"`
-			DCDate      string `xml:"http://purl.org/dc/elements/1.1/ date"`
+			Title       string     `xml:"title"`
+			Link        string     `xml:"link"`
+			GUID        string     `xml:"guid"`
+			Description string     `xml:"description"`
+			Encoded     string     `xml:"http://purl.org/rss/1.0/modules/content/ encoded"`
+			PubDate     string     `xml:"pubDate"`
+			Source      string     `xml:"source"`
+			Enclosures  []mediaRef `xml:"enclosure"`
+			Media       []mediaRef `xml:"http://search.yahoo.com/mrss/ content"`
+			Thumbs      []mediaRef `xml:"http://search.yahoo.com/mrss/ thumbnail"`
+			DCDate      string     `xml:"http://purl.org/dc/elements/1.1/ date"`
 		} `xml:"item"`
 	} `xml:"channel"`
 }
@@ -104,11 +108,14 @@ type atomDoc struct {
 		Links []struct {
 			Href string `xml:"href,attr"`
 			Rel  string `xml:"rel,attr"`
+			Type string `xml:"type,attr"`
 		} `xml:"link"`
-		Summary   string `xml:"summary"`
-		Content   string `xml:"content"`
-		Published string `xml:"published"`
-		Updated   string `xml:"updated"`
+		Summary   string     `xml:"summary"`
+		Content   string     `xml:"content"`
+		Media     []mediaRef `xml:"http://search.yahoo.com/mrss/ content"`
+		Thumbs    []mediaRef `xml:"http://search.yahoo.com/mrss/ thumbnail"`
+		Published string     `xml:"published"`
+		Updated   string     `xml:"updated"`
 	} `xml:"entry"`
 }
 
@@ -149,7 +156,11 @@ func Parse(data []byte) (*Feed, error) {
 			if publisher != "" { // Google News appends " - Outlet" to every title
 				title = strings.TrimSuffix(title, " - "+publisher)
 			}
-			out.Items = append(out.Items, Item{Title: title, Link: link, Summary: clean(body), Published: parseTime(date), Publisher: publisher})
+			image := pickImage(append(append(it.Enclosures, it.Media...), it.Thumbs...))
+			if image == "" {
+				image = firstImgSrc(it.Encoded + " " + it.Description)
+			}
+			out.Items = append(out.Items, Item{Title: title, Link: link, Summary: clean(body), Published: parseTime(date), Publisher: publisher, Image: image})
 		}
 	case "feed":
 		var doc atomDoc
@@ -176,7 +187,17 @@ func Parse(data []byte) (*Feed, error) {
 			if date == "" {
 				date = e.Updated
 			}
-			out.Items = append(out.Items, Item{Title: clean(e.Title), Link: strings.TrimSpace(link), Summary: clean(body), Published: parseTime(date)})
+			refs := append(append([]mediaRef{}, e.Media...), e.Thumbs...)
+			for _, l := range e.Links {
+				if l.Rel == "enclosure" {
+					refs = append(refs, mediaRef{URL: l.Href, Type: l.Type})
+				}
+			}
+			image := pickImage(refs)
+			if image == "" {
+				image = firstImgSrc(e.Content + " " + e.Summary)
+			}
+			out.Items = append(out.Items, Item{Title: clean(e.Title), Link: strings.TrimSpace(link), Summary: clean(body), Published: parseTime(date), Image: image})
 		}
 	default:
 		return nil, fmt.Errorf("not an RSS or Atom feed")
@@ -214,4 +235,38 @@ func parseTime(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+type mediaRef struct {
+	URL    string `xml:"url,attr"`
+	Type   string `xml:"type,attr"`
+	Medium string `xml:"medium,attr"`
+}
+
+var imgTag = regexp.MustCompile(`(?i)<img[^>]+src\s*=\s*["']([^"']+)["']`)
+var imageExt = regexp.MustCompile(`(?i)\.(jpe?g|png|webp|gif)(\?|$)`)
+
+// pickImage returns the first usable http(s) image among enclosure/media references.
+func pickImage(refs []mediaRef) string {
+	for _, r := range refs {
+		u := strings.TrimSpace(html.UnescapeString(r.URL))
+		if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			continue
+		}
+		t := strings.ToLower(r.Type)
+		if strings.HasPrefix(t, "image/") || r.Medium == "image" || (t == "" && imageExt.MatchString(u)) {
+			return u
+		}
+	}
+	return ""
+}
+
+func firstImgSrc(raw string) string {
+	if m := imgTag.FindStringSubmatch(html.UnescapeString(raw)); m != nil {
+		u := strings.TrimSpace(m[1])
+		if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+			return u
+		}
+	}
+	return ""
 }
