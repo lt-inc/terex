@@ -97,7 +97,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 		if failure != nil {
 			failure = fmt.Errorf("admissions %s: %w", phase, failure)
 		}
-		slog.InfoContext(ctx, "twitch admissions finished", "phase", phase, "committed", committed, "grants", len(result.Grants), "daily_remaining", result.DailyRemaining, "lock_ms", lockMS, "planning_ms", planningMS, "duration_ms", time.Since(started).Milliseconds(), "err", failure)
+		slog.InfoContext(ctx, "twitch admissions finished", "phase", phase, "committed", committed, "grants", len(result.Grants), "daily_unlimited", result.DailyUnlimited, "daily_remaining", result.DailyRemaining, "lock_ms", lockMS, "planning_ms", planningMS, "duration_ms", time.Since(started).Milliseconds(), "err", failure)
 	}()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 	if err != nil {
 		return twitch.AdmissionResult{}, err
 	}
-	out := twitch.AdmissionResult{Mode: settings.AdmissionMode, BudgetPercent: settings.CompilationBudgetPercent, Grants: []twitch.DownloadGrant{}}
+	out := twitch.AdmissionResult{Mode: settings.AdmissionMode, BudgetPercent: settings.CompilationBudgetPercent, DailyUnlimited: settings.DownloadsUnlimited(), Grants: []twitch.DownloadGrant{}}
 	if out.Mode == "" {
 		out.Mode = "shadow"
 	}
@@ -137,7 +137,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 	if err = tx.QueryRow(ctx, `WITH spent AS(SELECT import_id FROM twitch_download_reservations WHERE(created_at AT TIME ZONE $1)::date=$2::date UNION SELECT import_id FROM twitch_download_grants WHERE(created_at AT TIME ZONE $1)::date=$2::date AND state<>'released') SELECT count(*),(SELECT count(*) FROM twitch_download_grants g WHERE g.import_id IN(SELECT import_id FROM spent)AND g.primary_format='compilation') FROM spent`, settings.Timezone, day).Scan(&total, &compUsed); err != nil {
 		return out, err
 	}
-	out.DailyRemaining = max(0, settings.DailyDownloads-total)
+	out.DailyRemaining = settings.RemainingDownloads(total)
 	var backlog int
 	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(i.media_id,i.id))FROM twitch_imports i WHERE `+pendingTwitchSource).Scan(&backlog); err != nil {
 		return out, err
@@ -222,7 +222,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 	if err = quotaRows.Err(); err != nil {
 		return out, err
 	}
-	if out.DailyRemaining == 0 {
+	if settings.DailyDownloadLimitReached(total) {
 		// Revalidation of a source already charged today remains quota-exempt.
 		// Skip full planning only when no such source can need a new grant.
 		var recovery bool
@@ -369,7 +369,13 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 		if !newDemand && len(recoveryIDs) == 0 {
 			continue
 		}
-		candidateSQL, candidateArgs := allocationCandidateQuery(f, now, out.DailyRemaining, spentIDs, blockedChannels, recoveryIDs, newDemand)
+		candidateRemaining := out.DailyRemaining
+		if out.DailyUnlimited {
+			// The query's zero means quota exhausted, never unlimited. Preserve
+			// broadcaster restrictions and existing reservation recovery.
+			candidateRemaining = 1
+		}
+		candidateSQL, candidateArgs := allocationCandidateQuery(f, now, candidateRemaining, spentIDs, blockedChannels, recoveryIDs, newDemand)
 		candidates, e := tx.Query(ctx, candidateSQL, candidateArgs...)
 		if e != nil {
 			return out, e
@@ -458,7 +464,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 		g.Format = format
 		channelCount := len(channelImports[g.Source.BroadcasterID])
 		alreadySpent := channelImports[g.Source.BroadcasterID][g.ImportID]
-		if !alreadySpent && (channelCount >= settings.PerChannelDailyDownloads || out.DailyRemaining == 0) {
+		if !alreadySpent && (channelCount >= settings.PerChannelDailyDownloads || settings.DailyDownloadLimitReached(total)) {
 			continue
 		}
 		if !preparationSourceFresh(af.Flow, g.Source, af.Target, now) && format == "compilation" {
@@ -514,7 +520,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 			}
 			channelImports[g.Source.BroadcasterID][g.ImportID] = true
 		}
-		out.DailyRemaining = max(0, settings.DailyDownloads-total)
+		out.DailyRemaining = settings.RemainingDownloads(total)
 		if format == "compilation" {
 			if !alreadySpent {
 				compUsed++
@@ -533,10 +539,10 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 		if af.Recoveries[g.ImportID] != "" {
 			reason = "recovery_pending_commit"
 		}
-		slog.InfoContext(ctx, "twitch preparation decision", "flow_id", g.FlowID, "format", format, "mode", out.Mode, "budget_percent", settings.CompilationBudgetPercent, "reason", reason, "grant_count", 1, "daily_remaining", out.DailyRemaining)
+		slog.InfoContext(ctx, "twitch preparation decision", "flow_id", g.FlowID, "format", format, "mode", out.Mode, "budget_percent", settings.CompilationBudgetPercent, "reason", reason, "grant_count", 1, "daily_unlimited", out.DailyUnlimited, "daily_remaining", out.DailyRemaining)
 	}
 	if out.Mode == "shadow" {
-		slog.InfoContext(ctx, "twitch preparation decision", "mode", out.Mode, "budget_percent", settings.CompilationBudgetPercent, "reason", "shadow_allocation", "grant_count", len(out.Grants), "daily_remaining", out.DailyRemaining)
+		slog.InfoContext(ctx, "twitch preparation decision", "mode", out.Mode, "budget_percent", settings.CompilationBudgetPercent, "reason", "shadow_allocation", "grant_count", len(out.Grants), "daily_unlimited", out.DailyUnlimited, "daily_remaining", out.DailyRemaining)
 		return out, nil
 	}
 	phase = "commit"

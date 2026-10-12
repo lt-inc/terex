@@ -24,6 +24,7 @@ type TwitchDiagnosticCollector struct {
 	Spent                    int                             `json:"spent"`
 	Remaining                int                             `json:"remaining"`
 	DailyLimit               int                             `json:"daily_limit"`
+	DailyUnlimited           bool                            `json:"daily_unlimited"`
 	Timezone                 string                          `json:"timezone"`
 	CompilationBudgetPercent int                             `json:"compilation_budget_percent"`
 	AdmissionMode            string                          `json:"admission_mode"`

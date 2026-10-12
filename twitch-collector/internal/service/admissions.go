@@ -11,6 +11,13 @@ import (
 // transaction work and grant ageing; the daily quota remains owned by Terex.
 const admissionBufferSize = 10
 
+func admissionBufferLimit(settings twitch.Settings) int {
+	if settings.DownloadsUnlimited() {
+		return admissionBufferSize
+	}
+	return min(admissionBufferSize, settings.DailyDownloads)
+}
+
 func (s *Service) queueAdmissions(ctx context.Context, cfg twitch.CollectorConfig) (queued int, err error) {
 	if err = ctx.Err(); err != nil {
 		return 0, err
@@ -55,7 +62,7 @@ func (s *Service) queueAdmissions(ctx context.Context, cfg twitch.CollectorConfi
 	if !ok {
 		return 0, fmt.Errorf("durable admissions queue unavailable")
 	}
-	buffer := min(admissionBufferSize, cfg.Settings.DailyDownloads)
+	buffer := admissionBufferLimit(cfg.Settings)
 	result, err := api.Admissions(ctx, twitch.AdmissionRequest{Epoch: cfg.Epoch, Limit: buffer})
 	if err != nil {
 		return 0, err
@@ -65,7 +72,7 @@ func (s *Service) queueAdmissions(ctx context.Context, cfg twitch.CollectorConfi
 	}
 	queued, err = store.QueueAdmissions(ctx, result.Grants, time.Now().UTC())
 	if err == nil {
-		s.log.InfoContext(ctx, "collector admissions queued", "epoch", cfg.Epoch, "buffer_limit", buffer, "grants", len(result.Grants), "queued", queued, "daily_remaining", result.DailyRemaining, "duration_ms", time.Since(started).Milliseconds())
+		s.log.InfoContext(ctx, "collector admissions queued", "epoch", cfg.Epoch, "buffer_limit", buffer, "grants", len(result.Grants), "queued", queued, "daily_unlimited", result.DailyUnlimited, "daily_remaining", result.DailyRemaining, "duration_ms", time.Since(started).Milliseconds())
 	}
 	return queued, err
 }

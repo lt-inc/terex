@@ -9,6 +9,7 @@ type DiagnosticBudgetFlow struct {
 type FlowDiagnostics struct {
 	Available                bool                   `json:"available"`
 	DailyLimit               int                    `json:"daily_limit"`
+	DailyUnlimited           bool                   `json:"daily_unlimited"`
 	Spent                    int                    `json:"spent"`
 	Remaining                int                    `json:"remaining"`
 	Timezone                 string                 `json:"timezone"`

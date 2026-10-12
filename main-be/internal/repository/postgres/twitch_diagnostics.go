@@ -177,7 +177,7 @@ func (s *Store) TwitchFlowDiagnostics(ctx context.Context, id string, now time.T
 	if err != nil {
 		return out, err
 	}
-	out.Collector = domain.TwitchDiagnosticCollector{Timezone: settings.Timezone, DailyLimit: settings.DailyDownloads, CompilationBudgetPercent: settings.CompilationBudgetPercent, AdmissionMode: settings.AdmissionMode, ByFlow: []domain.TwitchDiagnosticBudgetFlow{}}
+	out.Collector = domain.TwitchDiagnosticCollector{Timezone: settings.Timezone, DailyLimit: settings.DailyDownloads, DailyUnlimited: settings.DownloadsUnlimited(), CompilationBudgetPercent: settings.CompilationBudgetPercent, AdmissionMode: settings.AdmissionMode, ByFlow: []domain.TwitchDiagnosticBudgetFlow{}}
 	rows, err = tx.Query(ctx, `WITH spent AS(SELECT import_id FROM twitch_download_reservations WHERE(created_at AT TIME ZONE $1)::date=$2::date UNION SELECT import_id FROM twitch_download_grants WHERE(created_at AT TIME ZONE $1)::date=$2::date AND state<>'released') SELECT COALESCE(g.flow_id,NULLIF(i.request->>'flow_id',''),'legacy'),COALESCE(f.config->>'name','Прежний поток'),COALESCE(g.primary_format,'shared'),count(*)::integer FROM spent s JOIN twitch_imports i ON i.id=s.import_id LEFT JOIN twitch_download_grants g ON g.import_id=i.id AND g.state<>'released' LEFT JOIN twitch_flows f ON f.id=COALESCE(g.flow_id,NULLIF(i.request->>'flow_id','')) GROUP BY COALESCE(g.flow_id,NULLIF(i.request->>'flow_id',''),'legacy'),COALESCE(f.config->>'name','Прежний поток'),COALESCE(g.primary_format,'shared') ORDER BY count(*) DESC`, settings.Timezone, now.In(mustLocation(settings.Timezone)).Format("2006-01-02"))
 	if err != nil {
 		return out, err
@@ -195,7 +195,7 @@ func (s *Store) TwitchFlowDiagnostics(ctx context.Context, id string, now time.T
 	if err = rows.Err(); err != nil {
 		return out, err
 	}
-	out.Collector.Remaining = max(0, settings.DailyDownloads-out.Collector.Spent)
+	out.Collector.Remaining = settings.RemainingDownloads(out.Collector.Spent)
 	return out, nil
 }
 

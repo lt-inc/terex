@@ -21,6 +21,7 @@ type DownloadGrant struct {
 type AdmissionResult struct {
 	Mode           string          `json:"mode"`
 	BudgetPercent  int             `json:"budget_percent"`
+	DailyUnlimited bool            `json:"daily_unlimited"`
 	DailyRemaining int             `json:"daily_remaining"`
 	Grants         []DownloadGrant `json:"grants"`
 }

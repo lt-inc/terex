@@ -251,7 +251,7 @@ func (s *Store) Reserve(ctx context.Context, clips []domain.Clip, settings domai
 		return 0, err
 	}
 	for _, c := range clips {
-		if total >= scfg.DailyDownloads {
+		if scfg.DailyDownloadLimitReached(total) {
 			break
 		}
 		if c.FlowID != "" {

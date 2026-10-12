@@ -213,7 +213,7 @@ func (s *Store) ReserveTwitchImport(ctx context.Context, r twitch.ImportRequest,
 	if err = tx.QueryRow(ctx, `SELECT count(DISTINCT import_id),count(DISTINCT import_id) FILTER(WHERE broadcaster_id=$3) FROM twitch_download_reservations WHERE (created_at AT TIME ZONE $1)::date=$2::date`, settings.Timezone, date, r.Source.BroadcasterID).Scan(&total, &channel); err != nil {
 		return twitch.Import{}, err
 	}
-	if total >= settings.DailyDownloads || channel >= settings.PerChannelDailyDownloads {
+	if settings.DailyDownloadLimitReached(total) || channel >= settings.PerChannelDailyDownloads {
 		return twitch.Import{}, fmt.Errorf("%w: daily download limit reached", domain.ErrConflict)
 	}
 	id := uuid.NewString()
