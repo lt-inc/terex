@@ -386,6 +386,9 @@ export interface AutoCompilationResult {
     eligible: number;
     rejected: number;
     not_ready: number;
+    download_pending?: number;
+    downloading?: number;
+    downloading_known?: boolean;
     outside_window: number;
     already_used: number;
   };

@@ -64,6 +64,8 @@ func (s *Service) handleReset(ctx context.Context, cfg twitch.CollectorConfig) (
 	s.lastPressureAt = time.Time{}
 	s.grantCursor = ""
 	s.lastAdmissionsAt = time.Time{}
+	s.admissionsRetryAt = time.Time{}
+	s.admissionsFailures = 0
 	s.mu.Unlock()
 	if cfg.Maintenance != nil {
 		api, ok := s.terex.(interface {

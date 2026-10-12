@@ -32,9 +32,13 @@ After a successful PUT the persisted upload marker allows verification retries
 without yt-dlp or another PUT. Version-change failures are revalidated through
 main-be before the regular allocator can issue a newer admission.
 
-Control-plane intervals: `COLLECTOR_CONFIG_INTERVAL=5s` (request timeout 3s),
+Control-plane intervals: `COLLECTOR_CONFIG_INTERVAL=5s` (request timeout 8s),
 `COLLECTOR_CONFIG_MAX_AGE=30s`, `COLLECTOR_PRESSURE_INTERVAL=15s`,
 `COLLECTOR_ADMISSIONS_INTERVAL=1m`, `COLLECTOR_ELIGIBILITY_INTERVAL=1m`.
+`COLLECTOR_ADMISSIONS_TIMEOUT=15s` bounds allocation requests. Failed requests
+retry after 15, 30 and then 60 seconds, avoiding a new allocation transaction on
+every five-second control refresh. An expired reconciliation pass does not start
+another allocation; the 30-second config freshness gate and reset fencing remain.
 One reconciler writes only changed settings/exclusions; runtime counters do not
 invalidate the settings fingerprint. Age-dependent eligibility refreshes every
 minute and changes only rows whose eligibility changed. Discovery observations

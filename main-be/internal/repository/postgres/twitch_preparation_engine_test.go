@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"terex/main-be/internal/domain"
 	"terex/proto/twitch"
 	"testing"
@@ -57,7 +58,11 @@ func TestCompilationReadsAllReadySourcesAndCurrentLanguage(t *testing.T) {
 	if err != nil || inspected.SelectedClips != 3 || inspected.ReadyDurationSec != 62 {
 		t.Fatal(inspected, err)
 	}
-	made, err := s.AutoFlowCompilation(ctx, f.ID, now)
+	diagnostic, err := s.TwitchFlowDiagnostics(ctx, f.ID, now)
+	if err != nil || diagnostic.Compilation.SelectedClips != inspected.SelectedClips || diagnostic.Compilation.ReadyDurationSec != inspected.ReadyDurationSec || !reflect.DeepEqual(diagnostic.Compilation.Sources, inspected.Sources) {
+		t.Fatal("optimized diagnostics differs from compilation execution inspection", diagnostic, inspected, err)
+	}
+	made, err := s.autoFlowCompilation(ctx, f.ID, now, true)
 	if err != nil || !made.Created {
 		t.Fatal(made, err)
 	}
@@ -207,6 +212,9 @@ func TestAllocatorPersistsDistinctWeightedGrantsAndAcceptsImports(t *testing.T) 
 	diagnostics, err := s.TwitchFlowDiagnostics(ctx, comp.ID, now)
 	if err != nil || diagnostics.Compilation.ReadyDurationSec != 0 {
 		t.Fatal("diagnostics included pending as ready", diagnostics, err)
+	}
+	if counts := diagnostics.Compilation.Sources; counts == nil || counts.Total != 12 || counts.NotReady != 12 || counts.Eligible != 0 || counts.DownloadPending != 12 || counts.DownloadingKnown {
+		t.Fatal("optimized diagnostics lost waiting source counts", counts)
 	}
 	var afterDiagnostics int
 	if err = s.pool.QueryRow(ctx, `SELECT count(*)FROM twitch_download_grants`).Scan(&afterDiagnostics); err != nil || afterDiagnostics != 10 {

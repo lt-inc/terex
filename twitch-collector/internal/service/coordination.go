@@ -129,8 +129,11 @@ func (s *Service) reconcilePass(parent context.Context, api domain.FlowTerex, cf
 	if pressureDue {
 		s.reconcilePressure(ctx, cfg)
 	}
-	if cfg.Settings.Enabled && cfg.Settings.AdmissionMode == "enforce" {
-		request, end := context.WithTimeout(ctx, 5*time.Second)
+	// Do not launch another transaction when earlier reconciliation work has
+	// exhausted this pass. Its next pass will still see admissions as due.
+	remaining := time.Until(started.Add(30 * time.Second))
+	if cfg.Settings.Enabled && cfg.Settings.AdmissionMode == "enforce" && remaining >= s.admissionsTimeout+time.Second {
+		request, end := context.WithTimeout(ctx, s.admissionsTimeout)
 		_, err = s.queueAdmissions(request, cfg)
 		end()
 		if err != nil {
@@ -183,15 +186,17 @@ func (s *Service) reconcilePressure(ctx context.Context, cfg twitch.CollectorCon
 			return
 		}
 		s.recordPressure(result, nil)
-		valid, waiting := 0, 0
+		valid, consumed, waiting := 0, 0, 0
 		for _, task := range result.Tasks {
-			if task.GrantState == "valid" || task.GrantState == "consumed" {
+			if task.GrantState == "valid" {
 				valid++
+			} else if task.GrantState == "consumed" {
+				consumed++
 			} else {
 				waiting++
 			}
 		}
-		s.log.InfoContext(ctx, "collector assignments checked", "epoch", result.Epoch, "tasks", len(result.Tasks), "authorized", valid, "waiting_assignment", waiting, "pending_physical", result.PendingPhysical, "backlog_limit", result.BacklogLimit, "storage_state", result.Storage.State)
+		s.log.InfoContext(ctx, "collector assignments checked", "epoch", result.Epoch, "tasks", len(result.Tasks), "valid_assignments", valid, "consumed_assignments", consumed, "waiting_assignment", waiting, "pending_physical", result.PendingPhysical, "backlog_limit", result.BacklogLimit, "storage_state", result.Storage.State)
 		if len(refs) < 200 {
 			s.mu.Lock()
 			s.grantCursor = ""

@@ -72,6 +72,7 @@ ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS started_at 
 ALTER TABLE twitch_collector.download_tasks ADD COLUMN IF NOT EXISTS failure_synced_at timestamptz;
 CREATE TABLE IF NOT EXISTS twitch_collector.flows(id text PRIMARY KEY,enabled boolean NOT NULL,config jsonb NOT NULL);
 CREATE TABLE IF NOT EXISTS twitch_collector.consumers(clip_id text NOT NULL REFERENCES twitch_collector.clips(clip_id),flow_id text NOT NULL REFERENCES twitch_collector.flows(id),flow_version integer NOT NULL,eligible boolean NOT NULL DEFAULT true,PRIMARY KEY(clip_id,flow_id));
+CREATE INDEX IF NOT EXISTS consumers_flow ON twitch_collector.consumers(flow_id,clip_id);
 ALTER TABLE twitch_collector.consumers ADD COLUMN IF NOT EXISTS excluded boolean NOT NULL DEFAULT false;
 ALTER TABLE twitch_collector.state ADD COLUMN IF NOT EXISTS next_flow_index integer NOT NULL DEFAULT 0;
 ALTER TABLE twitch_collector.state ADD COLUMN IF NOT EXISTS legacy_broadcaster_ids text[];

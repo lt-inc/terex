@@ -222,4 +222,79 @@ func TestApprovedRecoveryAdmissionAndUploadedPhaseSurviveLostResponse(t *testing
 	if lane, e := s.ClaimDownload(ctx, time.Minute); e != nil || lane != nil {
 		t.Fatal("verified source downloaded again", lane, e)
 	}
+	// Historical lost ReserveImport responses may leave generation zero locally
+	// while Terex consumed the grant and reserved generation two. An expired
+	// consumed grant must reconcile via completion, never authorize a new PUT.
+	f.Enabled = true
+	if err = s.SyncFlows(ctx, []twitch.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+	pause = false
+	if _, err = s.SetChannel(ctx, channel.ID, &pause, false); err != nil {
+		t.Fatal(err)
+	}
+	clip.ID = "LostReservationResponse"
+	if err = s.UpsertClips(ctx, []domain.Clip{clip}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ObserveFlow(ctx, f, []domain.Clip{clip}); err != nil {
+		t.Fatal(err)
+	}
+	expires = now.Add(-time.Minute)
+	g.ClipID, g.ImportID, g.ExpiresAt = clip.ID, "historical-import", &expires
+	if _, err = s.QueueAdmissions(ctx, []twitch.DownloadGrant{g}, now); err != nil {
+		t.Fatal(err)
+	}
+	if task, e := s.ClaimDownload(ctx, time.Minute); e != nil || task != nil {
+		t.Fatal("expired grant downloaded before reconciliation", task, e)
+	}
+	pressure := twitch.PressureResult{Epoch: g.Epoch, ObservedAt: now, Tasks: []twitch.PressureTaskResult{{PressureTaskRef: twitch.PressureTaskRef{ClipID: clip.ID, ImportID: g.ImportID, FlowID: f.ID, AdmissionSequence: g.AdmissionSequence, UploadGeneration: 2}, GrantState: "consumed", ExpiresAt: &expires}}}
+	for _, mismatch := range []string{"epoch", "sequence", "import", "flow"} {
+		late := pressure
+		late.Tasks = append([]twitch.PressureTaskResult{}, pressure.Tasks...)
+		switch mismatch {
+		case "epoch":
+			late.Epoch++
+		case "sequence":
+			late.Tasks[0].AdmissionSequence++
+		case "import":
+			late.Tasks[0].ImportID = "another-import"
+		case "flow":
+			late.Tasks[0].FlowID = "another-flow"
+		}
+		if err = s.ApplyPressure(ctx, late); err != nil {
+			t.Fatal(err)
+		}
+		if task, e := s.ClaimCompletion(ctx, time.Minute); e != nil || task != nil {
+			t.Fatal("late pressure crossed identity fence", mismatch, task, e)
+		}
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET state='leased',lease_token='active-download',lease_expires_at=now()+interval '1 minute' WHERE clip_id=$1`, clip.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ApplyPressure(ctx, pressure); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Renew(ctx, domain.Task{Clip: clip, Token: "active-download", Epoch: g.Epoch}, time.Minute); err != nil {
+		t.Fatal("pressure stole active execution", err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE twitch_collector.download_tasks SET lease_expires_at=now()-interval '1 second' WHERE clip_id=$1`, clip.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ApplyPressure(ctx, pressure); err != nil {
+		t.Fatal(err)
+	}
+	if task, e := s.ClaimDownload(ctx, time.Minute); e != nil || task != nil {
+		t.Fatal("consumed generation was blindly downloaded", task, e)
+	}
+	checking, err = other.ClaimCompletion(ctx, time.Minute)
+	if err != nil || checking == nil || checking.Uploaded != nil || checking.Reservation.UploadGeneration != 2 || checking.Reservation.ImportID != g.ImportID || checking.Reservation.AdmissionSequence != g.AdmissionSequence {
+		t.Fatal("historical upload identity was not retained for verification", checking, err)
+	}
+	if err = s.ApplyPressure(ctx, pressure); err != nil {
+		t.Fatal(err)
+	}
+	if err = other.Renew(ctx, *checking, time.Minute); err != nil {
+		t.Fatal("late pressure replaced active reconciliation", err)
+	}
 }
