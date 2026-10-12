@@ -108,7 +108,8 @@ func run() error {
 	}
 	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon, Workflow: flow,
 		Twitch: twitchSvc, Storage: storageSvc, Reset: resetSvc, Auth: &thttp.OperatorAuth{Username: cfg.AdminUsername, Password: cfg.AdminPassword, ServiceToken: cfg.ServiceToken, AllowedOrigin: cfg.AppPublicURL},
-		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken}}
+		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken},
+		News:      &thttp.NewsProxy{URL: cfg.NewsCollectorURL, Token: cfg.NewsCollectorToken}}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 
 	go func() { _ = tamqp.Run(ctx, br, jobSvc, pubMgr) }()

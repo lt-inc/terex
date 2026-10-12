@@ -3,6 +3,7 @@ go 1.26.0
 use (
 	./gpu-be
 	./main-be
+	./news-collector
 	./proto
 	./stats-collector
 	./twitch-collector

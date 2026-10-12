@@ -1,0 +1,313 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": {
+    "list": []
+  },
+  "description": "news-collector logs",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "terex",
+    "logs",
+    "loki"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "terex news-collector",
+  "uid": "terex-news-collector",
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Объём логов по уровням",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 25,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "sum by (level)(count_over_time({service=\"news-collector\"}[$__interval]))",
+          "editorMode": "code",
+          "queryType": "range",
+          "legendFormat": "{{level}}"
+        }
+      ],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 6
+      }
+    },
+    {
+      "type": "logs",
+      "title": "INFO",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "{service=\"news-collector\"} | level=\"INFO\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .flow }}  flow={{.flow}}{{ end }}{{ if .source }}  source={{.source}}{{ end }}{{ if .post }}  post={{.post}}{{ end }}{{ if .cluster }}  cluster={{.cluster}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .new_articles }}  new_articles={{.new_articles}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .trace_id }}  trace_id={{.trace_id}}{{ end }}`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 15
+      }
+    },
+    {
+      "type": "logs",
+      "title": "ERROR",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "{service=\"news-collector\"} | level=\"ERROR\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .flow }}  flow={{.flow}}{{ end }}{{ if .source }}  source={{.source}}{{ end }}{{ if .post }}  post={{.post}}{{ end }}{{ if .cluster }}  cluster={{.cluster}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .new_articles }}  new_articles={{.new_articles}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .trace_id }}  trace_id={{.trace_id}}{{ end }}`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 15
+      }
+    },
+    {
+      "type": "logs",
+      "title": "WARNING",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "{service=\"news-collector\"} | level=\"WARN\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .flow }}  flow={{.flow}}{{ end }}{{ if .source }}  source={{.source}}{{ end }}{{ if .post }}  post={{.post}}{{ end }}{{ if .cluster }}  cluster={{.cluster}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .new_articles }}  new_articles={{.new_articles}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .trace_id }}  trace_id={{.trace_id}}{{ end }}`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 15
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Посты: черновики и публикации",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "{service=\"news-collector\"} |~ \"post drafted|post published|post not published|model skipped a story\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .flow }}  flow={{.flow}}{{ end }}{{ if .source }}  source={{.source}}{{ end }}{{ if .post }}  post={{.post}}{{ end }}{{ if .cluster }}  cluster={{.cluster}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .new_articles }}  new_articles={{.new_articles}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .trace_id }}  trace_id={{.trace_id}}{{ end }}`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 12
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Ленты: загрузка и ошибки",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "{service=\"news-collector\"} |~ \"feed fetch\" | logfmt | line_format `{{ printf \"%-5s\" .level }}  {{.msg}}{{ if .flow }}  flow={{.flow}}{{ end }}{{ if .source }}  source={{.source}}{{ end }}{{ if .post }}  post={{.post}}{{ end }}{{ if .cluster }}  cluster={{.cluster}}{{ end }}{{ if .status }}  status={{.status}}{{ end }}{{ if .new_articles }}  new_articles={{.new_articles}}{{ end }}{{ if .count }}  count={{.count}}{{ end }}{{ if .reason }}  reason={{.reason}}{{ end }}{{ if .retry }}  retry={{.retry}}{{ end }}{{ if .err }}  err={{.err}}{{ end }}{{ if .trace_id }}  trace_id={{.trace_id}}{{ end }}`",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 10
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Full logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki-ds"
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "maxLines": 200,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki-ds"
+          },
+          "refId": "A",
+          "expr": "{service=\"news-collector\"}",
+          "editorMode": "code",
+          "queryType": "range"
+        }
+      ],
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 73,
+        "w": 24,
+        "h": 22
+      }
+    }
+  ]
+}

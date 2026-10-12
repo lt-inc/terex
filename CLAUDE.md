@@ -55,6 +55,7 @@ terex/
     internal/{transport,service,repository,domain,config}
   FE/                 # Next.js 15 + TS + Tailwind
   stats-collector/    # image terex-stats-collector: YouTube channel/video stats -> yt_stats schema -> Grafana (docs/YOUTUBE-STATS.ru.md)
+  news-collector/     # image terex-news-collector: RSS/Google News -> stories -> LLM posts -> Telegram channels; panel tab /admin/news (docs/NEWS-COLLECTOR.ru.md)
   docker-compose.yml  # local stack; docker-compose.gpu.yml = overlay for the GPU host
   go.work             # ties proto + main-be + gpu-be
 ```
@@ -71,7 +72,7 @@ GPU_RUNTIME_BASE=nvidia/cuda:12.4.1-runtime-ubuntu22.04 USE_NVENC=true \
 
 Set `OPENROUTER_API_KEY` for highlights mode. Locally gpu-be runs on CPU (`ubuntu:22.04`, whisper `base`).
 
-Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-collector && go test ./...`. Regenerate gRPC: `cd proto && buf generate` (needs `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` in PATH).
+Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-collector && go test ./...`, `cd news-collector && go test ./...`. Regenerate gRPC: `cd proto && buf generate` (needs `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` in PATH).
 
 ## Highlights mode (how clips are chosen)
 
@@ -96,6 +97,7 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 - Logs: `slog` with `trace_id`/`span_id` when logged with a context. `LOG_FORMAT=json` (Loki/Promtail), `LOG_LEVEL=debug|info|warn|error`. gpu-be logs each stage transition (`job stage`), external tool durations and failures; main-be logs requests, job creation, clips, approvals, publish results.
 - Observability starts with the stack (no profile): **Tempo** (traces), **Loki + Promtail** (logs from all containers of the `terex` compose project via the Docker socket; slog logfmt is parsed into the `level` label), **Grafana** http://localhost:3001 (anonymous admin, local only).
 - Grafana provisioning lives in `docker/grafana/provisioning` (folder *Terex*): `terex-overview` (error/warn counters, errors by service, ERROR logs, failed job stages, failed traces via TraceQL, recent traces), `terex-main-be`, `terex-gpu-be`, `terex-fe` (INFO/ERROR/WARNING/Full logs panels, same layout as `n8n/docker/grafana`). Clicking `trace_id` in a log line opens the trace in Tempo; a span links back to its logs.
+- news-collector is the one service that also exposes Prometheus metrics (`GET /metrics`, scraped on staging) and has its own dashboard `terex-news-collector` (staging version with Prometheus/PostgreSQL panels lives in `k3s/monitoring/dashboards/terex/`); see `docs/NEWS-COLLECTOR.ru.md`.
 - Prod: the infra Grafana/Loki/Tempo from `n8n/docker` are used instead — set `OTEL_EXPORTER_OTLP_ENDPOINT` to the infra Tempo; the Loki datasource regex there must match `trace_id=<32 hex>` (the old one expects `[trace:<id>]`).
 
 ## REST API (main-be, prefix `/api`)
@@ -107,6 +109,7 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 | Banners / backgrounds | `GET /{banners\|backgrounds}` (names), `/list` (with `preview_url`), `POST /presign` → `{url,bucket,object}`, `POST /` register after the browser PUT, `PATCH/DELETE /{id}` |
 | Channels | `GET/POST /channels`, `PATCH/DELETE /channels/{id}` (`approve_mode`, `enabled`, `spec` = job template) |
 | Clips | `GET /clips?approval=pending\|approved\|rejected`, `POST /clips/{id}/approve\|reject` |
+| News | `/api/news/*` is proxied to news-collector (`NEWS_COLLECTOR_URL`, bearer `NEWS_SERVICE_TOKEN`): sources, Telegram channels, flows, posts; see `docs/NEWS-COLLECTOR.ru.md` |
 | Health | `GET /healthz` |
 
 ## Database (PostgreSQL `main`, goose migration `main-be/migrations/001_init.sql`)
@@ -135,6 +138,8 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_FORMAT`, `LOG_LEVEL` | both | service name, empty (off), `text`, `info` |
 | `BACKEND_URL` | FE | `http://localhost:8000` |
 | `GPU_GRPC_ADDR`, `STATS_INTERVAL`, `MAX_VIDEOS_PER_CHANNEL`, `FULL_RESOLUTION_DAYS` | stats-collector | `gpu-be:9090`, `1h`, `200`, `14` |
+| `NEWS_COLLECTOR_URL`, `NEWS_SERVICE_TOKEN` | main-be | empty (News tab answers 503) |
+| `DATABASE_URL`, `NEWS_SERVICE_TOKEN`, `NEWS_SECRET_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `NEWS_EMBEDDING_MODEL`, `NEWS_TICK_INTERVAL` | news-collector | required: first two; see `docs/NEWS-COLLECTOR.ru.md` |
 
 In production (k3s), these env vars that are actual credentials
 (`DATABASE_URL`, `RABBITMQ_URL`, `S3_ACCESS_KEY`/`S3_SECRET_KEY`,
@@ -150,7 +155,7 @@ not here.
 
 ## FE notes
 
-- Sidebar groups: Jobs, Accounts, Banners, Backgrounds, **Channels**, **Clips**, plus external service links.
+- Sidebar groups: Jobs, Accounts, Banners, Backgrounds, **Channels**, **Clips**, Twitch, **News**, plus external service links.
 - Upload pages (banners/backgrounds) do presign → browser `PUT` to MinIO → register; they keep a localStorage draft.
 - Removed with the Go rewrite: warmup jobs and "capture auth via noVNC" (no backend yet).
 - FE → MinIO needs CORS (MinIO default allows all origins).

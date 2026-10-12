@@ -69,6 +69,16 @@ const ADMIN_GROUPS = [
       { href: "/admin/twitch/settings", label: "Настройки сервиса" },
     ],
   },
+  {
+    key: "news",
+    label: "News",
+    links: [
+      { href: "/admin/news", label: "Потоки" },
+      { href: "/admin/news/posts", label: "Посты" },
+      { href: "/admin/news/sources", label: "Источники" },
+      { href: "/admin/news/channels", label: "Telegram-каналы" },
+    ],
+  },
 ];
 
 const activePath = (pathname: string, href: string) =>
