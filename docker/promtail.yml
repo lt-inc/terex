@@ -28,7 +28,7 @@ scrape_configs:
     pipeline_stages:
       # Go services: slog text (logfmt): time=... level=INFO msg="..." trace_id=...
       - match:
-          selector: '{service=~"main-be|gpu-be|twitch-collector"}'
+          selector: '{service=~"main-be|gpu-be|twitch-collector|news-collector"}'
           stages:
             - logfmt:
                 mapping:

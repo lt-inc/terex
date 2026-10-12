@@ -22,6 +22,8 @@ type Config struct {
 	ServiceToken                string
 	CollectorURL                string
 	CollectorToken              string
+	NewsCollectorURL            string
+	NewsCollectorToken          string
 	TwitchCleanupEnabled        bool
 	TwitchCleanupInterval       time.Duration
 	TwitchResetInterval         time.Duration
@@ -47,6 +49,8 @@ func Load() Config {
 		ServiceToken:                os.Getenv("TEREX_SERVICE_TOKEN"),
 		CollectorURL:                os.Getenv("COLLECTOR_URL"),
 		CollectorToken:              os.Getenv("COLLECTOR_SERVICE_TOKEN"),
+		NewsCollectorURL:            os.Getenv("NEWS_COLLECTOR_URL"),
+		NewsCollectorToken:          os.Getenv("NEWS_SERVICE_TOKEN"),
 		TwitchCleanupEnabled:        os.Getenv("TWITCH_CLEANUP_ENABLED") == "true",
 		TwitchCleanupInterval:       positiveDuration("TWITCH_CLEANUP_INTERVAL", time.Hour),
 		TwitchResetInterval:         positiveDuration("TWITCH_RESET_INTERVAL", 5*time.Second),

@@ -33,6 +33,7 @@ type API struct {
 	Reset     *twitchreset.Service
 	Auth      *OperatorAuth
 	Collector *CollectorProxy
+	News      *NewsProxy
 }
 
 func (a *API) Router() http.Handler {
@@ -41,6 +42,7 @@ func (a *API) Router() http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(a.Auth.Protect)
+		r.Handle("/news/*", a.News)
 		if a.Twitch != nil {
 			r.Post("/twitch/metadata/preview", a.twitchMetadataPreview)
 			r.Get("/twitch/flows", a.twitchFlows)
