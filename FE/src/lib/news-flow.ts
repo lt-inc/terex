@@ -149,3 +149,25 @@ export function parseMarkup(text: string): Block[] {
   }
   return blocks;
 }
+
+// Calendar helpers -----------------------------------------------------------------------------
+
+// The moment a post sits at in the calendar: when it went out, else when it is queued to go out.
+export function postWhen(p: { published_at: string | null; scheduled_at: string | null }): string | null {
+  return p.published_at ?? p.scheduled_at;
+}
+
+export const CALENDAR_TONE: Record<NewsPostStatus, string> = {
+  published: "border-emerald-700 bg-emerald-950/40",
+  failed: "border-red-700 bg-red-950/40",
+  approved: "border-indigo-700 bg-indigo-950/40",
+  pending: "border-amber-700 bg-amber-950/40",
+  rejected: "border-slate-700 bg-slate-800/60 opacity-60",
+  expired: "border-slate-700 bg-slate-800/60 opacity-60",
+};
+
+// Public channels (@name) have post links of the form https://t.me/<name>/<message id>.
+export function telegramPostURL(chatID: string, messageID: number | null): string | null {
+  if (!messageID || !/^@[A-Za-z][A-Za-z0-9_]{3,31}$/.test(chatID)) return null;
+  return `https://t.me/${chatID.slice(1)}/${messageID}`;
+}

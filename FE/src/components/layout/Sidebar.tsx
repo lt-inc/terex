@@ -75,6 +75,7 @@ const ADMIN_GROUPS = [
     links: [
       { href: "/admin/news", label: "Потоки" },
       { href: "/admin/news/posts", label: "Посты" },
+      { href: "/admin/news/calendar", label: "Календарь" },
       { href: "/admin/news/sources", label: "Источники" },
       { href: "/admin/news/channels", label: "Telegram-каналы" },
     ],

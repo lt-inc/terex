@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   ["/admin/news", "Потоки"],
   ["/admin/news/posts", "Посты"],
+  ["/admin/news/calendar", "Календарь"],
   ["/admin/news/sources", "Источники"],
   ["/admin/news/channels", "Telegram-каналы"],
 ] as const;

@@ -46,6 +46,13 @@ export const fetchNewsStories = (id: number, signal?: AbortSignal) => request<Ne
 export const fetchNewsArticles = (flowID = 0, signal?: AbortSignal) =>
   request<NewsArticle[]>(`${base}/articles?limit=50${flowID ? `&flow_id=${flowID}` : ""}`, { signal });
 
+// Calendar mode: posts by their publication time (published, else scheduled) inside [from, to).
+export const fetchNewsCalendar = (from: string, to: string, flowID = 0, signal?: AbortSignal) => {
+  const query = new URLSearchParams({ from, to, limit: "1000" });
+  if (flowID) query.set("flow_id", String(flowID));
+  return request<NewsPost[]>(`${base}/posts?${query}`, { signal });
+};
+export const holdNewsPost = (id: number) => request<NewsPost>(`${base}/posts/${id}/hold`, json("POST", {}));
 export const fetchNewsPosts = (status: NewsPostStatus | "" = "", flowID = 0, signal?: AbortSignal) => {
   const query = new URLSearchParams({ limit: "100" });
   if (status) query.set("status", status);
