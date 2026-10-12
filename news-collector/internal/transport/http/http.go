@@ -70,6 +70,7 @@ func Handler(a *API) http.Handler {
 	api.HandleFunc("POST /api/posts/{id}/approve", a.approvePost)
 	api.HandleFunc("POST /api/posts/{id}/reject", a.rejectPost)
 	api.HandleFunc("GET /api/posts/{id}/preview", a.previewPost)
+	api.HandleFunc("GET /api/posts/{id}/images", a.postImages)
 
 	mux.Handle("/api/", a.auth(api))
 	return mux
@@ -368,7 +369,7 @@ func (a *API) getFlow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) saveFlow(w http.ResponseWriter, r *http.Request) {
-	var f domain.Flow
+	f := domain.Flow{UseEmoji: true, UseHashtags: true, IncludeLink: true} // defaults for fields a new flow omits
 	var err error
 	if r.Method != http.MethodPost { // partial updates, e.g. {"enabled": true}, keep the other fields
 		n, ok := id(r)
@@ -567,5 +568,22 @@ func (a *API) previewPost(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	write(w, 200, map[string]string{"html": service.RenderHTML(p, f.Language)})
+	write(w, 200, map[string]string{"html": service.RenderHTML(p, service.RenderOptions{Lang: f.Language, Footer: f.Footer})})
+}
+
+// postImages lists picture candidates (the story's own images, then stock photos) for the editor.
+func (a *API) postImages(w http.ResponseWriter, r *http.Request) {
+	n, ok := id(r)
+	if !ok {
+		write(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	out, err := a.Svc.PostImages(ctx, n, r.URL.Query().Get("query"))
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	write(w, 200, out)
 }

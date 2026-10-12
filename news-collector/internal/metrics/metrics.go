@@ -37,6 +37,13 @@ var (
 		Name: "news_post_publish_delay_seconds", Help: "Time from draft creation to publication (review latency).",
 		Buckets: []float64{10, 60, 300, 900, 3600, 4 * 3600, 12 * 3600, 24 * 3600}})
 
+	PostImages = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "news_post_images_total", Help: "Published posts by how the picture was delivered: photo, preview or none."}, []string{"mode"})
+	ImagesSelected = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "news_images_selected_total", Help: "Pictures chosen for new drafts by source (article|pexels|none)."}, []string{"source"})
+	ImageLookups = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "news_image_lookups_total", Help: "Image candidates tried: kind (article_check|pexels) and result (ok|error)."}, []string{"kind", "result"})
+
 	TelegramRequests = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "news_telegram_requests_total", Help: "Bot API calls by method and result (ok|error|rate_limited)."}, []string{"method", "result"})
 	TelegramDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{

@@ -17,7 +17,7 @@ type NewsProxy struct {
 	Client     *http.Client
 }
 
-var newsPath = regexp.MustCompile(`^(status|articles|sources(/test|/\d{1,18}(/fetch)?)?|channels(/\d{1,18}(/(verify|test))?)?|flows(/\d{1,18}(/(generate|stories))?)?|posts(/\d{1,18}(/(approve|reject|preview))?)?)$`)
+var newsPath = regexp.MustCompile(`^(status|articles|sources(/test|/\d{1,18}(/fetch)?)?|channels(/\d{1,18}(/(verify|test))?)?|flows(/\d{1,18}(/(generate|stories))?)?|posts(/\d{1,18}(/(approve|reject|preview|images))?)?)$`)
 
 func (p *NewsProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p == nil || p.URL == "" || p.Token == "" {

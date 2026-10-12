@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -24,10 +25,16 @@ type Client struct {
 	UserAgent string
 }
 
-func (c *Client) Fetch(ctx context.Context, rawURL string) (string, error) {
+// Page is what could be read from an article page.
+type Page struct {
+	Text  string
+	Image string // og:image / twitter:image, absolute URL
+}
+
+func (c *Client) Fetch(ctx context.Context, rawURL string) (Page, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", err
+		return Page{}, err
 	}
 	ua := c.UserAgent
 	if ua == "" {
@@ -37,20 +44,20 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (string, error) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5")
 	res, err := c.HTTP.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("page unavailable")
+		return Page{}, fmt.Errorf("page unavailable")
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("page returned HTTP %d", res.StatusCode)
+		return Page{}, fmt.Errorf("page returned HTTP %d", res.StatusCode)
 	}
 	if ct := res.Header.Get("Content-Type"); ct != "" && !strings.Contains(ct, "html") && !strings.Contains(ct, "xml") {
-		return "", fmt.Errorf("page is not HTML")
+		return Page{}, fmt.Errorf("page is not HTML")
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxPageBytes))
 	if err != nil {
-		return "", fmt.Errorf("page read failed")
+		return Page{}, fmt.Errorf("page read failed")
 	}
-	return Text(string(data)), nil
+	return Page{Text: Text(string(data)), Image: Image(string(data), rawURL)}, nil
 }
 
 var skipTags = map[string]bool{"script": true, "style": true, "noscript": true, "nav": true, "header": true, "footer": true, "aside": true, "form": true, "iframe": true, "svg": true, "button": true}
@@ -150,4 +157,46 @@ func nodeText(n *html.Node) string {
 	}
 	rec(n)
 	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// Image returns the page's social-preview picture as an absolute http(s) URL, or "".
+func Image(doc, base string) string {
+	root, err := html.Parse(strings.NewReader(doc))
+	if err != nil {
+		return ""
+	}
+	found := map[string]string{}
+	var walk func(n *html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "meta" {
+			var key, content string
+			for _, a := range n.Attr {
+				switch a.Key {
+				case "property", "name":
+					key = strings.ToLower(a.Val)
+				case "content":
+					content = strings.TrimSpace(a.Val)
+				}
+			}
+			if content != "" && found[key] == "" {
+				found[key] = content
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(root)
+	b, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	for _, key := range []string{"og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src"} {
+		if v := found[key]; v != "" {
+			if u, err := b.Parse(v); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+				return u.String()
+			}
+		}
+	}
+	return ""
 }
