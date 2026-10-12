@@ -1,4 +1,4 @@
-import type { NewsFlow, NewsPostStatus } from "@/types/news";
+import type { NewsFlow, NewsImageMode, NewsPostStatus } from "@/types/news";
 
 export const DEFAULT_NEWS_FLOW: Omit<NewsFlow, "id"> = {
   name: "",
@@ -20,6 +20,10 @@ export const DEFAULT_NEWS_FLOW: Omit<NewsFlow, "id"> = {
   include_link: true,
   max_chars: 900,
   model: "",
+  image_mode: "auto",
+  use_emoji: true,
+  use_hashtags: true,
+  footer: "",
   source_ids: [],
   last_generated_at: null,
   last_error: "",
@@ -55,6 +59,7 @@ export function validateNewsFlow(flow: Omit<NewsFlow, "id"> | NewsFlow): string 
   if (!whole(flow.window_hours, 1, 168)) return "Окно свежести: 1–168 часов.";
   if (!whole(flow.max_pending, 1, 50)) return "Лимит черновиков на ревью: 1–50.";
   if (!whole(flow.max_chars, 200, 3500)) return "Длина поста: 200–3500 символов.";
+  if (flow.footer.length > 300) return "Подпись внизу: не длиннее 300 символов.";
   if (/\s/.test(flow.model.trim())) return "Идентификатор модели не должен содержать пробелов.";
   if (flow.enabled && flow.channel_id == null) return "Выберите Telegram-канал, прежде чем включать поток.";
   if (flow.enabled && flow.source_ids.length === 0) return "Выберите хотя бы один источник, прежде чем включать поток.";
@@ -99,4 +104,48 @@ export function relativeTime(iso: string | null, now = Date.now()): string {
   if (s < 3600) return `${Math.floor(s / 60)} мин назад`;
   if (s < 86400) return `${Math.floor(s / 3600)} ч назад`;
   return `${Math.floor(s / 86400)} дн назад`;
+}
+
+export const IMAGE_MODE_LABEL: Record<NewsImageMode, string> = {
+  auto: "Авто: картинка из новости, иначе стоковое фото",
+  article: "Только из самой новости",
+  web: "Стоковое фото из интернета по теме",
+  none: "Без картинки",
+};
+
+export type Inline = { text: string; bold?: boolean; italic?: boolean };
+export type Block = { kind: "p" | "quote" | "bullet"; inlines: Inline[] };
+
+// Light post markup: **bold**, __italic__, "- " bullets, "> " quotes. Mirrors the collector's renderer,
+// so the panel preview shows what Telegram will show. Nothing is ever treated as HTML.
+export function parseInlines(line: string): Inline[] {
+  const out: Inline[] = [];
+  for (const part of line.split(/(\*\*.+?\*\*|__.+?__)/)) {
+    if (!part) continue;
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) out.push({ text: part.slice(2, -2), bold: true });
+    else if (part.startsWith("__") && part.endsWith("__") && part.length > 4) out.push({ text: part.slice(2, -2), italic: true });
+    else out.push({ text: part.replaceAll("**", "").replaceAll("__", "") });
+  }
+  return out;
+}
+
+export function parseMarkup(text: string): Block[] {
+  const blocks: Block[] = [];
+  for (const raw of text.replaceAll("\r\n", "\n").split("\n")) {
+    const line = raw.trimEnd();
+    const t = line.trimStart();
+    if (t.startsWith("> ")) {
+      const last = blocks[blocks.length - 1];
+      const inlines = parseInlines(t.slice(2));
+      if (last?.kind === "quote") last.inlines.push({ text: "\n" }, ...inlines);
+      else blocks.push({ kind: "quote", inlines });
+    } else if (t.startsWith("- ") || t.startsWith("* ") || t.startsWith("• ")) {
+      blocks.push({ kind: "bullet", inlines: parseInlines(t.slice(2)) });
+    } else if (t === "") {
+      blocks.push({ kind: "p", inlines: [] });
+    } else {
+      blocks.push({ kind: "p", inlines: parseInlines(line) });
+    }
+  }
+  return blocks;
 }

@@ -178,7 +178,7 @@ type Cluster struct {
 
 type Status struct {
 	LLMReady       bool       `json:"llm_ready"`
-	PexelsReady    bool       `json:"pexels_ready"`
+	StockReady     bool       `json:"stock_ready"`
 	SecretKeyReady bool       `json:"secret_key_ready"`
 	Flows          int        `json:"flows"`
 	EnabledFlows   int        `json:"enabled_flows"`

@@ -474,12 +474,14 @@ func (s *Service) validateImageEdit(ctx context.Context, in ImageEdit) (pickedIm
 	}
 	out := pickedImage{URL: in.URL, Source: "manual"}
 	switch {
-	case strings.HasSuffix(u.Host, ".pexels.com") && in.Source == "pexels":
+	case in.Source == "pexels" && strings.HasSuffix(u.Host, ".pexels.com"):
 		out.Source = "pexels"
 		out.Credit = truncateRunes(strings.TrimSpace(in.Credit), 80)
 		if cu, err := url.Parse(in.CreditURL); err == nil && (cu.Host == "www.pexels.com" || cu.Host == "pexels.com") {
 			out.CreditURL = in.CreditURL
 		}
+	case in.Source == "pixabay" && strings.HasSuffix(u.Host, "pixabay.com"):
+		out.Source = "pixabay" // no credit line: the license does not require one
 	case in.Source == "article":
 		out.Source = "article"
 	}
@@ -512,7 +514,7 @@ func (s *Service) PostImages(ctx context.Context, id int64, query string) ([]ima
 			out = append(out, images.Photo{URL: a.ImageURL, Thumb: a.ImageURL, Source: "article", Credit: name, Description: a.Title})
 		}
 	}
-	if s.pexels.Ready() {
+	if s.stockReady() {
 		query = strings.TrimSpace(query)
 		if query == "" {
 			query = p.ImageQuery
@@ -524,13 +526,17 @@ func (s *Service) PostImages(ctx context.Context, id int64, query string) ([]ima
 		if err != nil {
 			return nil, err
 		}
-		pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		defer cancel()
-		photos, err := s.pexels.Search(pctx, query, f.Language, 9)
-		if err != nil {
-			return out, nil // article pictures are still useful when Pexels is down
+		for _, prov := range s.stock {
+			if !prov.Ready() {
+				continue
+			}
+			pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			photos, err := prov.Search(pctx, query, f.Language, 6)
+			cancel()
+			if err == nil { // article pictures are still useful when a provider is down
+				out = append(out, photos...)
+			}
 		}
-		out = append(out, photos...)
 	}
 	return out, nil
 }

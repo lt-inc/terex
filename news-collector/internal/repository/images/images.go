@@ -18,7 +18,7 @@ import (
 // MaxBytes is Telegram's limit for a photo sent by URL.
 const MaxBytes = 5 << 20
 
-var ErrNotConfigured = errors.New("PEXELS_API_KEY is not configured")
+var ErrNotConfigured = errors.New("stock photo API key is not configured")
 
 type Photo struct {
 	URL         string `json:"url"`        // image to send
@@ -27,6 +27,13 @@ type Photo struct {
 	CreditURL   string `json:"credit_url"` // photo page on Pexels
 	Source      string `json:"source"`     // pexels | article
 	Description string `json:"description"`
+}
+
+// Searcher is a stock-photo provider.
+type Searcher interface {
+	Name() string // pexels | pixabay
+	Ready() bool
+	Search(ctx context.Context, query, lang string, limit int) ([]Photo, error)
 }
 
 type Pexels struct {
@@ -41,6 +48,8 @@ func NewPexels(key, base string) *Pexels {
 	}
 	return &Pexels{Base: strings.TrimRight(base, "/"), Key: key, HTTP: &http.Client{Timeout: 15 * time.Second}}
 }
+
+func (p *Pexels) Name() string { return "pexels" }
 
 func (p *Pexels) Ready() bool { return p != nil && p.Key != "" }
 
@@ -141,4 +150,122 @@ func (c *Checker) Check(ctx context.Context, raw string) error {
 		return errors.New("image is larger than 5 MB")
 	}
 	return nil
+}
+
+// Pixabay searches pixabay.com. Its license does not require attribution, so no credit is shown.
+type Pixabay struct {
+	Base string // default https://pixabay.com
+	Key  string
+	HTTP *http.Client
+}
+
+func NewPixabay(key, base string) *Pixabay {
+	if base == "" {
+		base = "https://pixabay.com"
+	}
+	return &Pixabay{Base: strings.TrimRight(base, "/"), Key: key, HTTP: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func (p *Pixabay) Name() string { return "pixabay" }
+
+func (p *Pixabay) Ready() bool { return p != nil && p.Key != "" }
+
+func (p *Pixabay) Search(ctx context.Context, query, lang string, limit int) ([]Photo, error) {
+	if !p.Ready() {
+		return nil, ErrNotConfigured
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, errors.New("empty image query")
+	}
+	if r := []rune(query); len(r) > 100 { // Pixabay's limit
+		query = string(r[:100])
+	}
+	l := "ru"
+	if lang == "en" {
+		l = "en"
+	}
+	v := url.Values{"key": {p.Key}, "q": {query}, "lang": {l}, "image_type": {"photo"}, "orientation": {"horizontal"},
+		"safesearch": {"true"}, "order": {"popular"}, "per_page": {strconv.Itoa(max(limit, 3))}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.Base+"/api/?"+v.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := p.HTTP.Do(req)
+	if err != nil {
+		return nil, errors.New("pixabay unavailable")
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("pixabay returned HTTP %d", res.StatusCode)
+	}
+	var out struct {
+		Hits []struct {
+			PageURL       string `json:"pageURL"`
+			Tags          string `json:"tags"`
+			PreviewURL    string `json:"previewURL"`
+			WebformatURL  string `json:"webformatURL"`
+			LargeImageURL string `json:"largeImageURL"`
+		} `json:"hits"`
+	}
+	if err = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&out); err != nil {
+		return nil, errors.New("pixabay returned invalid JSON")
+	}
+	photos := make([]Photo, 0, len(out.Hits))
+	for _, h := range out.Hits {
+		img := h.LargeImageURL
+		if img == "" {
+			img = h.WebformatURL
+		}
+		if img == "" {
+			continue
+		}
+		thumb := h.WebformatURL
+		if thumb == "" {
+			thumb = h.PreviewURL
+		}
+		photos = append(photos, Photo{URL: img, Thumb: thumb, CreditURL: h.PageURL, Source: "pixabay", Description: h.Tags})
+	}
+	if len(photos) > limit {
+		photos = photos[:limit]
+	}
+	return photos, nil
+}
+
+// Download fetches an image Telegram can be given as an upload (so the host's hotlink
+// protection or bot blocking cannot stop it). The size limit is enforced while reading.
+func (c *Checker) Download(ctx context.Context, raw string) ([]byte, string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return nil, "", errors.New("not a valid image URL")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TerexNewsCollector/1.0)")
+	req.Header.Set("Accept", "image/*")
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, "", errors.New("image is unavailable")
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("image returned HTTP %d", res.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, MaxBytes+1))
+	if err != nil {
+		return nil, "", errors.New("image download failed")
+	}
+	if len(data) > MaxBytes {
+		return nil, "", errors.New("image is larger than 5 MB")
+	}
+	ct := strings.ToLower(strings.TrimSpace(strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]))
+	if !okTypes[ct] {
+		ct = strings.ToLower(http.DetectContentType(data)) // some CDNs label images application/octet-stream
+		if !okTypes[ct] {
+			return nil, "", fmt.Errorf("not an image (%s)", ct)
+		}
+	}
+	return data, ct, nil
 }

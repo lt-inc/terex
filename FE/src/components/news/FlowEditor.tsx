@@ -2,9 +2,9 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import Toggle from "@/components/ui/Toggle";
-import { fetchNewsChannels, fetchNewsSources } from "@/lib/news";
-import { DEFAULT_NEWS_FLOW, NEWS_TIMEZONES, validateNewsFlow } from "@/lib/news-flow";
-import type { NewsChannel, NewsFlow, NewsSource } from "@/types/news";
+import { fetchNewsChannels, fetchNewsSources, fetchNewsStatus } from "@/lib/news";
+import { DEFAULT_NEWS_FLOW, IMAGE_MODE_LABEL, NEWS_TIMEZONES, validateNewsFlow } from "@/lib/news-flow";
+import type { NewsChannel, NewsFlow, NewsImageMode, NewsSource } from "@/types/news";
 
 const input = "w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm";
 const card = "rounded-xl border border-slate-700 bg-slate-800 p-4";
@@ -18,10 +18,14 @@ export default function FlowEditor({ initial, onSave, saving }: { initial?: News
   const [channels, setChannels] = useState<NewsChannel[]>([]);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [stockReady, setStockReady] = useState(true);
 
   useEffect(() => {
     if (initial) setFlow(initial);
   }, [initial]);
+  useEffect(() => {
+    void fetchNewsStatus().then((st) => setStockReady(st.stock_ready)).catch(() => undefined);
+  }, []);
   useEffect(() => {
     void Promise.allSettled([fetchNewsSources(), fetchNewsChannels()]).then(([s, c]) => {
       if (s.status === "fulfilled") setSources(s.value ?? []);
@@ -157,6 +161,28 @@ export default function FlowEditor({ initial, onSave, saving }: { initial?: News
         <p className="mt-2 text-xs text-slate-400">
           Чем больше независимых изданий пишет об одном событии, тем выше сюжет в очереди. Если в канал попадает лишнее — поднимайте релевантность (обычно 0.25–0.45); если не хватает новостей — снижайте.
         </p>
+      </section>
+
+      <section className={card}>
+        <h2 className="mb-3 text-sm font-semibold">Оформление поста</h2>
+        <label className="text-xs text-slate-400">Картинка
+          <select className={input} value={flow.image_mode} onChange={(e) => set("image_mode", e.target.value as NewsImageMode)}>
+            {(Object.keys(IMAGE_MODE_LABEL) as NewsImageMode[]).map((m) => <option key={m} value={m}>{IMAGE_MODE_LABEL[m]}</option>)}
+          </select>
+        </label>
+        {(flow.image_mode === "web" || flow.image_mode === "auto") && !stockReady && (
+          <p className="mt-2 text-xs text-amber-300">На сервере не задан ключ стоковых фото (PIXABAY_API_KEY или PEXELS_API_KEY): фото из интернета недоступны, будет использоваться только картинка из новости.</p>
+        )}
+        <p className="mt-2 text-xs text-slate-400">
+          Картинка из новости берётся из ленты или со страницы статьи. Стоковое фото (Pixabay или Pexels) подбирается по теме поста; для Pexels подпись «Фото: автор / Pexels» добавляется автоматически. Перед публикацией картинку можно заменить в разделе «Посты».
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <Toggle label="Эмодзи перед заголовком" checked={flow.use_emoji} onChange={(v) => set("use_emoji", v)} />
+          <Toggle label="Хештеги в конце поста" checked={flow.use_hashtags} onChange={(v) => set("use_hashtags", v)} />
+        </div>
+        <label className="mt-3 block text-xs text-slate-400">Подпись внизу каждого поста (необязательно)
+          <input className={input} value={flow.footer} onChange={(e) => set("footer", e.target.value)} maxLength={300} placeholder="📲 Подписывайтесь: @my_news" />
+        </label>
       </section>
 
       <section className={card}>

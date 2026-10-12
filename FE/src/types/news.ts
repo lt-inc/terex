@@ -1,5 +1,6 @@
 export type NewsApprove = "by_approve" | "auto";
 export type NewsLanguage = "ru" | "en";
+export type NewsImageMode = "none" | "article" | "web" | "auto";
 export type NewsPostStatus = "pending" | "approved" | "published" | "failed" | "rejected" | "expired";
 
 export interface NewsSource {
@@ -51,6 +52,10 @@ export interface NewsFlow {
   include_link: boolean;
   max_chars: number;
   model: string;
+  image_mode: NewsImageMode;
+  use_emoji: boolean;
+  use_hashtags: boolean;
+  footer: string;
   source_ids: number[];
   last_generated_at: string | null;
   last_error: string;
@@ -81,7 +86,30 @@ export interface NewsPost {
   error: string;
   attempts: number;
   score: number;
+  emoji: string;
+  hashtags: string;
+  image_url: string;
+  image_source: "article" | "pexels" | "pixabay" | "manual" | "";
+  image_credit: string;
+  image_credit_url: string;
+  image_query: string;
   created_at: string;
+}
+
+export interface NewsImageCandidate {
+  url: string;
+  thumb: string;
+  credit: string;
+  credit_url: string;
+  source: "article" | "pexels" | "pixabay";
+  description: string;
+}
+
+export interface NewsImageEdit {
+  url: string;
+  source?: string;
+  credit?: string;
+  credit_url?: string;
 }
 
 export interface NewsStory {
@@ -108,6 +136,7 @@ export interface NewsArticle {
 
 export interface NewsStatus {
   llm_ready: boolean;
+  stock_ready: boolean;
   secret_key_ready: boolean;
   flows: number;
   enabled_flows: number;

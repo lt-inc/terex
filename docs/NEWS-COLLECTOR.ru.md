@@ -22,6 +22,25 @@ RSS / Google News → извлечение текста → дедуп → эм�
 
 Посты равномерно распределяются по активным часам: интервал между ними не меньше `min_interval_min` и не меньше ¾ от (окно ÷ число постов в день). Черновики, висящие на ревью дольше 48 часов, переходят в `expired`. Статьи хранятся 14 дней.
 
+## Картинки и оформление
+
+**Картинка** задаётся в потоке (раздел «Оформление поста»):
+
+| Режим | Что делает |
+|-------|------------|
+| Авто (по умолчанию) | Картинка самой новости; если её нет или она не подходит, стоковое фото (Pixabay, затем Pexels) |
+| Только из новости | Картинка из ленты (`enclosure`, `media:content`, `<img>` в описании) или `og:image` страницы статьи |
+| Фото из интернета | Pixabay или Pexels по запросу, который предлагает модель (2–4 английских слова), иначе по теме потока |
+| Без картинки | Только текст |
+
+Картинка проверяется до публикации: это должен быть `image/jpeg|png|webp|gif` не больше 5 МБ (Telegram не принимает больше при отправке по ссылке). Если картинка не нашлась или не прошла проверку, пост создаётся без неё. Для Pexels к посту автоматически добавляется подпись «Фото: автор / Pexels» (требование API); лицензия Pixabay подписи не требует. Ключи необязательны: без обоих «Авто» работает только с картинками новостей. Провайдеры опрашиваются по очереди: сначала Pixabay, потом Pexels.
+
+**Доставка.** Если текст поста (с заголовком, хештегами, источниками) помещается в 1024 символа, сервис сам скачивает картинку и загружает её в Telegram фото с подписью (так защита хостинга от хотлинка не мешает). Если не помещается, сообщение с текстом отправляется с картинкой-превью сверху (её уже загружает сам Telegram по ссылке). Если картинку скачать или отправить не удалось, пост всё равно публикуется (с превью или без картинки). В дашборде это видно в панели «Доставка картинок» (`photo` / `preview` / `none`).
+
+**Оформление текста.** Модель пишет по правилам: короткий лид, абзацы до трёх предложений, **жирным** 2–4 ключевых факта, список для параллельных фактов, цитата только дословная, эмодзи перед заголовком и 2–4 хештега (отключаются в потоке), подпись внизу поста (поле «Подпись» потока). Текст хранится в лёгкой разметке `**жирный**`, `__курсив__`, `- пункт`, `> цитата`: так его удобно править руками. Перед отправкой всё экранируется и превращается в разрешённые Telegram HTML-теги, поэтому HTML из модели или из редактора не исполняется.
+
+**Редактор поста** показывает карточку в стиле Telegram с картинкой и форматированием, позволяет править эмодзи, заголовок, текст и хештеги, убрать или заменить картинку (кандидаты: картинки статей сюжета и фото Pexels по вашему запросу, либо своя ссылка).
+
 ## Панель
 
 | Страница | Что делает |
@@ -63,6 +82,7 @@ RSS / Google News → извлечение текста → дедуп → эм�
 | `news_posts_published_total{flow}`, `news_post_send_failures_total{flow,outcome}`, `news_post_publish_delay_seconds` | публикация, отказы (`retry` / `failed`) и время от черновика до канала |
 | `news_telegram_requests_total{method,result}`, `news_telegram_request_duration_seconds{method}` | вызовы Bot API (`rate_limited` — флуд-контроль) |
 | `news_pipeline_runs_total{stage,result}`, `news_pipeline_duration_seconds{stage}`, `news_pipeline_last_success_timestamp_seconds{stage}` | циклы `pipeline` и `publish` |
+| `news_images_selected_total{source}`, `news_image_lookups_total{kind,result}`, `news_post_images_total{mode}` | выбор картинок (по источнику: article / pixabay / pexels) и способ доставки (`photo` / `preview` / `none`) |
 | `news_posts{status}`, `news_articles{status}`, `news_sources{state}`, `news_channels{status}`, `news_flows{state}`, `news_open_stories{flow}` | состояние из БД на момент сбора (кэш 10 с, лимит запроса 3 с) |
 | `news_oldest_pending_post_age_seconds`, `news_oldest_unembedded_article_age_seconds`, `news_last_post_published_timestamp_seconds{flow}` | возраст очередей и время последней публикации |
 | `news_db_up`, `news_llm_ready`, `news_secret_key_ready` | готовность |
@@ -72,7 +92,8 @@ RSS / Google News → извлечение текста → дедуп → эм�
 ## Ограничения
 
 - **Google News даёт заголовки.** Ссылки в выдаче Google зашифрованы, и в большинстве случаев раскрыть их до страницы издания не удаётся. Тогда у статьи есть только заголовок и название издания. Для качественных постов добавляйте прямые RSS-ленты изданий, а Google News используйте для поиска тем.
-- Картинки в посты не добавляются.
+- Стоковые фото подбираются по смыслу запроса и не показывают само событие. Для «настоящих» фото берите режим «Только из новости».
+- Картинки изданий защищены авторским правом их владельцев. Источник указан ссылкой в посте, но если это важно для канала, используйте режим Pexels.
 - Эмбеддинги хранятся в обычной колонке `bytea`, сравнение идёт в памяти по статьям за последние 72 часа (расширение pgvector не нужно). Для одного канала этого достаточно; при росте до десятков тысяч статей в сутки понадобится индекс.
 - Один экземпляр collector (`replicas: 1`): внутри процесса стоит блокировка цикла.
 
@@ -103,6 +124,7 @@ RSS / Google News → извлечение текста → дедуп → эм�
 | `DATABASE_URL`, `NEWS_SERVICE_TOKEN` | news-collector | обязательны |
 | `NEWS_SECRET_KEY` | news-collector | пусто: токены ботов сохранить нельзя. 32 байта в base64 (`openssl rand -base64 32`) |
 | `OPENROUTER_API_KEY` | news-collector | пусто: без него нет эмбеддингов и генерации |
+| `PIXABAY_API_KEY`, `PEXELS_API_KEY` | news-collector | пусто: фото из интернета выключены. Pixabay выдаёт ключ сразу после регистрации (pixabay.com/api/docs); Pexels сейчас ключи не выдаёт |
 | `OPENROUTER_MODEL`, `NEWS_EMBEDDING_MODEL` | news-collector | `deepseek/deepseek-v4.1-flash`, `openai/text-embedding-3-small` |
 | `NEWS_TICK_INTERVAL` | news-collector | `1m` (не меньше 10s) |
 | `NEWS_CLUSTER_THRESHOLD`, `NEWS_COVERED_THRESHOLD` | news-collector | `0.72`, `0.85` |
@@ -116,7 +138,7 @@ RSS / Google News → извлечение текста → дедуп → эм�
 
 Staging (k3s): манифесты `k3s/admin/terex-news-collector.yaml`, `terex-news-collector-infisical.yml`, ConfigMap `terex-news-collector-config`; образ `terex-news-collector` собирает CI. Порядок первого выката:
 
-1. В Infisical (staging, путь `/`) создать `NEWS_SERVICE_TOKEN` (случайная строка) и `NEWS_SECRET_KEY` (`openssl rand -base64 32`). `OPENROUTER_API_KEY` и `TEREX_DATABASE_URL` уже есть. **`NEWS_SECRET_KEY` нельзя менять после подключения каналов** — сохранённые токены перестанут расшифровываться (тогда каналы нужно подключить заново).
+1. В Infisical (staging, путь `/`) создать `NEWS_SERVICE_TOKEN` (случайная строка) и `NEWS_SECRET_KEY` (`openssl rand -base64 32`). Для фото из интернета ещё `PIXABAY_API_KEY` и/или `PEXELS_API_KEY` (отдельные Secret `terex-news-pixabay` / `terex-news-pexels`: их отсутствие ничего не ломает). `OPENROUTER_API_KEY` и `TEREX_DATABASE_URL` уже есть. **`NEWS_SECRET_KEY` нельзя менять после подключения каналов** — сохранённые токены перестанут расшифровываться (тогда каналы нужно подключить заново).
 2. `terraform apply` в `k3s/terraform` (создаст Deployment, Service, Secret-синхронизацию и обновит ConfigMap с `NEWS_COLLECTOR_URL`).
 3. `kubectl rollout restart deployment/terex-be -n admin`: Kubernetes не перезапускает pod при появлении нового Secret для env.
 4. Запустить CI (`build-and-deploy`), чтобы обновить образы.
