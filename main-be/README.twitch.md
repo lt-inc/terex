@@ -83,6 +83,19 @@ It creates at most one automatic draft per target publication local date.
 Pending downloads do not count toward ready duration. A configurable soft budget
 defaults to 70% for compilations, with shadow admission before enforcement.
 
+The single collector download worker maintains a buffer of at most ten returned
+grants per admissions request (or the smaller configured daily limit), rather
+than requesting the entire daily quota in one transaction. The daily quota and
+format allocation remain in main-be. Discovery windows and their saved cursors
+are independent of this executable buffer. Failed allocation requests back off
+15/30/60 seconds; `COLLECTOR_ADMISSIONS_TIMEOUT` defaults to 15 seconds.
+
+Unavailable or stale storage pressure prevents new grants before candidate
+planning; existing grants are not revoked by this check. If the GPU/MinIO node
+is offline, discovered sources and queued render/publication work remain saved,
+but downloads, video processing and publication wait for its return. Increasing
+the diagnostics budget does not make the storage or video worker available.
+
 The download/backlog limits are checked transactionally. Publication calendar
 limits use the project timezone and one configured YouTube account: approvals,
 date changes, publish-now and target edits share a transaction lock. Runtime limits

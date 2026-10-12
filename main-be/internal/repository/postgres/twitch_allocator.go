@@ -34,6 +34,11 @@ func allocationFormat(compUsed, totalUsed, percent int, hasComp, hasShort bool) 
 	return ""
 }
 
+func allocationNeedsCompilation(af *allocationFlow) bool {
+	return af.Flow.CompilationsEnabled && !af.Target.IsZero() &&
+		(af.PlannedClips < af.Flow.CompilationMinClips || af.PlannedDuration < af.Flow.CompilationMinDurationSec)
+}
+
 // The coordinator owns quota admission. Discovery remains shared metadata; the
 // collector receives durable grants and does not pick a competing local quota.
 func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionRequest, now time.Time) (result twitch.AdmissionResult, failure error) {
@@ -124,6 +129,22 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 			return out, err
 		}
 	}
+	if out.Mode == "enforce" {
+		if e := storagePreparationAvailable(ctx, tx, now); e != nil {
+			var wait *domain.PreparationWaitError
+			if !errors.As(e, &wait) {
+				return out, e
+			}
+			// Storage availability is shared by every candidate. Rechecking it
+			// for thousands of candidates only holds the coordinator until the
+			// request times out. Existing grants and accepted uploads survive.
+			phase = "storage_wait"
+			slog.InfoContext(ctx, "twitch admissions waiting for storage", "reason_code", wait.Code, "reason", wait.Message, "redelivered_grants", len(out.Grants))
+			err = tx.Commit(ctx)
+			committed = err == nil
+			return out, err
+		}
+	}
 	if len(out.Grants) >= q.Limit {
 		phase = "redelivery"
 		err = tx.Commit(ctx)
@@ -157,6 +178,23 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 	quotaRows.Close()
 	if err = quotaRows.Err(); err != nil {
 		return out, err
+	}
+	if out.DailyRemaining == 0 {
+		// Revalidation of a source already charged today remains quota-exempt.
+		// Skip full planning only when no such source can need a new grant.
+		var recovery bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_imports i WHERE i.id=ANY($1::text[]) AND NOT i.rejected AND i.state IN('discovered','upload_failed') AND i.media_state NOT IN('ready','expired') AND NOT EXISTS(SELECT 1 FROM twitch_download_grants g WHERE g.clip_id=i.twitch_clip_id AND g.state IN('active','consumed')) AND EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived))`, spentIDs).Scan(&recovery); err != nil {
+			return out, err
+		}
+		if !recovery {
+			phase = "daily_quota_full"
+			if out.Mode == "shadow" {
+				return out, nil
+			}
+			err = tx.Commit(ctx)
+			committed = err == nil
+			return out, err
+		}
 	}
 	blockedChannels := []string{}
 	for broadcaster, ids := range channelImports {
@@ -284,7 +322,11 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 		for importID := range af.Recoveries {
 			recoveryIDs = append(recoveryIDs, importID)
 		}
-		candidates, e := tx.Query(ctx, `SELECT i.id,i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=$1 AND NOT fs.excluded AND NOT i.rejected AND i.media_state NOT IN('ready','expired') AND i.state IN('discovered','upload_failed') AND (i.request->'source'->>'created_at')::timestamptz BETWEEN $3::timestamptz-make_interval(hours=>$5) AND $3::timestamptz-make_interval(mins=>$6) AND COALESCE((i.request->'source'->>'view_count')::bigint,0)>=$7 AND COALESCE((i.request->'source'->>'duration_sec')::float8,0) BETWEEN $8 AND $9 AND($10='' OR(i.request->'source'->>'language'=$10 AND i.request->'source'->>'language_source'='clip')) AND(($11='category' AND i.request->'source'->>'game_id'=$12) OR($11<>'category' AND(i.request->'source'->>'broadcaster_id'=ANY($13::text[]) OR $14))) AND($15 OR i.id=ANY($16::text[])) AND(i.request->'source'->>'broadcaster_id'<>ALL($17::text[]) OR i.id=ANY($16::text[])) AND NOT EXISTS(SELECT 1 FROM twitch_download_grants g WHERE g.clip_id=i.twitch_clip_id AND g.state IN('active','consumed')) ORDER BY CASE WHEN i.id=ANY($18::text[]) THEN 0 ELSE 1 END,`+twitchGrowthOrder("i", "$2", "$3::timestamptz", "$4")+` LIMIT 1000`, id, f.RankingMode, now, twitch.GrowthStaleAfter(f.PollIntervalMinutes).Seconds(), min(f.WindowHours, f.MaxSourceAgeHours), f.MinAgeMinutes, f.MinViews, f.MinDurationSec, f.MaxDurationSec, f.Language, f.SourceMode, f.CategoryID, f.BroadcasterIDs, f.LegacyLength && len(f.BroadcasterIDs) == 0, out.DailyRemaining > 0, spentIDs, blockedChannels, recoveryIDs)
+		newDemand := f.ShortsEnabled && af.ShortSlots > 0 || allocationNeedsCompilation(af)
+		if !newDemand && len(recoveryIDs) == 0 {
+			continue
+		}
+		candidates, e := tx.Query(ctx, `SELECT i.id,i.request FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=$1 AND NOT fs.excluded AND NOT i.rejected AND i.media_state NOT IN('ready','expired') AND i.state IN('discovered','upload_failed') AND (i.request->'source'->>'created_at')::timestamptz BETWEEN $3::timestamptz-make_interval(hours=>$5) AND $3::timestamptz-make_interval(mins=>$6) AND COALESCE((i.request->'source'->>'view_count')::bigint,0)>=$7 AND COALESCE((i.request->'source'->>'duration_sec')::float8,0) BETWEEN $8 AND $9 AND($10='' OR(i.request->'source'->>'language'=$10 AND i.request->'source'->>'language_source'='clip')) AND(($11='category' AND i.request->'source'->>'game_id'=$12) OR($11<>'category' AND(i.request->'source'->>'broadcaster_id'=ANY($13::text[]) OR $14))) AND($15 OR i.id=ANY($16::text[])) AND($19 OR i.id=ANY($18::text[])) AND(i.request->'source'->>'broadcaster_id'<>ALL($17::text[]) OR i.id=ANY($16::text[])) AND NOT EXISTS(SELECT 1 FROM twitch_download_grants g WHERE g.clip_id=i.twitch_clip_id AND g.state IN('active','consumed')) ORDER BY CASE WHEN i.id=ANY($18::text[]) THEN 0 ELSE 1 END,`+twitchGrowthOrder("i", "$2", "$3::timestamptz", "$4")+` LIMIT 1000`, id, f.RankingMode, now, twitch.GrowthStaleAfter(f.PollIntervalMinutes).Seconds(), min(f.WindowHours, f.MaxSourceAgeHours), f.MinAgeMinutes, f.MinViews, f.MinDurationSec, f.MaxDurationSec, f.Language, f.SourceMode, f.CategoryID, f.BroadcasterIDs, f.LegacyLength && len(f.BroadcasterIDs) == 0, out.DailyRemaining > 0, spentIDs, blockedChannels, recoveryIDs, newDemand)
 		if e != nil {
 			return out, e
 		}
@@ -335,7 +377,7 @@ func (s *Store) AllocateTwitchDownloads(ctx context.Context, q twitch.AdmissionR
 				continue
 			}
 			recovering := af.Recoveries[af.Candidates[0].ImportID]
-			if af.Flow.CompilationsEnabled && !af.Target.IsZero() && (recovering == "compilation" || (recovering == "" && (af.PlannedClips < af.Flow.CompilationMinClips || af.PlannedDuration < af.Flow.CompilationMinDurationSec))) {
+			if af.Flow.CompilationsEnabled && !af.Target.IsZero() && (recovering == "compilation" || (recovering == "" && allocationNeedsCompilation(af))) {
 				comp = append(comp, af)
 			}
 			if af.Flow.ShortsEnabled && (recovering == "short" || (recovering == "" && af.ShortSlots > 0)) {

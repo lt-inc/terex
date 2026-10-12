@@ -114,7 +114,7 @@ func (s *Store) ObserveTwitchSources(ctx context.Context, r twitch.ObservationRe
 	if err = twitchResetRequestAllowed(ctx, tx, r.Epoch); err != nil {
 		return nil, err
 	}
-	f, err := flowByID(ctx, tx, r.FlowID)
+	f, err := scanFlow(tx.QueryRow(ctx, `SELECT `+collectorFlowCols+` FROM twitch_flows WHERE id=$1 AND NOT archived`, r.FlowID))
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,7 @@ func (s *Store) ObserveTwitchSources(ctx context.Context, r twitch.ObservationRe
 		if e != nil {
 			return nil, e
 		}
-		if e = createFlowShort(ctx, tx, id, f.ID, now); e != nil {
+		if e = createFlowShortWithCurrent(ctx, tx, id, f, now); e != nil {
 			return nil, e
 		}
 		v, e := flowImport(ctx, tx, id, f.ID)
@@ -455,24 +455,28 @@ func (s *Store) FinishFlowImport(ctx context.Context, id string, generation int6
 	return out, tx.Commit(ctx)
 }
 func createFlowShort(ctx context.Context, tx pgx.Tx, id, flow string, now time.Time) error {
-	current, err := flowByID(ctx, tx, flow)
+	current, err := scanFlow(tx.QueryRow(ctx, `SELECT `+collectorFlowCols+` FROM twitch_flows WHERE id=$1 AND NOT archived`, flow))
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	return createFlowShortWithCurrent(ctx, tx, id, current, now)
+}
+
+// Observe holds the coordinator lock and has already loaded the current flow.
+// Reuse it instead of calculating UI counts once for each discovered source.
+func createFlowShortWithCurrent(ctx context.Context, tx pgx.Tx, id string, current twitch.Flow, now time.Time) error {
+	flow := current.ID
 	if !current.Enabled {
-		return nil
-	}
-	if err = confirmedFlow(ctx, tx, current); err != nil {
 		return nil
 	}
 	var b, vb []byte
 	var excluded bool
 	var media string
 	var reservedAt *time.Time
-	err = tx.QueryRow(ctx, `SELECT fs.config,fs.excluded,m.verified,m.id,fs.reserved_at FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 AND fs.import_id=$2 AND NOT i.rejected AND i.media_state='ready' AND m.storage_state='available'`, flow, id).Scan(&b, &excluded, &vb, &media, &reservedAt)
+	err := tx.QueryRow(ctx, `SELECT fs.config,fs.excluded,m.verified,m.id,fs.reserved_at FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1 AND fs.import_id=$2 AND NOT i.rejected AND i.media_state='ready' AND m.storage_state='available'`, flow, id).Scan(&b, &excluded, &vb, &media, &reservedAt)
 	if err == pgx.ErrNoRows {
 		return nil
 	}
@@ -480,6 +484,9 @@ func createFlowShort(ctx context.Context, tx pgx.Tx, id, flow string, now time.T
 		return err
 	}
 	if excluded {
+		return nil
+	}
+	if err = confirmedFlow(ctx, tx, current); err != nil {
 		return nil
 	}
 	var f twitch.Flow

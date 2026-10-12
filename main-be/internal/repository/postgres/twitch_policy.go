@@ -23,7 +23,7 @@ func policyMode(ctx context.Context, tx pgx.Tx) (string, error) {
 }
 
 func currentFlowPolicy(ctx context.Context, tx pgx.Tx, id string) (twitch.Flow, error) {
-	return scanFlow(tx.QueryRow(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE id=$1`, id))
+	return scanFlow(tx.QueryRow(ctx, `SELECT `+collectorFlowCols+` FROM twitch_flows WHERE id=$1`, id))
 }
 
 func waitPreparation(code, message string, now time.Time) *domain.PreparationWaitError {

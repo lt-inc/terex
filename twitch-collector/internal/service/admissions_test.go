@@ -13,10 +13,12 @@ type retryAdmissionsAPI struct {
 	domain.Terex
 	calls int
 	fail  bool
+	limit int
 }
 
-func (a *retryAdmissionsAPI) Admissions(context.Context, twitch.AdmissionRequest) (twitch.AdmissionResult, error) {
+func (a *retryAdmissionsAPI) Admissions(_ context.Context, q twitch.AdmissionRequest) (twitch.AdmissionResult, error) {
 	a.calls++
+	a.limit = q.Limit
 	if a.fail {
 		return twitch.AdmissionResult{}, context.DeadlineExceeded
 	}
@@ -37,8 +39,12 @@ func TestAdmissionsTimeoutBacksOffAndRecoveryQueuesOnlyOnce(t *testing.T) {
 	api, store := &retryAdmissionsAPI{fail: true}, &retryAdmissionsStore{}
 	s := New(store, nil, api, nil, nil)
 	cfg := twitch.CollectorConfig{Epoch: 1, Settings: settings()}
+	cfg.Settings.DailyDownloads = 100
 	if _, err := s.queueAdmissions(context.Background(), cfg); err == nil {
 		t.Fatal("missing failed allocation")
+	}
+	if api.limit != admissionBufferSize || cfg.Settings.DailyDownloads != 100 {
+		t.Fatal("execution buffer changed the daily quota", api.limit, cfg.Settings.DailyDownloads)
 	}
 	if _, err := s.queueAdmissions(context.Background(), cfg); err != nil || api.calls != 1 || store.queued != 0 {
 		t.Fatal("failed allocation was immediately repeated", api.calls, err)
@@ -55,5 +61,10 @@ func TestAdmissionsTimeoutBacksOffAndRecoveryQueuesOnlyOnce(t *testing.T) {
 	cancel()
 	if _, err := s.queueAdmissions(canceled, cfg); err == nil || api.calls != 2 {
 		t.Fatal("expired pass sent an allocation request", api.calls, err)
+	}
+	cfg.Settings.DailyDownloads = 3
+	s.lastAdmissionsAt = time.Time{}
+	if _, err := s.queueAdmissions(context.Background(), cfg); err != nil || api.limit != 3 {
+		t.Fatal("buffer exceeded the configured daily quota", api.limit, err)
 	}
 }

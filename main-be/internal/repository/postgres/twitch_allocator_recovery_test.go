@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"terex/main-be/internal/domain"
 	"terex/proto/twitch"
 )
 
@@ -68,5 +69,45 @@ func TestAllocatorRenewsExistingPreparationAfterGrantExpiry(t *testing.T) {
 				t.Fatal("recovery reserved more calendar space", reservations, originalReservations, err)
 			}
 		})
+	}
+}
+
+func TestAllocatorStorageWaitRetainsGrantsWithoutNewPreparation(t *testing.T) {
+	s, account, settings := twitchFixture(t)
+	ctx, now := context.Background(), time.Now().UTC().Truncate(time.Hour)
+	settings.AdmissionMode = "enforce"
+	if err := s.SaveTwitchSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	f := flowFixture(t, s, account, true, now)
+	f.CompilationsEnabled = false
+	var err error
+	if f, err = s.SaveTwitchFlow(ctx, f, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ObserveTwitchSources(ctx, twitch.ObservationRequest{FlowID: f.ID, FlowVersion: f.Version, Sources: []twitch.Source{flowSource("storage-first", "123", 20, now), flowSource("storage-next", "123", 20, now)}}, now); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.AllocateTwitchDownloads(ctx, twitch.AdmissionRequest{Limit: 1}, now)
+	if err != nil || len(first.Grants) != 1 {
+		t.Fatal(first, err)
+	}
+	if err = s.SaveTwitchStoragePressure(ctx, domain.TwitchStoragePressure{Required: true, State: "unknown", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := s.AllocateTwitchDownloads(ctx, twitch.AdmissionRequest{Limit: 10}, now)
+	if err != nil || len(waiting.Grants) != 1 || waiting.Grants[0].AdmissionSequence != first.Grants[0].AdmissionSequence {
+		t.Fatal("storage wait revoked an existing assignment or created new work", waiting, err)
+	}
+	var grants, reservations int
+	if err = s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM twitch_download_grants),(SELECT count(*) FROM twitch_preparation_reservations)`).Scan(&grants, &reservations); err != nil || grants != 1 || reservations != 1 {
+		t.Fatal("storage wait persisted speculative preparation", grants, reservations, err)
+	}
+	if err = s.SaveTwitchStoragePressure(ctx, domain.TwitchStoragePressure{Required: true, State: "ok", ObservedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := s.AllocateTwitchDownloads(ctx, twitch.AdmissionRequest{Limit: 10}, now)
+	if err != nil || len(resumed.Grants) != 2 {
+		t.Fatal("fresh storage state did not resume admission", resumed, err)
 	}
 }
