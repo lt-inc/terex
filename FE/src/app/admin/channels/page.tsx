@@ -332,6 +332,14 @@ function ChannelSettings({
               ? toUTC7(channel.last_checked_at) + " UTC+7"
               : "never"}
           </p>
+          {channel.last_feed_error && (
+            <p className="mt-1 text-xs text-amber-300" role="status">
+              {channel.last_feed_error}
+              {channel.next_feed_check_at && (
+                <> Следующая проверка: {toUTC7(channel.next_feed_check_at)} UTC+7.</>
+              )}
+            </p>
+          )}
         </div>
         <select
           disabled={busy}

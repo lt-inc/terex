@@ -282,7 +282,7 @@ func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now
 	// Render heartbeats take the shared reset fence then the attempt/revision
 	// locks. They must not wait behind discovery/admission's global lock.
 	var render bool
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM render_attempts WHERE id=$1)`, q.AttemptID).Scan(&render); err != nil {
+	if err := s.controlDB().QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM render_attempts WHERE id=$1)`, q.AttemptID).Scan(&render); err != nil {
 		return nil, err
 	}
 	if render {
@@ -341,7 +341,7 @@ func (s *Store) RenewWorkflow(ctx context.Context, q *workflow.LeaseRequest, now
 }
 
 func (s *Store) renewRenderWorkflow(ctx context.Context, q *workflow.LeaseRequest, now time.Time) (*workflow.Permit, error) {
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.controlDB().Begin(ctx)
 	if err != nil {
 		return nil, err
 	}

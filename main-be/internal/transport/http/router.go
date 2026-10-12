@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -170,6 +169,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func fail(w http.ResponseWriter, err error) {
+	recordRequestError(w, err)
 	var wait *domain.PreparationWaitError
 	if errors.As(err, &wait) {
 		writeJSON(w, http.StatusConflict, map[string]any{"detail": wait.Message, "code": wait.Code, "next_check_at": wait.NextCheckAt})
@@ -185,10 +185,12 @@ func fail(w http.ResponseWriter, err error) {
 	if errors.Is(err, domain.ErrInvalid) {
 		code = http.StatusBadRequest
 	}
-	if code == 500 {
-		slog.Error("request failed", "err", err)
+	reason := requestErrorReason(err)
+	if code == http.StatusInternalServerError && (reason == "deadline_exceeded" || reason == "dependency_unavailable") {
+		code = http.StatusServiceUnavailable
+		w.Header().Set("Retry-After", "5")
 	}
-	writeJSON(w, code, map[string]string{"detail": err.Error()})
+	writeJSON(w, code, map[string]string{"detail": err.Error(), "code": reason})
 }
 
 func badRequest(w http.ResponseWriter, msg string) {

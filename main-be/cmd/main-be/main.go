@@ -99,7 +99,7 @@ func run() error {
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
 
 	twitchSvc := &twitchservice.Service{Repo: store, Gateway: gpu.IngestGateway(), Gpu: gpu}
-	monitorSvc := &twitchmonitor.Service{Repo: store, Flows: store, Diagnostics: twitchSvc, Collector: collector.NewMonitoring(cfg.CollectorURL, cfg.CollectorToken), AppURL: cfg.AppPublicURL}
+	monitorSvc := &twitchmonitor.Service{Repo: store, Flows: store, Diagnostics: twitchSvc, Collector: collector.NewMonitoring(cfg.CollectorURL, cfg.CollectorToken), AppURL: cfg.AppPublicURL, FlowsPerTick: cfg.TwitchMonitorFlowsPerTick}
 	storageSvc := storagelifecycle.New(store, gpu.StorageGateway(), cfg.TwitchCleanupEnabled)
 	resetSvc := twitchreset.New(store, storageSvc, gpu.ResetGateway())
 	storageSvc.ConfigurePressure(cfg.TwitchStoragePrometheusURL, cfg.TwitchStorageMinFreeBytes, cfg.TwitchStorageMinFreePercent)

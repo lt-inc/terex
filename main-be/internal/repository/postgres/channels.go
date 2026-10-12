@@ -10,12 +10,12 @@ import (
 	"terex/main-be/internal/domain"
 )
 
-const channelCols = "id, name, url, yt_channel_id, approve_mode, enabled, spec, last_checked_at"
+const channelCols = "id, name, url, yt_channel_id, approve_mode, enabled, spec, last_checked_at, feed_error_code, last_feed_error, feed_failure_count, next_feed_check_at"
 
 func scanChannel(r pgx.Row) (domain.Channel, error) {
 	var c domain.Channel
 	var spec []byte
-	err := r.Scan(&c.ID, &c.Name, &c.URL, &c.YTChannelID, &c.ApproveMode, &c.Enabled, &spec, &c.LastCheckedAt)
+	err := r.Scan(&c.ID, &c.Name, &c.URL, &c.YTChannelID, &c.ApproveMode, &c.Enabled, &spec, &c.LastCheckedAt, &c.FeedErrorCode, &c.LastFeedError, &c.FeedFailureCount, &c.NextFeedCheckAt)
 	if err == nil && len(spec) > 0 {
 		err = json.Unmarshal(spec, &c.Spec)
 	}
@@ -61,7 +61,8 @@ func (s *Store) UpdateChannel(ctx context.Context, id int64, u domain.ChannelUpd
 		spec, _ = json.Marshal(u.Spec)
 	}
 	_, err := s.pool.Exec(ctx, `UPDATE channels SET name=COALESCE($2,name), approve_mode=COALESCE($3,approve_mode),
-		enabled=COALESCE($4,enabled), spec=COALESCE($5::jsonb,spec) WHERE id=$1`, id, u.Name, u.ApproveMode, u.Enabled, spec)
+		enabled=COALESCE($4,enabled), spec=COALESCE($5::jsonb,spec),
+		next_feed_check_at=CASE WHEN $4::boolean IS TRUE THEN NULL ELSE next_feed_check_at END WHERE id=$1`, id, u.Name, u.ApproveMode, u.Enabled, spec)
 	if err != nil {
 		return domain.Channel{}, err
 	}
@@ -89,6 +90,13 @@ func (s *Store) MarkSeen(ctx context.Context, channelID int64, ids []string) ([]
 }
 
 func (s *Store) TouchChannel(ctx context.Context, id int64, at time.Time) error {
-	_, err := s.pool.Exec(ctx, "UPDATE channels SET last_checked_at=$2 WHERE id=$1", id, at)
+	_, err := s.pool.Exec(ctx, `UPDATE channels SET last_checked_at=$2,
+		feed_error_code='',last_feed_error='',feed_failure_count=0,next_feed_check_at=NULL WHERE id=$1`, id, at)
+	return err
+}
+
+func (s *Store) RecordChannelFeedFailure(ctx context.Context, id int64, code, message string, nextCheck time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE channels SET feed_error_code=$2,last_feed_error=$3,
+		feed_failure_count=feed_failure_count+1,next_feed_check_at=$4 WHERE id=$1`, id, code, message, nextCheck)
 	return err
 }

@@ -3,7 +3,10 @@ package monitor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"terex/main-be/internal/domain"
@@ -48,7 +51,10 @@ func (s *Service) Add(ctx context.Context, c domain.Channel) (domain.Channel, er
 		return created, err
 	}
 	if err := s.baseline(ctx, created); err != nil {
-		slog.WarnContext(ctx, "channel baseline failed; first tick will baseline", "channel", created.ID, "err", err)
+		if !s.recordFeedFailure(ctx, created, err) {
+			slog.WarnContext(ctx, "channel baseline failed; first tick will baseline", "channel", created.ID, "err", err)
+		}
+		return s.Channels.GetChannel(ctx, created.ID)
 	}
 	return created, nil
 }
@@ -86,15 +92,24 @@ func (s *Service) Tick(ctx context.Context) error {
 		if !c.Enabled {
 			continue
 		}
+		if c.NextFeedCheckAt != nil && s.now().Before(*c.NextFeedCheckAt) {
+			continue
+		}
 		if c.LastCheckedAt == nil {
 			if err := s.baseline(ctx, c); err != nil {
-				slog.ErrorContext(ctx, "baseline failed", "channel", c.ID, "err", err)
+				if !s.recordFeedFailure(ctx, c, err) {
+					slog.ErrorContext(ctx, "baseline failed", "channel", c.ID, "err", err)
+				}
+			} else if c.FeedErrorCode != "" {
+				slog.InfoContext(ctx, "YouTube feed recovered", "channel", c.ID, "previous_reason_code", c.FeedErrorCode)
 			}
 			continue
 		}
 		vids, err := s.Feed.Latest(ctx, c.YTChannelID)
 		if err != nil {
-			slog.ErrorContext(ctx, "feed failed", "channel", c.ID, "err", err)
+			if !s.recordFeedFailure(ctx, c, err) {
+				slog.ErrorContext(ctx, "feed failed", "channel", c.ID, "err", err)
+			}
 			continue
 		}
 		ids := make([]string, len(vids))
@@ -119,7 +134,37 @@ func (s *Service) Tick(ctx context.Context) error {
 				slog.InfoContext(ctx, "job created from channel", "channel", c.ID, "video", fresh[i], "job", jobID)
 			}
 		}
-		_ = s.Channels.TouchChannel(ctx, c.ID, s.now())
+		if err := s.Channels.TouchChannel(ctx, c.ID, s.now()); err != nil {
+			slog.ErrorContext(ctx, "channel check completion failed", "channel", c.ID, "err", err)
+		} else if c.FeedErrorCode != "" {
+			slog.InfoContext(ctx, "YouTube feed recovered", "channel", c.ID, "previous_reason_code", c.FeedErrorCode)
+		}
 	}
 	return nil
+}
+
+func (s *Service) recordFeedFailure(ctx context.Context, c domain.Channel, err error) bool {
+	var upstream *domain.FeedHTTPError
+	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusNotFound {
+		return false
+	}
+	delay := 5 * time.Minute
+	if c.FeedFailureCount == 1 {
+		delay = 15 * time.Minute
+	} else if c.FeedFailureCount >= 2 {
+		delay = time.Hour
+	}
+	nextCheck := s.now().Add(delay)
+	message := fmt.Sprintf("YouTube RSS недоступен (HTTP 404) для канала %s. Канал сохранён; проверка будет повторена автоматически.", c.YTChannelID)
+	if saveErr := s.Channels.RecordChannelFeedFailure(ctx, c.ID, "feed_not_found", message, nextCheck); saveErr != nil {
+		slog.ErrorContext(ctx, "YouTube feed retry state save failed", "channel", c.ID, "err", saveErr)
+		return true
+	}
+	// Repeated 404s remain visible in the channel status without filling ERROR logs.
+	if c.FeedErrorCode != "feed_not_found" {
+		slog.WarnContext(ctx, "YouTube feed unavailable; retry scheduled", "channel", c.ID, "reason_code", "feed_not_found", "next_check_at", nextCheck, "err", err)
+	} else {
+		slog.DebugContext(ctx, "YouTube feed retry scheduled", "channel", c.ID, "reason_code", "feed_not_found", "next_check_at", nextCheck)
+	}
+	return true
 }

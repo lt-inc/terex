@@ -2,10 +2,16 @@ package twitchreset
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"terex/main-be/internal/domain"
 	"terex/main-be/internal/service/storagelifecycle"
@@ -14,10 +20,18 @@ import (
 )
 
 type Service struct {
-	Repo    domain.TwitchResetRepo
-	Storage *storagelifecycle.Service
-	Gateway workflow.ResetGateway
-	mu      sync.Mutex
+	Repo               domain.TwitchResetRepo
+	Storage            *storagelifecycle.Service
+	Gateway            workflow.ResetGateway
+	mu                 sync.Mutex
+	Now                func() time.Time
+	lastEpoch          int64
+	lastActive         bool
+	observed           bool
+	nextSyncAt         time.Time
+	syncFailures       int
+	gpuOffline         bool
+	lastOfflineWarning time.Time
 }
 
 func New(repo domain.TwitchResetRepo, storage *storagelifecycle.Service, gateway workflow.ResetGateway) *Service {
@@ -38,23 +52,93 @@ func (s *Service) Status(ctx context.Context) (twitch.ResetStatus, error) {
 func (s *Service) AcknowledgeCollector(ctx context.Context, q twitch.ResetCollectorAck) error {
 	return s.Repo.AcknowledgeTwitchReset(ctx, q, time.Now().UTC())
 }
+
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now().UTC()
+}
+
+func (s *Service) control(ctx context.Context) (twitch.ResetStatus, error) {
+	if repo, ok := s.Repo.(interface {
+		TwitchResetControl(context.Context) (twitch.ResetStatus, error)
+	}); ok {
+		return repo.TwitchResetControl(ctx)
+	}
+	return s.Status(ctx)
+}
+
 func (s *Service) Tick(ctx context.Context) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out, err := s.Status(ctx)
+	out, err := s.control(ctx)
 	if err != nil {
 		return err
 	}
 	active := out.State != "idle" && out.State != "completed"
+	changed := !s.observed || s.lastEpoch != out.Epoch || s.lastActive != active
+	s.observed, s.lastEpoch, s.lastActive = true, out.Epoch, active
+	if changed {
+		s.nextSyncAt = time.Time{}
+		s.syncFailures = 0
+	}
+	if !active && s.now().Before(s.nextSyncAt) {
+		if s.gpuOffline {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("twitch.reset.outcome", "waiting_for_gpu"))
+		}
+		return nil
+	}
 	if s.Gateway == nil {
 		return fmt.Errorf("Twitch reset GPU gateway is unavailable")
 	}
-	rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	rpcTimeout := 10 * time.Second
+	if !active {
+		rpcTimeout = 5 * time.Second
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	drained, gpuErr := s.Gateway.SetTwitchMaintenance(rpcCtx, &workflow.TwitchMaintenanceRequest{Epoch: out.Epoch, Active: active})
 	cancel()
 	if !active {
-		return gpuErr
+		if gpuErr == nil && drained == nil {
+			return fmt.Errorf("Twitch reset GPU synchronization returned no status")
+		}
+		if gpuErr != nil {
+			// An unavailable GPU is expected while its node is off. Keep syncing
+			// durable epoch after reconnect: a restarted GPU begins fenced.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if status.Code(gpuErr) != codes.Unavailable && status.Code(gpuErr) != codes.DeadlineExceeded && !errors.Is(gpuErr, context.DeadlineExceeded) {
+				return gpuErr
+			}
+			s.syncFailures++
+			delay := 15 * time.Second
+			if s.syncFailures == 2 {
+				delay = 30 * time.Second
+			}
+			if s.syncFailures >= 3 {
+				delay = time.Minute
+			}
+			s.nextSyncAt = s.now().Add(delay)
+			if !s.gpuOffline || s.now().Sub(s.lastOfflineWarning) >= 15*time.Minute {
+				slog.WarnContext(ctx, "Twitch GPU synchronization unavailable; retry scheduled", "epoch", out.Epoch, "reason_code", "dependency_unavailable", "next_check_at", s.nextSyncAt, "err", gpuErr)
+				s.lastOfflineWarning = s.now()
+			}
+			s.gpuOffline = true
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("twitch.reset.outcome", "waiting_for_gpu"))
+			return nil
+		}
+		if s.gpuOffline {
+			slog.InfoContext(ctx, "Twitch GPU synchronization recovered", "epoch", out.Epoch)
+		}
+		s.gpuOffline, s.syncFailures = false, 0
+		trace.SpanFromContext(ctx).SetAttributes(attribute.String("twitch.reset.outcome", "synchronized"))
+		s.nextSyncAt = s.now().Add(5 * time.Second)
+		return nil
 	}
+	// Active resets always contact the GPU, regardless of idle backoff. All
+	// failures below retain normal cron errors and durable failed reset state.
 	defer func() {
 		if err != nil {
 			_ = s.Repo.FailTwitchReset(context.WithoutCancel(ctx), out.ID, err.Error(), time.Now().UTC())

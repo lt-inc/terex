@@ -240,14 +240,18 @@ type DuePublication struct {
 // ── Channels (monitoring) ────────────────────────────────────────────────────
 
 type Channel struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"`
-	URL           string     `json:"url"`
-	YTChannelID   string     `json:"yt_channel_id"`
-	ApproveMode   string     `json:"approve_mode"`
-	Enabled       bool       `json:"enabled"`
-	Spec          VideoCard  `json:"spec"` // job template; youtubeUrl is filled per new video
-	LastCheckedAt *time.Time `json:"last_checked_at"`
+	ID               int64      `json:"id"`
+	Name             string     `json:"name"`
+	URL              string     `json:"url"`
+	YTChannelID      string     `json:"yt_channel_id"`
+	ApproveMode      string     `json:"approve_mode"`
+	Enabled          bool       `json:"enabled"`
+	Spec             VideoCard  `json:"spec"` // job template; youtubeUrl is filled per new video
+	LastCheckedAt    *time.Time `json:"last_checked_at"`
+	FeedErrorCode    string     `json:"feed_error_code,omitempty"`
+	LastFeedError    string     `json:"last_feed_error,omitempty"`
+	FeedFailureCount int        `json:"feed_failure_count,omitempty"`
+	NextFeedCheckAt  *time.Time `json:"next_feed_check_at,omitempty"`
 }
 
 type ChannelUpdate struct {

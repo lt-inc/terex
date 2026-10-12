@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -26,7 +27,28 @@ func (f *fakeChannels) MarkSeen(_ context.Context, _ int64, ids []string) ([]str
 	}
 	return fresh, nil
 }
-func (f *fakeChannels) TouchChannel(context.Context, int64, time.Time) error { f.touched++; return nil }
+func (f *fakeChannels) TouchChannel(_ context.Context, id int64, at time.Time) error {
+	f.touched++
+	for i := range f.chans {
+		if f.chans[i].ID == id {
+			f.chans[i].LastCheckedAt = &at
+			f.chans[i].FeedErrorCode, f.chans[i].LastFeedError = "", ""
+			f.chans[i].NextFeedCheckAt, f.chans[i].FeedFailureCount = nil, 0
+		}
+	}
+	return nil
+}
+
+func (f *fakeChannels) RecordChannelFeedFailure(_ context.Context, id int64, code, message string, next time.Time) error {
+	for i := range f.chans {
+		if f.chans[i].ID == id {
+			f.chans[i].FeedErrorCode, f.chans[i].LastFeedError = code, message
+			f.chans[i].FeedFailureCount++
+			f.chans[i].NextFeedCheckAt = &next
+		}
+	}
+	return nil
+}
 
 type fakeFeed struct{ vids []domain.FeedVideo }
 
@@ -81,5 +103,45 @@ func TestTickSkipsDisabled(t *testing.T) {
 	_ = s.Tick(context.Background())
 	if len(jobs.cards) != 0 || ch.touched != 0 {
 		t.Fatal("disabled channel must be ignored")
+	}
+}
+
+type failingFeed struct {
+	fakeFeed
+	calls int
+	err   error
+}
+
+func (f *failingFeed) Latest(context.Context, string) ([]domain.FeedVideo, error) {
+	f.calls++
+	return f.vids, f.err
+}
+
+func TestFeed404RetrySurvivesServiceRestartAndRecovers(t *testing.T) {
+	now := time.Unix(1000, 0)
+	ch := &fakeChannels{seen: map[string]bool{}, chans: []domain.Channel{{ID: 1, Enabled: true, YTChannelID: "UC"}}}
+	feed := &failingFeed{err: &domain.FeedHTTPError{StatusCode: http.StatusNotFound}}
+	s := &Service{Channels: ch, Feed: feed, Jobs: &fakeJobs{}, Now: func() time.Time { return now }}
+	for _, delay := range []time.Duration{5 * time.Minute, 15 * time.Minute, time.Hour} {
+		if err := s.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if ch.chans[0].NextFeedCheckAt == nil || ch.chans[0].NextFeedCheckAt.Sub(now) != delay {
+			t.Fatalf("wrong backoff: %+v", ch.chans[0])
+		}
+		calls := feed.calls
+		// Persisted retry time, rather than process memory, controls a restart.
+		s = &Service{Channels: ch, Feed: feed, Jobs: &fakeJobs{}, Now: func() time.Time { return now }}
+		if err := s.Tick(context.Background()); err != nil || feed.calls != calls {
+			t.Fatal("early retry after restart")
+		}
+		now = *ch.chans[0].NextFeedCheckAt
+	}
+	feed.err = nil
+	if err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !ch.chans[0].Enabled || ch.chans[0].LastCheckedAt == nil || ch.chans[0].FeedErrorCode != "" || ch.chans[0].NextFeedCheckAt != nil {
+		t.Fatalf("recovery failed: %+v", ch.chans[0])
 	}
 }

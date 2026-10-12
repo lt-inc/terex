@@ -14,7 +14,7 @@ import (
 func (s *Store) TwitchCollectorPressure(ctx context.Context, q twitch.PressureRequest, now time.Time) (out twitch.PressureResult, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.controlDB().BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return out, err
 	}
@@ -35,17 +35,23 @@ func (s *Store) TwitchCollectorPressure(ctx context.Context, q twitch.PressureRe
 		return
 	}
 	s.pressureMu.Lock()
-	if s.pressureEpoch == out.Epoch && !s.pressureAt.IsZero() && now.Sub(s.pressureAt) < 5*time.Second {
+	cached := s.pressureEpoch == out.Epoch && !s.pressureAt.IsZero() && now.Sub(s.pressureAt) < 5*time.Second
+	if cached {
 		out.PendingPhysical = s.pressureCount
-	} else {
-		err = tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(i.media_id,i.id)) FROM twitch_imports i WHERE `+pendingTwitchSource).Scan(&out.PendingPhysical)
-		if err == nil {
-			s.pressureCount = out.PendingPhysical
-			s.pressureAt = now
-			s.pressureEpoch = out.Epoch
-		}
 	}
 	s.pressureMu.Unlock()
+	if !cached {
+		err = tx.QueryRow(ctx, `SELECT count(DISTINCT COALESCE(i.media_id,i.id)) FROM twitch_imports i WHERE `+pendingTwitchSource).Scan(&out.PendingPhysical)
+		if err == nil {
+			s.pressureMu.Lock()
+			if out.Epoch > s.pressureEpoch || (out.Epoch == s.pressureEpoch && !now.Before(s.pressureAt)) {
+				s.pressureCount = out.PendingPhysical
+				s.pressureAt = now
+				s.pressureEpoch = out.Epoch
+			}
+			s.pressureMu.Unlock()
+		}
+	}
 	if err != nil {
 		return
 	}

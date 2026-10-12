@@ -36,8 +36,15 @@ func TestMigrateContextWithPoolParameters(t *testing.T) {
 	if err = s.pool.QueryRow(ctx, "SELECT to_regclass('publications') IS NOT NULL,current_setting('application_name')='migration-startup-test'").Scan(&migrated, &session); err != nil || !migrated || !session {
 		t.Fatal("schema or session settings missing after startup", migrated, session, err)
 	}
-	if s.pool.Config().MaxConns != 2 {
-		t.Fatal("explicit pool maximum changed")
+	total := s.pool.Config().MaxConns
+	if s.controlDB() != s.pool {
+		total += s.controlDB().Config().MaxConns
+		if err = s.controlDB().QueryRow(ctx, "SELECT current_setting('application_name')='migration-startup-test'").Scan(&session); err != nil || !session {
+			t.Fatal("control pool lost explicit session settings", session, err)
+		}
+	}
+	if total != 2 {
+		t.Fatal("explicit total pool maximum changed")
 	}
 }
 
