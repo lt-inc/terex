@@ -201,7 +201,13 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 		return domain.ErrConflict
 	}
 	if p.Platform == "tiktok" && p.Status == "needs_attention" && action != "cancel" {
-		return fmt.Errorf("%w: reconcile the existing TikTok submission; automatic re-upload is disabled", domain.ErrConflict)
+		var uncertain bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM publication_attempts WHERE publication_id=$1 AND publication_version=$2 AND COALESCE((checkpoint->>'final_request_started')::bool,FALSE)) OR EXISTS(SELECT 1 FROM tiktok_worker_operations WHERE publication_id=$1 AND state='active')`, id, version).Scan(&uncertain); err != nil {
+			return err
+		}
+		if uncertain {
+			return fmt.Errorf("%w: reconcile the existing TikTok submission; automatic re-upload is disabled", domain.ErrConflict)
+		}
 	}
 	state := p.Status
 	cancel := p.CancelRequested
