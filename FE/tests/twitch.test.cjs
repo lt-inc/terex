@@ -18,6 +18,24 @@ function moduleFromSource(file, fetchMock) {
 const access = moduleFromSource("lib/admin-access.ts");
 const twitch = moduleFromSource("lib/twitch.ts");
 const source = moduleFromSource("lib/job-source.ts");
+const flow = moduleFromSource("lib/twitch-flow.ts");
+
+test("TikTok destinations preserve legacy YouTube schedules and permit independent TikTok-only flows", () => {
+  const legacy = { ...flow.defaultTwitchFlow(), name: "Legacy YouTube", account_id: 7, youtube_channel_id: "yt-id", channel_inputs: ["streamer"], auto_publish: true };
+  const normalized = flow.applyFlowDestinations(legacy);
+  assert.deepEqual(normalized.shorts_slots, legacy.shorts_slots);
+  assert.equal(normalized.account_id, 7);
+  assert.equal(normalized.daily_shorts, legacy.daily_shorts);
+  const tiktok = { provider: "tiktok", account_id: 9, remote_account_id: "tt-id", enabled: true, auto_publish: true, timezone: "Asia/Tomsk", shorts_slots: ["10:00", "16:00", "21:00"], daily_shorts: 3, schedule_horizon_hours: 24, visibility: "private" };
+  const both = flow.applyFlowDestinations({ ...normalized, destinations: [...normalized.destinations, tiktok] });
+  assert.equal(flow.validateTwitchFlow(both), null);
+  assert.equal(both.destinations[1].daily_shorts, 3);
+  const onlyTikTok = flow.applyFlowDestinations({ ...both, destinations: [tiktok] });
+  assert.equal(flow.validateTwitchFlow(onlyTikTok), null);
+  assert.equal(onlyTikTok.account_id, 0);
+  assert.equal(onlyTikTok.compilations_enabled, false);
+  assert.match(flow.validateTwitchFlow({ ...onlyTikTok, destinations: [{ ...tiktok, visibility: "" }] }), /видимость/);
+});
 const basic = (username, password) => `Basic ${Buffer.from(`${username}:${password}`, "utf8").toString("base64")}`;
 const headers = (values = {}) => new Headers(values);
 const config = { mode: "basic", username: "admin", password: "secret:colon", publicURL: "http://localhost:3000" };
@@ -64,7 +82,7 @@ test("Twitch defaults stay disabled and contradictory budgets or windows are rej
   assert.equal(defaults.daily_downloads, 0);
   assert.equal(twitch.validateTwitchSettings(defaults), null);
   assert.equal(twitch.validateTwitchSettings({ ...defaults, per_channel_daily_downloads: 100 }), null);
-  assert.match(twitch.validateTwitchSettings({ ...defaults, enabled: true }), /account/);
+  assert.equal(twitch.validateTwitchSettings({ ...defaults, enabled: true, target_account_id: 0 }), null);
   assert.match(twitch.validateTwitchSettings({ ...defaults, daily_downloads: 10, per_channel_daily_downloads: 11 }), /per-channel/);
   assert.match(twitch.validateTwitchSettings({ ...defaults, min_age_minutes: 72 * 60 }), /discovery window/);
   assert.match(twitch.validateTwitchSettings({ ...defaults, min_duration_sec: NaN }), /durations/);

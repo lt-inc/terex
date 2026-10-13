@@ -2,7 +2,10 @@ package renderer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
@@ -15,6 +18,29 @@ import (
 	"terex/gpu-be/internal/service/mediatmp"
 	"terex/proto/workflow"
 )
+
+type renderDigestKey struct{}
+
+func (s *Service) uploadRevision(ctx context.Context, ref domain.ObjectRef, file string) error {
+	if p, ok := ctx.Value(renderDigestKey{}).(*PreparedRender); ok {
+		f, err := os.Open(file)
+		if err != nil {
+			return err
+		}
+		h := sha256.New()
+		size, err := io.Copy(h, f)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		p.MediaSHA256 = hex.EncodeToString(h.Sum(nil))
+		p.MediaSizeBytes = size
+	}
+	return s.Store.Upload(ctx, ref, file)
+}
 
 func Cues(segs []domain.Segment) []workflow.Cue {
 	var out []workflow.Cue
@@ -156,7 +182,7 @@ func (s *Service) renderRevision(ctx context.Context, w workflow.RenderWork, loc
 			}
 		}
 		slog.InfoContext(ctx, "render profile selected", append(domain.MediaLogAttrs(ctx), "profile", "assembly_local", "original_download_skipped", true, "full_range_cut_skipped", true)...)
-		if err = s.Store.Upload(ctx, w.Output, out); err != nil {
+		if err = s.uploadRevision(ctx, w.Output, out); err != nil {
 			return domain.ObjectRef{}, err
 		}
 		return w.Output, nil
@@ -174,7 +200,7 @@ func (s *Service) renderRevision(ctx context.Context, w workflow.RenderWork, loc
 		if err = s.Media.(domain.ShortRenderer).RenderShort(ctx, domain.ShortRenderSpec{Source: src, Banner: banner, StartSec: w.StartSec, EndSec: w.EndSec, Rectangle: true}, out); err != nil {
 			return domain.ObjectRef{}, err
 		}
-		if err = s.Store.Upload(ctx, w.Output, out); err != nil {
+		if err = s.uploadRevision(ctx, w.Output, out); err != nil {
 			return domain.ObjectRef{}, err
 		}
 		return w.Output, nil
@@ -228,7 +254,7 @@ func (s *Service) renderRevision(ctx context.Context, w workflow.RenderWork, loc
 		}
 		cur = next
 	}
-	if err = s.Store.Upload(ctx, w.Output, cur); err != nil {
+	if err = s.uploadRevision(ctx, w.Output, cur); err != nil {
 		return domain.ObjectRef{}, err
 	}
 	return w.Output, nil

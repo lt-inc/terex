@@ -14,7 +14,7 @@ function runtimeConfig(): AdminAccessConfig {
 export function middleware(request: NextRequest) {
   const credentials = runtimeConfig();
   const access = adminAccess(request.nextUrl.pathname, request.method, request.headers, credentials);
-  if (access === "operator" || access === "service" || access === "oauth_callback") return NextResponse.next();
+  if (access === "operator" || access === "service" || access === "oauth_callback" || access === "pairing_payload") return NextResponse.next();
   const isAPI = request.nextUrl.pathname.startsWith("/api/");
   const response = isAPI
     ? NextResponse.json({ detail: accessDetail(access) }, { status: accessStatus(access, credentials) })

@@ -297,7 +297,7 @@ func (s *Store) ReserveFlowImport(ctx context.Context, r twitch.ImportRequest, n
 	}
 	if continuing {
 		var active bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id JOIN twitch_imports i ON i.id=fs.import_id WHERE i.twitch_clip_id=$1 AND NOT i.rejected AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id AND (`+currentFlowSourceEligible+`))`, r.Source.ClipID).Scan(&active); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id JOIN twitch_imports i ON i.id=fs.import_id WHERE i.twitch_clip_id=$1 AND NOT i.rejected AND NOT fs.excluded AND f.enabled AND NOT f.archived AND EXISTS(SELECT 1 FROM twitch_flow_destinations dest JOIN accounts da ON da.id=dest.account_id WHERE dest.flow_id=f.id AND dest.enabled AND da.connection_state='connected' AND da.remote_account_id=dest.remote_account_id) AND (`+currentFlowSourceEligible+`))`, r.Source.ClipID).Scan(&active); err != nil {
 			return twitch.Import{}, err
 		}
 		if !active {
@@ -616,12 +616,31 @@ func createFlowShortWithCurrent(ctx context.Context, tx pgx.Tx, id string, curre
 		return nil
 	}
 	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses WHERE youtube_channel_id=$1 AND format='short' AND media_id=$2) OR EXISTS(SELECT 1 FROM twitch_outputs WHERE flow_id=$3 AND source_id=$4 AND format='short')`, f.YouTubeChannelID, media, flow, id).Scan(&exists); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_outputs WHERE flow_id=$1 AND source_id=$2 AND format='short')`, flow, id).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {
 		return nil
 	}
+	var eligibleDestinations []twitch.Destination
+	for _, d := range current.PublicationDestinations() {
+		if !d.Enabled {
+			continue
+		}
+		var eligible bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM accounts WHERE id=$1 AND connection_state='connected' AND remote_account_id=$2) AND NOT EXISTS(SELECT 1 FROM twitch_source_uses WHERE youtube_channel_id=$3 AND format='short' AND media_id=$4)`, d.AccountID, d.RemoteAccountID, d.CapacityKey(), media).Scan(&eligible); err != nil {
+			return err
+		}
+		if eligible {
+			eligibleDestinations = append(eligibleDestinations, d)
+		}
+	}
+	if len(eligibleDestinations) == 0 {
+		return nil
+	}
+	current.Destinations = eligibleDestinations
+	f = destinationFlow(f, eligibleDestinations[0])
+	f.Destinations = eligibleDestinations
 	out, err := importByID(ctx, tx, id)
 	if err != nil {
 		return err
@@ -660,19 +679,28 @@ func createFlowShortWithCurrent(ctx context.Context, tx pgx.Tx, id string, curre
 	// Publication templates apply when a new release is created, even if its
 	// physical download was reserved under an older flow configuration.
 	f.Metadata = current.Metadata
+	f.Destinations = current.Destinations
 	rid, err := createTwitchDraft(ctx, tx, jid, clip, "twitch", "short", out.Source.URL, out.Source.ClipID, title, f.AccountID, f.Timezone, manifest, now, flowMetadataInput(current, "short", title, []twitch.Source{out.Source}))
 	if err != nil {
 		return err
 	}
 	auto := f.AutoPublish && current.AutoPublish && f.AutoEnabledAt != nil && !now.Before(*f.AutoEnabledAt)
-	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,source_id,account_id,youtube_channel_id,format,config,initial_revision_id,auto_eligible,created_at)VALUES($1,$2,$3,$4,$5,'short',$6,$7,$8,$9)`, clip, flow, id, f.AccountID, f.YouTubeChannelID, mustJSON(f), rid, auto, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,source_id,account_id,youtube_channel_id,format,config,initial_revision_id,auto_eligible,created_at)VALUES($1,$2,$3,$4,$5,'short',$6,$7,$8,$9)`, clip, flow, id, f.AccountID, flowDestinationKey(f), mustJSON(f), rid, auto, now); err != nil {
+		return err
+	}
+	if err = snapshotOutputDestinations(ctx, tx, clip, current, "short", auto, now); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET clip_id=$3 WHERE r.flow_id=$1 AND r.format='short' AND r.state='active' AND r.clip_id IS NULL AND EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=$2)`, flow, id, clip); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO twitch_source_uses(youtube_channel_id,format,media_id,clip_id,created_at)VALUES($1,'short',$2,$3,$4)`, f.YouTubeChannelID, media, clip, now); err != nil {
-		return err
+	for _, d := range current.PublicationDestinations() {
+		if !d.Enabled {
+			continue
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_source_uses(youtube_channel_id,format,media_id,clip_id,created_at)VALUES($1,'short',$2,$3,$4)ON CONFLICT DO NOTHING`, d.CapacityKey(), media, clip, now); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_flow_sources SET reserved_at=COALESCE(reserved_at,$3),config=$4,flow_version=$5 WHERE flow_id=$1 AND import_id=$2`, flow, id, now, mustJSON(f), f.Version); err != nil {
 		return err

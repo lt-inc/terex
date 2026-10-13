@@ -12,6 +12,7 @@ import {
   confirmAccount,
 } from "@/lib/api";
 import type { AccountRecord, OutData } from "@/types";
+import TikTokConnectionPanel from "./TikTokConnectionPanel";
 
 interface AccountRecordCardProps {
   record: AccountRecord;
@@ -336,7 +337,7 @@ export default function AccountRecordCard({
               >
                 Connection: {record.connection_state ?? "disconnected"}
               </span>
-              {record.remote_account_id && (
+              {record.remote_account_id && record.platform === "youtube" && (
                 <span className="text-xs text-slate-500">
                   Channel:{" "}
                   {record.remote_account_name ?? record.remote_account_id}
@@ -350,7 +351,7 @@ export default function AccountRecordCard({
                   </a>
                 </span>
               )}
-              {record.connection_state === "pending_confirmation" && (
+              {record.platform === "youtube" && record.connection_state === "pending_confirmation" && (
                 <div className="border border-amber-700 rounded-lg p-3 text-xs text-amber-300">
                   <p>
                     Verify that this is the YouTube channel you intend to
@@ -412,6 +413,8 @@ export default function AccountRecordCard({
                     </button>
                   )}
                 </div>
+              ) : record.platform === "tiktok" ? (
+                <TikTokConnectionPanel account={record} onUpdated={onUpdated} />
               ) : (
                 <span className="text-xs text-slate-500">
                   Provider connection will be available later.

@@ -68,6 +68,13 @@ const resetClipsSQL = `SELECT clip_id FROM clips WHERE job_id IN(` + resetJobsSQ
 
 func resetBlockers(ctx context.Context, tx pgx.Tx) ([]twitch.ResetBlocker, error) {
 	out := []twitch.ResetBlocker{}
+	var operations int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tiktok_worker_operations WHERE state='active'`).Scan(&operations); err != nil {
+		return nil, err
+	}
+	if operations > 0 {
+		out = append(out, twitch.ResetBlocker{Code: "tiktok_operations_active", Message: fmt.Sprintf("TikTok worker ещё выполняет %d операций; дождитесь фактического завершения", operations)})
+	}
 	rows, err := tx.Query(ctx, `SELECT p.id,p.status FROM publications p WHERE p.clip_id IN(`+resetClipsSQL+`) AND (
  p.status IN('uploading','uploaded','processing','verifying','needs_attention') OR
  (p.started_at IS NOT NULL AND p.status NOT IN('published','cancelled')) OR

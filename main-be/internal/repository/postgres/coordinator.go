@@ -109,7 +109,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		var status, worker, phase string
 		var expiry time.Time
 		var checkpoint []byte
-		err = tx.QueryRow(ctx, `SELECT publication_id,publication_version,status,worker_id,phase,COALESCE(lease_until,'epoch'::timestamptz),checkpoint FROM publication_attempts WHERE id=$1 FOR UPDATE`, q.AttemptID).Scan(&pid, &version, &status, &worker, &phase, &expiry, &checkpoint)
+		err = tx.QueryRow(ctx, `SELECT publication_id,publication_version,status,worker_id,phase,COALESCE(lease_until,dispatch_deadline,'epoch'::timestamptz),checkpoint FROM publication_attempts WHERE id=$1 FOR UPDATE`, q.AttemptID).Scan(&pid, &version, &status, &worker, &phase, &expiry, &checkpoint)
 		if err == pgx.ErrNoRows {
 			return out, nil
 		}
@@ -191,7 +191,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		if p.CancelRequested {
 			phase = "cancel_pending"
 		} else if connection != "connected" || ref.Object == "" {
-			if _, err = tx.Exec(ctx, `UPDATE publications SET status='blocked',error='Account OAuth connection is required' WHERE id=$1`, pid); err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE publications SET status='blocked',error_code=CASE WHEN platform='tiktok' THEN 'auth_required' ELSE error_code END,error='Account OAuth connection is required' WHERE id=$1`, pid); err != nil {
 				return nil, err
 			}
 			if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='failed',error='Account OAuth connection is required' WHERE id=$1`, q.AttemptID); err != nil {
@@ -211,7 +211,20 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 			visibility = "public"
 		}
 		out.Publication = &workflow.PublicationWork{PublicationID: pid, RevisionID: r.ID, ClipID: p.ClipID, AccountID: p.AccountID, Provider: p.Platform, RemoteAccountID: remote, CredentialRef: ref, Media: workflow.ObjectRef{Bucket: r.Bucket, Object: r.Object}, Metadata: meta, Visibility: visibility, State: phase, PublishAt: p.PublishAt, Checkpoint: cp}
-		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET worker_id=$2,lease_token=$3,lease_until=$4 WHERE id=$1`, q.AttemptID, q.WorkerID, token, until); err != nil {
+		if p.Platform == "tiktok" {
+			out.Publication.Metadata.Caption = p.Caption
+			if p.Caption == "" {
+				out.Publication.Metadata.Caption = tikTokCaption(p.Title, p.Description, p.Hashtags)
+			}
+			out.Publication.SessionRef = ref.Object
+			if err = tx.QueryRow(ctx, `SELECT a.session_version,r.media_sha256,r.media_size_bytes FROM accounts a CROSS JOIN clip_revisions r WHERE a.id=$1 AND r.id=$2`, p.AccountID, p.RevisionID).Scan(&out.Publication.SessionVersion, &out.Publication.MediaSHA256, &out.Publication.MediaSizeBytes); err != nil {
+				return nil, err
+			}
+			if err = tx.QueryRow(ctx, `SELECT COALESCE((metadata->>'retry_authorized')::bool,FALSE) FROM publications WHERE id=$1`, pid).Scan(&out.Publication.RetryAuthorized); err != nil {
+				return nil, err
+			}
+		}
+		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET worker_id=$2,lease_token=$3,lease_until=$4,execution_started_at=COALESCE(execution_started_at,$5),claimed_session_version=$6 WHERE id=$1`, q.AttemptID, q.WorkerID, token, until, now, out.Publication.SessionVersion); err != nil {
 			return nil, err
 		}
 		state := phase
@@ -254,8 +267,9 @@ func lockAttempt(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now ti
 		return pid, false, nil
 	}
 	var current int
-	err = tx.QueryRow(ctx, `SELECT version FROM publications WHERE id=$1 FOR UPDATE`, pid).Scan(&current)
-	return pid, err == nil && current == version, err
+	var sessionAllowed bool
+	err = tx.QueryRow(ctx, `SELECT p.version,p.platform<>'tiktok' OR (a.claimed_session_version>0 AND a.claimed_session_version=ac.session_version) FROM publications p JOIN publication_attempts a ON a.publication_id=p.id JOIN accounts ac ON ac.id=p.account_id WHERE p.id=$1 AND a.id=$2 FOR UPDATE OF p`, pid, q.AttemptID).Scan(&current, &sessionAllowed)
+	return pid, err == nil && current == version && sessionAllowed, err
 }
 func lockRender(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now time.Time) (int64, bool, error) {
 	var rid int64
@@ -413,6 +427,14 @@ func (s *Store) CheckpointWorkflow(ctx context.Context, q *workflow.CheckpointRe
 	if err = tx.QueryRow(ctx, `SELECT phase FROM publication_attempts WHERE id=$1`, q.AttemptID).Scan(&previousPhase); err != nil {
 		return false, err
 	}
+	// The worker persists the claim before this acknowledgement and starts
+	// physical operations only afterwards. A lost Claim reply must not create
+	// a registry entry whose release token never reached the worker.
+	if _, err = tx.Exec(ctx, `INSERT INTO tiktok_worker_operations(attempt_id,publication_id,lease_token,started_at)
+ SELECT $1,p.id,$2,$3 FROM publications p WHERE p.id=$4 AND p.platform='tiktok'
+ ON CONFLICT(attempt_id) DO NOTHING`, q.AttemptID, q.LeaseToken, now, pid); err != nil {
+		return false, err
+	}
 	if err = persistCheckpoint(ctx, tx, q.AttemptID, pid, q.Checkpoint, now); err != nil {
 		return false, err
 	}
@@ -492,7 +514,7 @@ func (s *Store) CompleteWorkflow(ctx context.Context, q *workflow.CompleteReques
 				return false, err
 			}
 		}
-		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='ready',bucket=$2,object=$3,error=NULL WHERE id=$1`, rid, q.Media.Bucket, q.Media.Object); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE clip_revisions SET render_state='ready',bucket=$2,object=$3,error=NULL,media_sha256=$4,media_size_bytes=$5 WHERE id=$1`, rid, q.Media.Bucket, q.Media.Object, q.MediaSHA256, q.MediaSizeBytes); err != nil {
 			return false, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE render_attempts SET status='completed',lease_token=NULL WHERE id=$1`, q.AttemptID); err != nil {
@@ -525,6 +547,16 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 	}
 	if ok {
 		state := q.State
+		var provider string
+		var uncertain bool
+		if err = tx.QueryRow(ctx, `SELECT p.platform,COALESCE((a.checkpoint->>'final_request_started')::bool,FALSE) FROM publications p JOIN publication_attempts a ON a.publication_id=p.id WHERE a.id=$1`, q.AttemptID).Scan(&provider, &uncertain); err != nil {
+			return false, err
+		}
+		if provider == "tiktok" && uncertain {
+			q.Retryable = false
+			state = "needs_attention"
+			q.Code = "upload_unknown"
+		}
 		delay := q.RetryAfterSeconds
 		if delay < 5 {
 			delay = 15
@@ -540,7 +572,7 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 			if err = tx.QueryRow(ctx, `SELECT count(*) FROM publication_attempts WHERE publication_id=$1 AND publication_version=$2 AND status='failed'`, pid, q.ExpectedVersion).Scan(&failures); err != nil {
 				return false, err
 			}
-			if failures >= 4 {
+			if failures >= 4 || (provider == "tiktok" && failures >= 2) {
 				state = "needs_attention"
 			}
 			backoff := 15 * (1 << min(failures, 6))
@@ -551,7 +583,7 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='failed',error=$2,updated_at=$3 WHERE id=$1`, q.AttemptID, q.Message, now); err != nil {
 			return false, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE publications SET status=$2,error=$3,next_attempt_at=$4 WHERE id=$1`, pid, state, q.Message, now.Add(time.Duration(delay)*time.Second)); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE publications SET status=$2,error=$3,next_attempt_at=$4,error_code=$5 WHERE id=$1`, pid, state, q.Message, now.Add(time.Duration(delay)*time.Second), q.Code); err != nil {
 			return false, err
 		}
 		if q.ReconnectRequired {

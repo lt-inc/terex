@@ -47,8 +47,8 @@ func expirePreparationTx(ctx context.Context, tx pgx.Tx, now time.Time) error {
 		return err
 	}
 	_, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET state='released',reason='policy_changed_or_expired'
- FROM twitch_flows f JOIN twitch_channel_limits l ON l.youtube_channel_id=f.youtube_channel_id
- WHERE r.flow_id=f.id AND r.state='active' AND(r.expires_at<=$1 OR r.slot_at<=$1 OR f.archived OR NOT f.enabled
+ FROM twitch_flows f,twitch_channel_limits l
+ WHERE r.flow_id=f.id AND l.youtube_channel_id=r.youtube_channel_id AND r.state='active' AND(r.expires_at<=$1 OR r.slot_at<=$1 OR f.archived OR NOT f.enabled
  OR r.slot_at>$1+make_interval(hours=>l.schedule_horizon_hours)
  OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_imports i ON i.id=ps.import_id
  JOIN twitch_flow_sources fs ON fs.flow_id=ps.flow_id AND fs.import_id=ps.import_id
@@ -64,9 +64,32 @@ type policySlot struct {
 }
 
 func calendarSlotsTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, format string, excludePID int64, excludePrep string, now time.Time) ([]policySlot, error) {
+	if format == "short" && len(f.Destinations) > 0 {
+		var all []policySlot
+		for _, d := range f.Destinations {
+			if !d.Enabled {
+				continue
+			}
+			connected, e := destinationConnected(ctx, tx, d)
+			if e != nil {
+				return nil, e
+			}
+			if !connected {
+				continue
+			}
+			df := destinationFlow(f, d)
+			df.Destinations = nil
+			slots, e := calendarSlotsTx(ctx, tx, df, format, excludePID, excludePrep, now)
+			if e != nil {
+				return nil, e
+			}
+			all = append(all, slots...)
+		}
+		return all, nil
+	}
 	var zone string
 	var daily, horizon int
-	err := tx.QueryRow(ctx, `SELECT timezone,CASE WHEN $2='compilation' THEN daily_compilations ELSE daily_shorts END,schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=$1`, f.YouTubeChannelID, format).Scan(&zone, &daily, &horizon)
+	err := tx.QueryRow(ctx, `SELECT timezone,CASE WHEN $2='compilation' THEN daily_compilations ELSE daily_shorts END,schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=$1`, flowDestinationKey(f), format).Scan(&zone, &daily, &horizon)
 	if err != nil {
 		return nil, err
 	}
@@ -83,9 +106,9 @@ func calendarSlotsTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, format strin
 	// count the whole local day, including slots later than the horizon.
 	endLocal := end.In(loc)
 	calendarEnd := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day()+1, 0, 0, 0, 0, loc)
-	rows, err := tx.Query(ctx, `SELECT p.publish_at,FALSE FROM publications p JOIN accounts a ON a.id=p.account_id JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE COALESCE(NULLIF(o.youtube_channel_id,''),a.remote_account_id)=$1 AND j.output_format=$2 AND p.id<>$3 AND `+occupiesCalendar+` AND p.publish_at>=$4 AND p.publish_at<$5
+	rows, err := tx.Query(ctx, `SELECT p.publish_at,FALSE FROM publications p JOIN accounts a ON a.id=p.account_id JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE COALESCE(NULLIF(p.destination_key,''),NULLIF(o.youtube_channel_id,''),a.remote_account_id)=$1 AND j.output_format=$2 AND p.id<>$3 AND `+occupiesCalendar+` AND p.publish_at>=$4 AND p.publish_at<$5
  UNION ALL
- SELECT r.slot_at,TRUE FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$6 AND r.state='active' AND r.expires_at>$7 AND r.slot_at>=$4 AND r.slot_at<$5 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`)`, f.YouTubeChannelID, format, excludePID, day, calendarEnd, excludePrep, now)
+ SELECT r.slot_at,TRUE FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$6 AND r.state='active' AND r.expires_at>$7 AND r.slot_at>=$4 AND r.slot_at<$5 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`)`, flowDestinationKey(f), format, excludePID, day, calendarEnd, excludePrep, now)
 	if err != nil {
 		return nil, err
 	}
@@ -156,12 +179,41 @@ func preparationSourceFresh(f twitch.Flow, src twitch.Source, at, now time.Time)
 }
 
 func reservePreparationFormat(ctx context.Context, tx pgx.Tx, f twitch.Flow, id, format string, src twitch.Source, now time.Time) (string, bool, error) {
+	if format == "short" && len(f.Destinations) > 0 {
+		first := ""
+		any := false
+		for _, d := range f.Destinations {
+			if !d.Enabled {
+				continue
+			}
+			connected, e := destinationConnected(ctx, tx, d)
+			if e != nil {
+				return "", false, e
+			}
+			if !connected {
+				continue
+			}
+			df := destinationFlow(f, d)
+			df.Destinations = nil
+			r, ok, e := reservePreparationFormat(ctx, tx, df, id, format, src, now)
+			if e != nil {
+				return "", false, e
+			}
+			if ok {
+				any = true
+				if first == "" {
+					first = r
+				}
+			}
+		}
+		return first, any, nil
+	}
 	if err := twitchResetAllowed(ctx, tx); err != nil {
 		return "", false, err
 	}
 	// The actual channel/format source identity is shared by OAuth aliases.
 	var duplicate bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses u JOIN twitch_imports i ON i.media_id=u.media_id WHERE i.id=$1 AND u.youtube_channel_id=$2 AND u.format=$3) OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations r ON r.id=ps.reservation_id WHERE ps.import_id=$1 AND r.youtube_channel_id=$2 AND r.format=$3 AND r.state='active' AND r.expires_at>$4)`, id, f.YouTubeChannelID, format, now).Scan(&duplicate); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses u JOIN twitch_imports i ON i.media_id=u.media_id WHERE i.id=$1 AND u.youtube_channel_id=$2 AND u.format=$3) OR EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations r ON r.id=ps.reservation_id WHERE ps.import_id=$1 AND r.youtube_channel_id=$2 AND r.format=$3 AND r.state='active' AND r.expires_at>$4)`, id, flowDestinationKey(f), format, now).Scan(&duplicate); err != nil {
 		return "", false, err
 	}
 	if duplicate {
@@ -223,7 +275,7 @@ func reservePreparationFormat(ctx context.Context, tx pgx.Tx, f twitch.Flow, id,
 		if deadline := src.CreatedAt.Add(time.Duration(f.MaxSourceAgeHours) * time.Hour); deadline.Before(expiry) {
 			expiry = deadline
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_reservations(id,flow_id,youtube_channel_id,format,slot_at,expires_at,created_at)VALUES($1,$2,$3,$4,$5,$6,$7)`, rid, f.ID, f.YouTubeChannelID, format, slot.At, expiry, now); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_reservations(id,flow_id,youtube_channel_id,format,slot_at,expires_at,created_at)VALUES($1,$2,$3,$4,$5,$6,$7)`, rid, f.ID, flowDestinationKey(f), format, slot.At, expiry, now); err != nil {
 			return "", false, err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_sources(reservation_id,import_id,flow_id,duration_sec)VALUES($1,$2,$3,$4)`, rid, id, f.ID, math.Ceil(src.DurationSec*30-1e-7)/30)
@@ -342,6 +394,41 @@ func admitImportConsumersTx(ctx context.Context, tx pgx.Tx, id, owner string, co
 }
 
 func reserveOutputPreparationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, clip, format string, ids []string, now time.Time) (time.Time, error) {
+	if format == "short" && len(f.Destinations) > 0 {
+		var at time.Time
+		var last error
+		any := false
+		for _, d := range f.Destinations {
+			if !d.Enabled {
+				continue
+			}
+			connected, e := destinationConnected(ctx, tx, d)
+			if e != nil {
+				return time.Time{}, e
+			}
+			if !connected {
+				continue
+			}
+			df := destinationFlow(f, d)
+			df.Destinations = nil
+			t, e := reserveOutputPreparationTx(ctx, tx, df, clip, format, ids, now)
+			if e != nil {
+				if errors.Is(e, domain.ErrConflict) {
+					last = e
+					continue
+				}
+				return time.Time{}, e
+			}
+			any = true
+			if at.IsZero() || (!t.IsZero() && t.Before(at)) {
+				at = t
+			}
+		}
+		if any {
+			return at, nil
+		}
+		return at, last
+	}
 	if err := twitchResetAllowed(ctx, tx); err != nil {
 		return time.Time{}, err
 	}
@@ -361,7 +448,7 @@ func reserveOutputPreparationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, c
 	var reservation string
 	var at time.Time
 	// Prefer the durable batch reserved before downloading.
-	err = tx.QueryRow(ctx, `SELECT r.id,r.slot_at FROM twitch_preparation_reservations r WHERE r.flow_id=$1 AND r.format=$2 AND r.state='active' AND r.expires_at>$3 AND(r.clip_id IS NULL OR r.clip_id=$4) AND($2='compilation' OR NOT EXISTS(SELECT 1 FROM unnest($5::text[]) x WHERE NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=x))) ORDER BY r.slot_at LIMIT 1`, f.ID, format, now, clip, ids).Scan(&reservation, &at)
+	err = tx.QueryRow(ctx, `SELECT r.id,r.slot_at FROM twitch_preparation_reservations r WHERE r.flow_id=$1 AND r.youtube_channel_id=$6 AND r.format=$2 AND r.state='active' AND r.expires_at>$3 AND(r.clip_id IS NULL OR r.clip_id=$4) AND($2='compilation' OR NOT EXISTS(SELECT 1 FROM unnest($5::text[]) x WHERE NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=x))) ORDER BY r.slot_at LIMIT 1`, f.ID, format, now, clip, ids, flowDestinationKey(f)).Scan(&reservation, &at)
 	if err != nil && err != pgx.ErrNoRows {
 		return at, err
 	}
@@ -384,7 +471,7 @@ func reserveOutputPreparationTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, c
 			return at, waitPreparation("calendar_full", "Нет свободного места для подготовки актуального выпуска", now)
 		}
 		reservation = uuid.NewString()
-		if _, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_reservations(id,flow_id,youtube_channel_id,format,slot_at,expires_at,created_at)VALUES($1,$2,$3,$4,$5,$6,$7)`, reservation, f.ID, f.YouTubeChannelID, format, at, at.Add(15*time.Minute), now); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_reservations(id,flow_id,youtube_channel_id,format,slot_at,expires_at,created_at)VALUES($1,$2,$3,$4,$5,$6,$7)`, reservation, f.ID, flowDestinationKey(f), format, at, at.Add(15*time.Minute), now); err != nil {
 			return at, err
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO twitch_preparation_sources(reservation_id,import_id,flow_id,duration_sec) SELECT $1,id,$2,COALESCE((verified->>'duration_sec')::float8,(request->'source'->>'duration_sec')::float8) FROM twitch_imports WHERE id=ANY($3::text[])`, reservation, f.ID, ids); err != nil {
@@ -431,7 +518,7 @@ func flowCapacityTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, now time.Time
 	if err != nil {
 		return twitch.FlowCapacity{}, err
 	}
-	out := twitch.FlowCapacity{FlowID: f.ID, YouTubeChannelID: f.YouTubeChannelID, HorizonHours: f.ScheduleHorizonHours, HorizonEnd: now.Add(time.Duration(f.ScheduleHorizonHours) * time.Hour), Mode: mode, Formats: []twitch.FormatCapacity{}}
+	out := twitch.FlowCapacity{FlowID: f.ID, YouTubeChannelID: flowDestinationKey(f), HorizonHours: f.ScheduleHorizonHours, HorizonEnd: now.Add(time.Duration(f.ScheduleHorizonHours) * time.Hour), Mode: mode, Formats: []twitch.FormatCapacity{}}
 	var storageWait *domain.PreparationWaitError
 	if mode == "enforce" {
 		if e := storagePreparationAvailable(ctx, tx, now); e != nil {
@@ -440,7 +527,7 @@ func flowCapacityTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, now time.Time
 			}
 		}
 	}
-	if f.YouTubeChannelID == "" {
+	if flowDestinationKey(f) == "" {
 		return out, nil
 	}
 	for _, format := range []string{"short", "compilation"} {
@@ -491,6 +578,9 @@ func flowCapacityTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, now time.Time
 }
 
 func sourcePolicyViolation(ctx context.Context, tx pgx.Tx, clip string, rid int64, at, now time.Time) (*domain.TwitchPolicyViolation, error) {
+	return sourcePolicyViolationForTarget(ctx, tx, clip, rid, at, now, nil)
+}
+func sourcePolicyViolationForTarget(ctx context.Context, tx pgx.Tx, clip string, rid int64, at, now time.Time, target *twitch.Flow) (*domain.TwitchPolicyViolation, error) {
 	if v, err := flowFilterViolationTx(ctx, tx, clip, rid); err != nil || v != nil {
 		if v != nil {
 			v.PublishAt = at
@@ -513,6 +603,9 @@ func sourcePolicyViolation(ctx context.Context, tx pgx.Tx, clip string, rid int6
 	f, err := currentFlowPolicy(ctx, tx, flow)
 	if err != nil {
 		return nil, err
+	}
+	if target != nil {
+		f = *target
 	}
 	v := &domain.TwitchPolicyViolation{ClipID: clip, FlowID: flow, PublishAt: at}
 	var oldest *time.Time
@@ -667,7 +760,29 @@ func publicationPolicyViolation(ctx context.Context, tx pgx.Tx, pid int64, now t
 		}
 		return v, e
 	}
-	v, err := sourcePolicyViolation(ctx, tx, clip, rid, at, now)
+	var snapshot []byte
+	if err = tx.QueryRow(ctx, `SELECT target_snapshot FROM publications WHERE id=$1`, pid).Scan(&snapshot); err != nil {
+		return nil, err
+	}
+	var target *twitch.Flow
+	if len(snapshot) > 2 {
+		d, e := decodeDestination(snapshot)
+		if e != nil {
+			return nil, e
+		}
+		var flowID string
+		if e = tx.QueryRow(ctx, `SELECT flow_id FROM twitch_outputs WHERE clip_id=$1`, clip).Scan(&flowID); e == nil {
+			f, e := currentFlowPolicy(ctx, tx, flowID)
+			if e != nil {
+				return nil, e
+			}
+			projected := destinationFlow(f, d)
+			target = &projected
+		} else if e != pgx.ErrNoRows {
+			return nil, e
+		}
+	}
+	v, err := sourcePolicyViolationForTarget(ctx, tx, clip, rid, at, now, target)
 	if err != nil || v == nil {
 		return v, err
 	}
@@ -690,11 +805,11 @@ func holdPolicyPublication(ctx context.Context, tx pgx.Tx, v domain.TwitchPolicy
 	if _, err := tx.Exec(ctx, `DELETE FROM twitch_publication_slots WHERE publication_id=$1`, v.PublicationID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='released',reason=$2 WHERE clip_id=$1 AND state='active'`, v.ClipID, v.Code); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='released',reason=$2 WHERE clip_id=$1 AND state='active' AND youtube_channel_id=(SELECT destination_key FROM publications WHERE id=$3)`, v.ClipID, v.Code, v.PublicationID); err != nil {
 		return err
 	}
 	if v.Code != "calendar_horizon" {
-		if _, err := tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=$1`, v.ClipID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE twitch_output_destinations SET auto_eligible=FALSE WHERE clip_id=$1 AND destination_key=(SELECT destination_key FROM publications WHERE id=$2)`, v.ClipID, v.PublicationID); err != nil {
 			return err
 		}
 	}

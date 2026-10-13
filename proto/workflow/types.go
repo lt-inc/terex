@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	QueuePublish = "gpu.workflow.v1.publish"
-	QueueRender  = "gpu.workflow.v1.render"
-	KindPublish  = "publish"
-	KindRender   = "render"
+	QueuePublish       = "gpu.workflow.v1.publish"
+	QueueTikTokPublish = "tiktok.workflow.v1.publish"
+	QueueRender        = "gpu.workflow.v1.render"
+	KindPublish        = "publish"
+	KindRender         = "render"
 )
 
 type ObjectRef = msg.ObjectRef
@@ -36,6 +37,7 @@ type Metadata struct {
 	Title                  string   `json:"title"`
 	Description            string   `json:"description"`
 	Hashtags               []string `json:"hashtags"`
+	Caption                string   `json:"caption,omitempty"`
 	CategoryID             string   `json:"category_id,omitempty"`
 	MadeForKids            bool     `json:"made_for_kids"`
 	ContainsSyntheticMedia bool     `json:"contains_synthetic_media,omitempty"`
@@ -65,6 +67,12 @@ type PublicationWork struct {
 	Visibility      string     `json:"visibility"`
 	State           string     `json:"state"`
 	PublishAt       time.Time  `json:"publish_at"`
+	SessionRef      string     `json:"session_ref,omitempty"`
+	SessionVersion  int64      `json:"session_version,omitempty"`
+	MediaURL        string     `json:"media_url,omitempty"`
+	MediaSHA256     string     `json:"media_sha256,omitempty"`
+	MediaSizeBytes  int64      `json:"media_size_bytes,omitempty"`
+	RetryAuthorized bool       `json:"retry_authorized,omitempty"`
 	Checkpoint      Checkpoint `json:"checkpoint"`
 }
 
@@ -109,22 +117,25 @@ type Permit struct {
 // SessionURI is persisted before bytes are sent. FinalRequestStarted records the
 // ambiguity window: an expired session must never cause a duplicate insert.
 type Checkpoint struct {
-	State                 string     `json:"state"`
-	SessionURI            string     `json:"session_uri,omitempty"`
-	ConfirmedBytes        int64      `json:"confirmed_bytes"`
-	TotalBytes            int64      `json:"total_bytes"`
-	RemoteID              string     `json:"remote_id,omitempty"`
-	RemoteURL             string     `json:"remote_url,omitempty"`
-	FinalRequestStarted   bool       `json:"final_request_started"`
-	UploadCompletedAt     *time.Time `json:"upload_completed_at,omitempty"`
-	ProcessingCompletedAt *time.Time `json:"processing_completed_at,omitempty"`
-	VerifiedAt            *time.Time `json:"verified_at,omitempty"`
+	State                 string         `json:"state"`
+	SessionURI            string         `json:"session_uri,omitempty"`
+	ConfirmedBytes        int64          `json:"confirmed_bytes"`
+	TotalBytes            int64          `json:"total_bytes"`
+	RemoteID              string         `json:"remote_id,omitempty"`
+	RemoteURL             string         `json:"remote_url,omitempty"`
+	FinalRequestStarted   bool           `json:"final_request_started"`
+	UploadCompletedAt     *time.Time     `json:"upload_completed_at,omitempty"`
+	ProcessingCompletedAt *time.Time     `json:"processing_completed_at,omitempty"`
+	VerifiedAt            *time.Time     `json:"verified_at,omitempty"`
+	ProviderCheckpoint    map[string]any `json:"provider_checkpoint,omitempty"`
 }
 type CheckpointRequest struct {
 	LeaseRequest
 	Checkpoint
 }
 type CompleteRequest struct {
+	MediaSHA256    string `json:"media_sha256,omitempty"`
+	MediaSizeBytes int64  `json:"media_size_bytes,omitempty"`
 	LeaseRequest
 	Checkpoint
 	Media  ObjectRef       `json:"media,omitempty"`

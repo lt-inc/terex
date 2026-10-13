@@ -100,55 +100,90 @@ type Source struct {
 // Flow pins one publication destination. Discovery is shared; output decisions
 // and scheduling belong to the flow rather than to the physical media file.
 type Flow struct {
-	ID                        string     `json:"id"`
-	Name                      string     `json:"name"`
-	Enabled                   bool       `json:"enabled"`
-	AutoPublish               bool       `json:"auto_publish"`
-	Archived                  bool       `json:"archived"`
-	ScheduleHorizonHours      int        `json:"schedule_horizon_hours"`
-	MaxSourceAgeHours         int        `json:"max_source_age_hours"`
-	AccountID                 int64      `json:"account_id"`
-	YouTubeChannelID          string     `json:"youtube_channel_id"`
-	Version                   int        `json:"version"`
-	SourceMode                string     `json:"source_mode"`
-	BroadcasterIDs            []string   `json:"broadcaster_ids"`
-	ChannelInputs             []string   `json:"channel_inputs,omitempty"`
-	ExcludedSourceIDs         []string   `json:"excluded_source_ids,omitempty"`
-	CategoryID                string     `json:"category_id,omitempty"`
-	CategoryName              string     `json:"category_name,omitempty"`
-	Language                  string     `json:"language,omitempty"`
-	RankingMode               string     `json:"ranking_mode"`
-	PollIntervalMinutes       int        `json:"poll_interval_minutes"`
-	WindowHours               int        `json:"window_hours"`
-	MinViews                  int        `json:"min_views"`
-	MinAgeMinutes             int        `json:"min_age_minutes"`
-	MinDurationSec            float64    `json:"min_duration_sec"`
-	MaxDurationSec            float64    `json:"max_duration_sec"`
-	ShortsEnabled             bool       `json:"shorts_enabled"`
-	CompilationsEnabled       bool       `json:"compilations_enabled"`
-	CompilationMinDurationSec float64    `json:"compilation_min_duration_sec"`
-	CompilationMaxDurationSec float64    `json:"compilation_max_duration_sec"`
-	CompilationMinClips       int        `json:"compilation_min_clips"`
-	CompilationMaxClips       int        `json:"compilation_max_clips"`
-	CompilationHour           int        `json:"compilation_hour"`
-	BalanceByTime             bool       `json:"balance_by_time"`
-	ShortsSlots               []string   `json:"shorts_slots"`
-	CompilationSlots          []string   `json:"compilation_slots"`
-	Timezone                  string     `json:"timezone"`
-	DailyShorts               int        `json:"daily_shorts"`
-	DailyCompilations         int        `json:"daily_compilations"`
-	LegacyLength              bool       `json:"legacy_length,omitempty"`
-	CreatedAt                 time.Time  `json:"created_at"`
-	UpdatedAt                 time.Time  `json:"updated_at"`
-	AutoEnabledAt             *time.Time `json:"auto_enabled_at,omitempty"`
-	WorkStartedAt             *time.Time `json:"work_started_at,omitempty"`
-	LastCheckedAt             *time.Time `json:"last_checked_at,omitempty"`
-	BlockReason               string     `json:"block_reason,omitempty"`
-	FoundClips                int        `json:"found_clips"`
-	ReadyOutputs              int        `json:"ready_outputs"`
-	NextPublicationAt         *time.Time `json:"next_publication_at,omitempty"`
+	ID                        string        `json:"id"`
+	Name                      string        `json:"name"`
+	Enabled                   bool          `json:"enabled"`
+	AutoPublish               bool          `json:"auto_publish"`
+	Archived                  bool          `json:"archived"`
+	ScheduleHorizonHours      int           `json:"schedule_horizon_hours"`
+	MaxSourceAgeHours         int           `json:"max_source_age_hours"`
+	AccountID                 int64         `json:"account_id"`
+	YouTubeChannelID          string        `json:"youtube_channel_id"`
+	Destinations              []Destination `json:"destinations,omitempty"`
+	DestinationKey            string        `json:"destination_key,omitempty"`
+	Version                   int           `json:"version"`
+	SourceMode                string        `json:"source_mode"`
+	BroadcasterIDs            []string      `json:"broadcaster_ids"`
+	ChannelInputs             []string      `json:"channel_inputs,omitempty"`
+	ExcludedSourceIDs         []string      `json:"excluded_source_ids,omitempty"`
+	CategoryID                string        `json:"category_id,omitempty"`
+	CategoryName              string        `json:"category_name,omitempty"`
+	Language                  string        `json:"language,omitempty"`
+	RankingMode               string        `json:"ranking_mode"`
+	PollIntervalMinutes       int           `json:"poll_interval_minutes"`
+	WindowHours               int           `json:"window_hours"`
+	MinViews                  int           `json:"min_views"`
+	MinAgeMinutes             int           `json:"min_age_minutes"`
+	MinDurationSec            float64       `json:"min_duration_sec"`
+	MaxDurationSec            float64       `json:"max_duration_sec"`
+	ShortsEnabled             bool          `json:"shorts_enabled"`
+	CompilationsEnabled       bool          `json:"compilations_enabled"`
+	CompilationMinDurationSec float64       `json:"compilation_min_duration_sec"`
+	CompilationMaxDurationSec float64       `json:"compilation_max_duration_sec"`
+	CompilationMinClips       int           `json:"compilation_min_clips"`
+	CompilationMaxClips       int           `json:"compilation_max_clips"`
+	CompilationHour           int           `json:"compilation_hour"`
+	BalanceByTime             bool          `json:"balance_by_time"`
+	ShortsSlots               []string      `json:"shorts_slots"`
+	CompilationSlots          []string      `json:"compilation_slots"`
+	Timezone                  string        `json:"timezone"`
+	DailyShorts               int           `json:"daily_shorts"`
+	DailyCompilations         int           `json:"daily_compilations"`
+	LegacyLength              bool          `json:"legacy_length,omitempty"`
+	CreatedAt                 time.Time     `json:"created_at"`
+	UpdatedAt                 time.Time     `json:"updated_at"`
+	AutoEnabledAt             *time.Time    `json:"auto_enabled_at,omitempty"`
+	WorkStartedAt             *time.Time    `json:"work_started_at,omitempty"`
+	LastCheckedAt             *time.Time    `json:"last_checked_at,omitempty"`
+	BlockReason               string        `json:"block_reason,omitempty"`
+	FoundClips                int           `json:"found_clips"`
+	ReadyOutputs              int           `json:"ready_outputs"`
+	NextPublicationAt         *time.Time    `json:"next_publication_at,omitempty"`
 
 	Metadata *MetadataSettings `json:"metadata,omitempty"`
+}
+
+// Destination is a publication policy. Media and discovery remain flow-owned.
+type Destination struct {
+	ID                   string   `json:"id,omitempty"`
+	Provider             string   `json:"provider"`
+	AccountID            int64    `json:"account_id"`
+	RemoteAccountID      string   `json:"remote_account_id,omitempty"`
+	Enabled              bool     `json:"enabled"`
+	AutoPublish          bool     `json:"auto_publish"`
+	Timezone             string   `json:"timezone"`
+	ShortsSlots          []string `json:"shorts_slots"`
+	DailyShorts          int      `json:"daily_shorts"`
+	ScheduleHorizonHours int      `json:"schedule_horizon_hours"`
+	Visibility           string   `json:"visibility"`
+}
+
+// CapacityKey preserves existing YouTube keys while separating other providers.
+func (d Destination) CapacityKey() string {
+	if d.Provider == "youtube" {
+		return d.RemoteAccountID
+	}
+	return d.Provider + ":" + d.RemoteAccountID
+}
+
+func (f Flow) PublicationDestinations() []Destination {
+	if len(f.Destinations) > 0 {
+		return f.Destinations
+	}
+	if f.AccountID <= 0 {
+		return nil
+	}
+	return []Destination{{Provider: "youtube", AccountID: f.AccountID, RemoteAccountID: f.YouTubeChannelID, Enabled: true, AutoPublish: f.AutoPublish, Timezone: f.Timezone, ShortsSlots: f.ShortsSlots, DailyShorts: f.DailyShorts, ScheduleHorizonHours: f.ScheduleHorizonHours, Visibility: "public"}}
 }
 
 type CollectorConfig struct {

@@ -1,6 +1,7 @@
 // Server and middleware access policy. Do not import this module into client components.
 export const TRAEFIK_AUTHENTICATED_USER_HEADER = "x-terex-authenticated-user";
 export const OAUTH_CALLBACK_PATH = "/api/accounts/oauth/callback";
+export const TIKTOK_PAIRING_PAYLOAD_PATH = "/api/tiktok/connect/payload";
 
 export interface HeaderReader {
   get(name: string): string | null;
@@ -14,7 +15,13 @@ export interface AdminAccessConfig {
 }
 
 export type AuthMode = "basic" | "traefik";
-export type AdminAccess = "operator" | "service" | "oauth_callback" | "authenticate" | "unconfigured" | "forbidden";
+export type AdminAccess = "operator" | "service" | "oauth_callback" | "pairing_payload" | "authenticate" | "unconfigured" | "forbidden";
+
+export function pairingOriginAllowed(origin: string | null): boolean {
+  // Pairing is authenticated in main-be by a one-use, ten-minute token. The
+  // Chrome/Edge extension and non-browser clients may submit this exact route.
+  return !origin || /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+}
 
 export function authMode(config: AdminAccessConfig): AuthMode | null {
   const value = config.mode ?? "basic";
@@ -121,6 +128,8 @@ export function adminAccess(
 ): AdminAccess {
   // The callback is protected by its short-lived, one-use OAuth state in main-be.
   if (isExactOAuthCallback(pathname, method)) return "oauth_callback";
+  if (pathname === TIKTOK_PAIRING_PAYLOAD_PATH && (method === "POST" || method === "OPTIONS"))
+    return pairingOriginAllowed(headers.get("origin")) ? "pairing_payload" : "forbidden";
 
   const mode = authMode(config);
   const expectedOrigin = publicOrigin(config.publicURL);

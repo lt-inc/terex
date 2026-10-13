@@ -46,6 +46,10 @@ func collectorRoute(r *http.Request) bool {
 }
 func (a *OperatorAuth) Protect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ((r.Method == http.MethodPost || r.Method == http.MethodOptions) && r.URL.Path == "/api/tiktok/connect/payload") || (r.Method == http.MethodPost && tikTokWorkerRoute(r.URL.Path)) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/api/accounts/oauth/callback" && r.Method == http.MethodGet {
 			next.ServeHTTP(w, r)
 			return
@@ -77,4 +81,15 @@ func (a *OperatorAuth) Protect(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func tikTokWorkerRoute(path string) bool {
+	if !strings.HasPrefix(path, "/api/tiktok/worker/") {
+		return false
+	}
+	switch strings.TrimPrefix(path, "/api/tiktok/worker/") {
+	case "claim", "renew", "checkpoint", "complete", "fail", "reconcile", "release":
+		return true
+	}
+	return false
 }

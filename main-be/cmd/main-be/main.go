@@ -24,6 +24,7 @@ import (
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
 	"terex/main-be/internal/service/storagelifecycle"
+	tiktokservice "terex/main-be/internal/service/tiktok"
 	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/twitchmonitor"
 	"terex/main-be/internal/service/twitchreset"
@@ -96,6 +97,7 @@ func run() error {
 	pubMgr := &publish.Manager{Clips: store, Jobs: store, Broker: br, Gpu: gpu}
 	flow := &workflowservice.Service{Repo: store, Coordinator: store, Accounts: store, Clips: store, Gpu: gpu, Gateway: gpu.WorkflowGateway(), Broker: br, RedirectURL: cfg.OAuthRedirectURL, AppURL: cfg.AppPublicURL}
 	pubMgr.Workflow = flow
+	tiktokSvc := &tiktokservice.Service{Repo: store, Workflow: flow, Gpu: gpu, URL: cfg.TikTokUploaderURL, Token: cfg.TikTokUploaderToken, WorkerToken: cfg.TikTokWorkerToken, AppURL: cfg.AppPublicURL}
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
 
 	twitchSvc := &twitchservice.Service{Repo: store, Gateway: gpu.IngestGateway(), Gpu: gpu}
@@ -109,6 +111,7 @@ func run() error {
 	api := &thttp.API{Jobs: jobSvc, Assets: assetSvc, Publish: pubMgr, Monitor: mon, Workflow: flow,
 		Twitch: twitchSvc, Storage: storageSvc, Reset: resetSvc, Auth: &thttp.OperatorAuth{Username: cfg.AdminUsername, Password: cfg.AdminPassword, ServiceToken: cfg.ServiceToken, AllowedOrigin: cfg.AppPublicURL},
 		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken},
+		TikTok:    tiktokSvc,
 		News:      &thttp.NewsProxy{URL: cfg.NewsCollectorURL, Token: cfg.NewsCollectorToken}}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 

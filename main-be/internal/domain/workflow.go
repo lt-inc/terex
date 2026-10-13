@@ -87,6 +87,8 @@ type TargetsRequest struct {
 }
 
 type PublicationMetadata struct {
+	Caption          string                   `json:"caption,omitempty"`
+	CaptionManual    bool                     `json:"caption_manual,omitempty"`
 	Visibility       string                   `json:"visibility"`
 	Title            string                   `json:"title"`
 	Description      string                   `json:"description"`
@@ -113,6 +115,7 @@ type PublicationRecord struct {
 	UploadID          *string                  `json:"upload_id"`
 	ExternalURL       *string                  `json:"external_url"`
 	Error             *string                  `json:"error"`
+	ErrorCode         string                   `json:"error_code,omitempty"`
 	UploadedAt        *time.Time               `json:"uploaded_at"`
 	ProcessedAt       *time.Time               `json:"processed_at"`
 	PublishedAt       *time.Time               `json:"published_at"`
@@ -138,6 +141,7 @@ type PublicationFilter struct {
 	Limit, Offset   int
 }
 type PublicationPatch struct {
+	Caption           *string    `json:"caption,omitempty"`
 	Version           int        `json:"expected_version"`
 	PublishAt         *time.Time `json:"publish_at"`
 	Timezone          *string    `json:"timezone"`

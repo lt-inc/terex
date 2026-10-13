@@ -34,7 +34,7 @@ func freezeFlowAssembly(ctx context.Context, tx pgx.Tx, req twitch.CompilationRe
 		}
 		seen[media] = true
 		var used bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses WHERE youtube_channel_id=$1 AND format='compilation' AND media_id=$2 AND($3='' OR clip_id IS DISTINCT FROM $3))`, f.YouTubeChannelID, media, owner).Scan(&used); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM twitch_source_uses WHERE youtube_channel_id=$1 AND format='compilation' AND media_id=$2 AND($3='' OR clip_id IS DISTINCT FROM $3))`, flowDestinationKey(f), media, owner).Scan(&used); err != nil {
 			return m, err
 		}
 		if used {
@@ -69,7 +69,7 @@ func freezeFlowAssembly(ctx context.Context, tx pgx.Tx, req twitch.CompilationRe
 }
 func reserveAssemblyUse(ctx context.Context, tx pgx.Tx, f twitch.Flow, clip string, m workflow.SourceManifest, now time.Time) error {
 	for _, item := range m.Assembly.Items {
-		if _, err := tx.Exec(ctx, `INSERT INTO twitch_source_uses(youtube_channel_id,format,media_id,clip_id,created_at)VALUES($1,'compilation',$2,$3,$4)ON CONFLICT DO NOTHING`, f.YouTubeChannelID, item.MediaID, clip, now); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO twitch_source_uses(youtube_channel_id,format,media_id,clip_id,created_at)VALUES($1,'compilation',$2,$3,$4)ON CONFLICT DO NOTHING`, flowDestinationKey(f), item.MediaID, clip, now); err != nil {
 			return err
 		}
 	}
@@ -116,7 +116,10 @@ func createFlowCompilationTx(ctx context.Context, tx pgx.Tx, req twitch.Compilat
 		return domain.Compilation{}, err
 	}
 	auto := f.AutoPublish && f.AutoEnabledAt != nil && !now.Before(*f.AutoEnabledAt)
-	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,account_id,youtube_channel_id,format,config,initial_revision_id,auto_eligible,created_at)VALUES($1,$2,$3,$4,'compilation',$5,$6,$7,$8)`, id, f.ID, f.AccountID, f.YouTubeChannelID, mustJSON(f), rid, auto, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO twitch_outputs(clip_id,flow_id,account_id,youtube_channel_id,format,config,initial_revision_id,auto_eligible,created_at)VALUES($1,$2,$3,$4,'compilation',$5,$6,$7,$8)`, id, f.ID, f.AccountID, flowDestinationKey(f), mustJSON(f), rid, auto, now); err != nil {
+		return domain.Compilation{}, err
+	}
+	if err = snapshotOutputDestinations(ctx, tx, id, f, "compilation", auto, now); err != nil {
 		return domain.Compilation{}, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE twitch_preparation_reservations r SET clip_id=$2 WHERE r.flow_id=$1 AND r.format='compilation' AND r.state='active' AND r.clip_id IS NULL AND NOT EXISTS(SELECT 1 FROM unnest($3::text[]) x WHERE NOT EXISTS(SELECT 1 FROM twitch_preparation_sources ps WHERE ps.reservation_id=r.id AND ps.import_id=x))`, f.ID, id, ids); err != nil {

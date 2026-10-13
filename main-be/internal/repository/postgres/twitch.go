@@ -124,10 +124,10 @@ const currentFlowSourceEligible = `
 const pendingTwitchSource = `NOT i.rejected AND i.state NOT IN('discovered','failed') AND (
  (i.media_state<>'ready' AND (NOT EXISTS(SELECT 1 FROM twitch_flow_sources fs WHERE fs.import_id=i.id)
  OR EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id
- WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id
+ WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived AND EXISTS(SELECT 1 FROM twitch_flow_destinations dest JOIN accounts da ON da.id=dest.account_id WHERE dest.flow_id=f.id AND dest.enabled AND da.connection_state='connected' AND da.remote_account_id=dest.remote_account_id)
  AND(fs.reserved_at IS NOT NULL OR (` + currentFlowSourceEligible + `)))))
  OR EXISTS(SELECT 1 FROM twitch_flow_sources fs JOIN twitch_flows f ON f.id=fs.flow_id JOIN accounts a ON a.id=f.account_id
- WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived AND a.connection_state='connected' AND a.remote_account_id=f.youtube_channel_id
+ WHERE fs.import_id=i.id AND NOT fs.excluded AND f.enabled AND NOT f.archived AND EXISTS(SELECT 1 FROM twitch_flow_destinations dest JOIN accounts da ON da.id=dest.account_id WHERE dest.flow_id=f.id AND dest.enabled AND da.connection_state='connected' AND da.remote_account_id=dest.remote_account_id)
  AND(EXISTS(SELECT 1 FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id WHERE o.flow_id=f.id AND c.approval='pending'
  AND(o.source_id=i.id OR EXISTS(SELECT 1 FROM twitch_compilation_items ci WHERE ci.compilation_revision_id=c.latest_revision_id AND ci.source_id=i.id)))
  OR(i.media_state='ready' AND COALESCE((f.config->>'compilations_enabled')::boolean,false) AND (` + currentFlowSourceEligible + `)

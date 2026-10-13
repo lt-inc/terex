@@ -13,12 +13,12 @@ import (
 	"terex/proto/twitch"
 )
 
-const publicationCols = `p.id,p.clip_id,COALESCE(p.revision_id,0),p.account_id,a.name,p.platform,p.publish_at,p.timezone,p.status,p.version,p.metadata,p.cancel_requested,p.upload_id,p.external_url,p.error,p.uploaded_at,p.processed_at,p.published_at,p.last_verified_at,p.started_at`
+const publicationCols = `p.id,p.clip_id,COALESCE(p.revision_id,0),p.account_id,a.name,p.platform,p.publish_at,p.timezone,p.status,p.version,p.metadata,p.cancel_requested,p.upload_id,p.external_url,p.error,p.uploaded_at,p.processed_at,p.published_at,p.last_verified_at,p.started_at,p.error_code`
 
 func scanPublication(row pgx.Row) (domain.PublicationRecord, error) {
 	var p domain.PublicationRecord
 	var meta []byte
-	err := row.Scan(&p.ID, &p.ClipID, &p.RevisionID, &p.AccountID, &p.AccountName, &p.Platform, &p.PublishAt, &p.Timezone, &p.Status, &p.Version, &meta, &p.CancelRequested, &p.UploadID, &p.ExternalURL, &p.Error, &p.UploadedAt, &p.ProcessedAt, &p.PublishedAt, &p.LastVerifiedAt, &p.StartedAt)
+	err := row.Scan(&p.ID, &p.ClipID, &p.RevisionID, &p.AccountID, &p.AccountName, &p.Platform, &p.PublishAt, &p.Timezone, &p.Status, &p.Version, &meta, &p.CancelRequested, &p.UploadID, &p.ExternalURL, &p.Error, &p.UploadedAt, &p.ProcessedAt, &p.PublishedAt, &p.LastVerifiedAt, &p.StartedAt, &p.ErrorCode)
 	if err == nil {
 		err = json.Unmarshal(meta, &p.PublicationMetadata)
 	}
@@ -88,6 +88,13 @@ func (s *Store) PatchPublication(ctx context.Context, id int64, u domain.Publica
 	}
 	if u.Hashtags != nil {
 		p.Hashtags = *u.Hashtags
+	}
+	if u.Caption != nil {
+		if p.Platform != "tiktok" || len([]rune(*u.Caption)) > 2200 {
+			return domain.ErrInvalid
+		}
+		p.Caption = *u.Caption
+		p.CaptionManual = true
 	}
 	if u.PublishAt != nil {
 		p.PublishAt = *u.PublishAt
@@ -192,6 +199,15 @@ func (s *Store) ActPublicationWithOverride(ctx context.Context, id int64, action
 	}
 	if p.Version != version {
 		return domain.ErrConflict
+	}
+	if p.Platform == "tiktok" && p.Status == "needs_attention" && action != "cancel" {
+		var uncertain bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM publication_attempts WHERE publication_id=$1 AND publication_version=$2 AND COALESCE((checkpoint->>'final_request_started')::bool,FALSE)) OR EXISTS(SELECT 1 FROM tiktok_worker_operations WHERE publication_id=$1 AND state='active')`, id, version).Scan(&uncertain); err != nil {
+			return err
+		}
+		if uncertain {
+			return fmt.Errorf("%w: reconcile the existing TikTok submission; automatic re-upload is disabled", domain.ErrConflict)
+		}
 	}
 	state := p.Status
 	cancel := p.CancelRequested
@@ -368,7 +384,10 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 	if err = lockTwitch(ctx, tx); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='blocked',error=CASE WHEN p.platform<>'youtube' THEN 'Publishing for this platform is not implemented' ELSE 'Account OAuth connection is required' END FROM accounts a WHERE a.id=p.account_id AND p.status IN ('scheduled','retry_wait') AND p.publish_at<=$1 AND (p.platform<>'youtube' OR a.connection_state<>'connected')`, now); err != nil {
+	if err = reconcileTikTokDispatchTx(ctx, tx, now); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='blocked',error_code=CASE WHEN p.platform='tiktok' THEN 'auth_required' ELSE p.error_code END,error=CASE WHEN p.platform NOT IN('youtube','tiktok') THEN 'Publishing for this platform is not implemented' ELSE 'Account connection is required' END FROM accounts a WHERE a.id=p.account_id AND p.status IN ('scheduled','retry_wait') AND p.publish_at<=$1 AND (p.platform NOT IN('youtube','tiktok') OR a.connection_state<>'connected' OR(p.platform='tiktok' AND(a.session_version=0 OR COALESCE(a.credential_ref->>'bucket','')<>'tiktok-sessions')))`, now); err != nil {
 		return err
 	}
 	// A queued attempt also has a lease deadline: lost queue delivery is recovered here.
@@ -379,23 +398,24 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='expired',updated_at=$1 WHERE status='active' AND lease_until<$1`, now); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT p.id,p.version,p.status FROM publications p JOIN clip_revisions r ON r.id=p.revision_id JOIN accounts a ON a.id=p.account_id
+	rows, err := tx.Query(ctx, `SELECT p.id,p.version,p.status,p.platform FROM publications p JOIN clip_revisions r ON r.id=p.revision_id JOIN accounts a ON a.id=p.account_id
       WHERE p.status IN ('scheduled','retry_wait','processing','ready','publishing','cancel_pending') AND p.next_attempt_at<=$1 AND (p.publish_at<=$1 OR p.cancel_requested)
-      AND p.platform='youtube' AND (p.cancel_requested OR (r.render_state='ready' AND r.approved_at IS NOT NULL AND a.connection_state='connected'))
+      AND p.platform IN('youtube','tiktok') AND (p.platform<>'tiktok' OR(a.session_version>0 AND a.credential_ref->>'bucket'='tiktok-sessions')) AND (p.cancel_requested OR (r.render_state='ready' AND r.approved_at IS NOT NULL AND a.connection_state='connected'))
       AND NOT EXISTS(SELECT 1 FROM publication_attempts x WHERE x.publication_id=p.id AND x.status='active')
       ORDER BY p.publish_at LIMIT $2 FOR UPDATE OF p SKIP LOCKED`, now, limit)
 	if err != nil {
 		return err
 	}
 	type due struct {
-		id      int64
-		version int
-		state   string
+		id       int64
+		version  int
+		state    string
+		provider string
 	}
 	var ds []due
 	for rows.Next() {
 		var d due
-		if err = rows.Scan(&d.id, &d.version, &d.state); err != nil {
+		if err = rows.Scan(&d.id, &d.version, &d.state, &d.provider); err != nil {
 			rows.Close()
 			return err
 		}
@@ -442,6 +462,37 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 			continue
 		}
 		attempt := uuid.NewString()
+		if d.provider == "tiktok" {
+			var uncertain bool
+			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM publication_attempts WHERE publication_id=$1 AND publication_version=$2 AND COALESCE((checkpoint->>'final_request_started')::bool,FALSE))`, d.id, d.version).Scan(&uncertain); err != nil {
+				return err
+			}
+			if uncertain {
+				if _, err = tx.Exec(ctx, `UPDATE publications SET status='needs_attention',error_code='upload_unknown' WHERE id=$1`, d.id); err != nil {
+					return err
+				}
+				continue
+			}
+			deadline := now.Add(24 * time.Hour)
+			var sourceDeadline *time.Time
+			if err = tx.QueryRow(ctx, `SELECT min((i.request->'source'->>'created_at')::timestamptz+make_interval(hours=>COALESCE((f.config->>'max_source_age_hours')::int,72))) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id JOIN twitch_flows f ON f.id=o.flow_id JOIN twitch_imports i ON i.id=o.source_id WHERE p.id=$1`, d.id).Scan(&sourceDeadline); err != nil {
+				return err
+			}
+			if sourceDeadline != nil && sourceDeadline.Before(deadline) {
+				deadline = *sourceDeadline
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO publication_attempts(id,publication_id,publication_version,phase,dispatch_deadline,last_dispatched_at,checkpoint)VALUES($1,$2,$3,$4,$5,$6,COALESCE((SELECT checkpoint FROM publication_attempts WHERE publication_id=$2 AND publication_version=$3 ORDER BY created_at DESC LIMIT 1),'{}'::jsonb))`, attempt, d.id, d.version, d.state, deadline, now); err != nil {
+				return err
+			}
+			payload := map[string]any{"kind": "publish", "publication_id": d.id, "attempt_id": attempt, "expected_version": d.version}
+			if _, err = tx.Exec(ctx, `INSERT INTO publication_outbox(id,publication_id,kind,payload)VALUES($1,$2,'publish_tiktok',$3)`, uuid.NewString(), d.id, mustJSON(payload)); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, `UPDATE publications SET status='queued' WHERE id=$1`, d.id); err != nil {
+				return err
+			}
+			continue
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO publication_attempts(id,publication_id,publication_version,phase,lease_until,checkpoint)
         VALUES($1,$2,$3,$4,$5,COALESCE((SELECT checkpoint FROM publication_attempts WHERE publication_id=$2 ORDER BY created_at DESC LIMIT 1),'{}'::jsonb))`, attempt, d.id, d.version, d.state, now.Add(2*time.Minute))
 		if err != nil {
