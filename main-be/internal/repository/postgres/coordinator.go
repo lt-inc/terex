@@ -214,7 +214,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		if p.Platform == "tiktok" {
 			out.Publication.Metadata.Caption = p.Caption
 			if p.Caption == "" {
-				out.Publication.Metadata.Caption = tikTokCaption(p.Title, p.Hashtags)
+				out.Publication.Metadata.Caption = tikTokCaption(p.Title, p.Description, p.Hashtags)
 			}
 			out.Publication.SessionRef = ref.Object
 			if err = tx.QueryRow(ctx, `SELECT a.session_version,r.media_sha256,r.media_size_bytes FROM accounts a CROSS JOIN clip_revisions r WHERE a.id=$1 AND r.id=$2`, p.AccountID, p.RevisionID).Scan(&out.Publication.SessionVersion, &out.Publication.MediaSHA256, &out.Publication.MediaSizeBytes); err != nil {

@@ -121,7 +121,7 @@ func (s *Store) scheduleDestinationOutputs(ctx context.Context, now time.Time) e
 		}
 		metadata.Visibility = d.Visibility
 		if d.Provider == "tiktok" {
-			metadata.Caption = tikTokCaption(metadata.Title, metadata.Hashtags)
+			metadata.Caption = tikTokCaption(metadata.Title, metadata.Description, metadata.Hashtags)
 			if len([]rune(metadata.Caption)) > 2200 {
 				continue
 			}

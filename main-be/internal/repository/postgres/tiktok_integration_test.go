@@ -35,6 +35,8 @@ func TestTikTokDestinationsShareAdmissionMediaAndRender(t *testing.T) {
 	f := defaultFlow()
 	f.Enabled = true
 	f.CompilationsEnabled = false
+	f.SourceMode = "category"
+	f.CategoryID, f.CategoryName = "7", "Just Chatting"
 	f.BroadcasterIDs = []string{"123"}
 	f.Timezone = "UTC"
 	f.Destinations = []twitch.Destination{{Provider: "youtube", AccountID: yt, Enabled: true, AutoPublish: true, Timezone: "UTC", ShortsSlots: []string{"09:00"}, DailyShorts: 3, ScheduleHorizonHours: 24, Visibility: "public"}, {Provider: "tiktok", AccountID: tt, Enabled: true, AutoPublish: true, Timezone: "UTC", ShortsSlots: []string{"10:00"}, DailyShorts: 3, ScheduleHorizonHours: 24, Visibility: "private"}}
@@ -44,6 +46,8 @@ func TestTikTokDestinationsShareAdmissionMediaAndRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := flowSource("dual-target", "123", 20, now)
+	src.GameID = f.CategoryID
+	src.Title += " #ShortsMoments"
 	if _, err = s.ObserveTwitchSources(ctx, twitch.ObservationRequest{FlowID: f.ID, FlowVersion: f.Version, Sources: []twitch.Source{src}}, now); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +70,9 @@ func TestTikTokDestinationsShareAdmissionMediaAndRender(t *testing.T) {
 	}
 	if ps[0].Platform != "youtube" || ps[1].Platform != "tiktok" || ps[1].Visibility != "private" || ps[1].Caption == "" || strings.Contains(ps[1].Caption, "#shorts") {
 		t.Fatal("target metadata leaked", ps)
+	}
+	if !strings.Contains(ps[1].Caption, "https://www.twitch.tv/streamer") || !strings.Contains(ps[1].Caption, twitch.MetadataContactEmail) || !strings.Contains(ps[1].Caption, "Just Chatting") || !strings.Contains(ps[1].Caption, "#ShortsMoments") || strings.Count(ps[1].Caption, "#twitch") != 1 || strings.Contains(ps[1].Caption, "@streamer") {
+		t.Fatal("TikTok caption lost attribution/category/contact or changed hashtag identity", ps[1].Caption)
 	}
 	// A target hold cannot destroy the other destination's future calendar.
 	tx, err := s.pool.Begin(ctx)

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"regexp"
 	"strings"
 	"terex/main-be/internal/domain"
+	"terex/proto/publicationmetadata"
 	"terex/proto/twitch"
 	"time"
 )
@@ -167,18 +169,40 @@ func snapshotOutputDestinations(ctx context.Context, tx pgx.Tx, clip string, f t
 	return nil
 }
 
-func tikTokCaption(title string, tags []string) string {
-	parts := []string{strings.TrimSpace(title)}
+var tikTokCaptionHashtag = regexp.MustCompile(`#[\pL\pN\pM_]+`)
+
+func tikTokCaption(title, description string, tags []string) string {
+	// Reuse the version's generated attribution, category and contact instead of
+	// resolving Twitch names as TikTok mentions or reading current flow settings.
+	body := strings.TrimSpace(description)
+	title = strings.TrimSpace(title)
+	if title != "" && !strings.Contains(body, title) {
+		if body != "" {
+			body = title + "\n\n" + body
+		} else {
+			body = title
+		}
+	}
+	body = strings.TrimSpace(tikTokCaptionHashtag.ReplaceAllStringFunc(body, func(tag string) string {
+		if strings.EqualFold(tag, "#shorts") {
+			return ""
+		}
+		return tag
+	}))
+	if !strings.Contains(body, twitch.MetadataContactEmail) {
+		body += "\n\nContact: " + twitch.MetadataContactEmail
+	}
+	visible := []string{}
 	seen := map[string]bool{}
 	for _, tag := range tags {
-		tag = strings.TrimSpace(strings.TrimPrefix(tag, "#"))
+		tag = strings.TrimLeft(strings.TrimSpace(tag), "#")
 		if tag == "" || strings.EqualFold(tag, "shorts") || seen[strings.ToLower(tag)] {
 			continue
 		}
 		seen[strings.ToLower(tag)] = true
-		parts = append(parts, "#"+tag)
+		visible = append(visible, "#"+tag)
 	}
-	return strings.Join(parts, " ")
+	return publicationmetadata.Compose(strings.TrimSpace(body), visible).Description
 }
 
 func decodeDestination(data []byte) (twitch.Destination, error) {
