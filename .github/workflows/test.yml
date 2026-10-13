@@ -35,7 +35,15 @@ jobs:
         run: |
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           sh -n docker/collector-db-init.sh
-      - run: go test ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/... ./stats-collector/... ./news-collector/...
+      - name: Test independent Go packages
+        shell: bash
+        run: |
+          packages=$(go list ./proto/... ./main-be/... ./gpu-be/... ./twitch-collector/... ./stats-collector/... ./news-collector/... | grep -vE '^terex/news-collector/internal/(repository/postgres|service)$')
+          mapfile -t package_args <<< "$packages"
+          go test "${package_args[@]}"
+      # Both integration packages reset the same news_collector schema.
+      - name: Test news database packages sequentially
+        run: go test -p 1 ./news-collector/internal/repository/postgres ./news-collector/internal/service
       - name: Verify real DB bootstrap, restricted login and repeated provisioning
         env:
           PGHOST: localhost
