@@ -67,6 +67,31 @@ func (s *Service) request(ctx context.Context, method, path string, payload any)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity || resp.StatusCode == http.StatusConflict {
+			// Whitelist safe validation messages; never relay a Pydantic input
+			// dump containing cookies or arbitrary upstream response bodies.
+			message := "TikTok отклонил запрос: проверьте код подключения и состояние аккаунта"
+			var body struct {
+				Detail string `json:"detail"`
+			}
+			_ = json.NewDecoder(io.LimitReader(resp.Body, 2048)).Decode(&body)
+			switch body.Detail {
+			case "Pairing token is expired or already used":
+				message = "Код подключения TikTok истёк или уже использован. Получите новый код в Accounts"
+			case "Account is not connected":
+				message = "TikTok-аккаунт ещё не подключён. Передайте сессию через расширение"
+			case "A different TikTok account is logged in. Connect the original account.":
+				message = "В браузере открыт другой TikTok-аккаунт. Войдите в исходный аккаунт"
+			}
+			kind := domain.ErrInvalid
+			if resp.StatusCode == http.StatusConflict {
+				kind = domain.ErrConflict
+			}
+			return out, fmt.Errorf("%w: %s", kind, message)
+		}
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return out, fmt.Errorf("TikTok uploader unavailable: internal service credentials rejected")
+		}
 		return out, fmt.Errorf("TikTok uploader request failed (HTTP %d)", resp.StatusCode)
 	}
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {

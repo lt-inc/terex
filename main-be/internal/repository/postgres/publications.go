@@ -387,7 +387,7 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 	if err = reconcileTikTokDispatchTx(ctx, tx, now); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='blocked',error=CASE WHEN p.platform NOT IN('youtube','tiktok') THEN 'Publishing for this platform is not implemented' ELSE 'Account connection is required' END FROM accounts a WHERE a.id=p.account_id AND p.status IN ('scheduled','retry_wait') AND p.publish_at<=$1 AND (p.platform NOT IN('youtube','tiktok') OR a.connection_state<>'connected' OR(p.platform='tiktok' AND(a.session_version=0 OR COALESCE(a.credential_ref->>'bucket','')<>'tiktok-sessions')))`, now); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='blocked',error_code=CASE WHEN p.platform='tiktok' THEN 'auth_required' ELSE p.error_code END,error=CASE WHEN p.platform NOT IN('youtube','tiktok') THEN 'Publishing for this platform is not implemented' ELSE 'Account connection is required' END FROM accounts a WHERE a.id=p.account_id AND p.status IN ('scheduled','retry_wait') AND p.publish_at<=$1 AND (p.platform NOT IN('youtube','tiktok') OR a.connection_state<>'connected' OR(p.platform='tiktok' AND(a.session_version=0 OR COALESCE(a.credential_ref->>'bucket','')<>'tiktok-sessions')))`, now); err != nil {
 		return err
 	}
 	// A queued attempt also has a lease deadline: lost queue delivery is recovered here.

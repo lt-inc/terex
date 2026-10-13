@@ -129,6 +129,23 @@ func TestTikTokOnlyDispatchSurvivesWaitingAndFencesUnknownRetry(t *testing.T) {
 	}
 	p := pubs(t, s)[0]
 	due := p.PublishAt
+	if err = s.SaveTikTokConnection(ctx, domain.TikTokConnection{AccountID: tt, Status: "needs_reauth", RemoteAccountID: "123456789", SessionVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.PreparePublications(ctx, due, 10); err != nil {
+		t.Fatal(err)
+	}
+	held, err := s.GetPublicationRecord(ctx, p.ID)
+	if err != nil || held.Status != "blocked" || held.ErrorCode != "auth_required" {
+		t.Fatal("missing account did not create a recoverable auth hold", held, err)
+	}
+	if err = s.SaveTikTokConnection(ctx, domain.TikTokConnection{AccountID: tt, Status: "connected", RemoteAccountID: "123456789", SessionRef: "session/test", SessionVersion: 2}); err != nil {
+		t.Fatal(err)
+	}
+	held, err = s.GetPublicationRecord(ctx, p.ID)
+	if err != nil || held.Status != "scheduled" {
+		t.Fatal("reconnected account left its unsubmitted release blocked", held, err)
+	}
 	if err = s.PreparePublications(ctx, due, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +162,7 @@ func TestTikTokOnlyDispatchSurvivesWaitingAndFencesUnknownRetry(t *testing.T) {
 		t.Fatal("waiting worker churned attempts", count, err)
 	}
 	lease, err := s.ClaimWorkflow(ctx, &w.ClaimRequest{Command: w.Command{Kind: "publish", PublicationID: p.ID, AttemptID: attempt, ExpectedVersion: p.Version}, WorkerID: "tiktok-worker"}, due.Add(16*time.Minute))
-	if err != nil || !lease.Granted || lease.Publication.SessionVersion != 1 {
+	if err != nil || !lease.Granted || lease.Publication.SessionVersion != 2 {
 		t.Fatal(lease, err)
 	}
 	lr := w.LeaseRequest{AttemptID: attempt, LeaseToken: lease.LeaseToken, ExpectedVersion: p.Version}
@@ -161,6 +178,25 @@ func TestTikTokOnlyDispatchSurvivesWaitingAndFencesUnknownRetry(t *testing.T) {
 	}
 	if released, err := s.ReleaseTikTokOperation(ctx, attempt, "wrong-token", due.Add(16*time.Minute)); err != nil || released {
 		t.Fatal("unowned release accepted", released, err)
+	}
+	if err = s.SaveTikTokConnection(ctx, domain.TikTokConnection{AccountID: tt, Status: "connected", RemoteAccountID: "123456789", SessionRef: "session/renewed", SessionVersion: 3}); err != nil {
+		t.Fatal(err)
+	}
+	permit, err := s.RenewWorkflow(ctx, &lr, due.Add(16*time.Minute))
+	if err != nil || permit.Allowed {
+		t.Fatal("old session still authorizes execution", permit, err)
+	}
+	accepted, err = s.CheckpointWorkflow(ctx, &w.CheckpointRequest{LeaseRequest: lr, Checkpoint: w.Checkpoint{State: "publishing", FinalRequestStarted: true}}, due.Add(16*time.Minute))
+	if err != nil || accepted {
+		t.Fatal("old session passed the final publication barrier", accepted, err)
+	}
+	accepted, err = s.FailWorkflow(ctx, &w.FailRequest{LeaseRequest: lr, State: "blocked", Code: "auth_required", ReconnectRequired: true}, due.Add(16*time.Minute))
+	if err != nil || accepted {
+		t.Fatal("stale worker overwrote renewed account state", accepted, err)
+	}
+	var connected bool
+	if err = s.pool.QueryRow(ctx, `SELECT connection_state='connected' AND session_version=3 FROM accounts WHERE id=$1`, tt).Scan(&connected); err != nil || !connected {
+		t.Fatal("renewed account was invalidated", connected, err)
 	}
 	if err = s.PreparePublications(ctx, due.Add(19*time.Minute), 10); err != nil {
 		t.Fatal(err)

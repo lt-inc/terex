@@ -13,6 +13,9 @@ func (s *Store) SaveTikTokConnection(ctx context.Context, c domain.TikTokConnect
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err = lockTwitch(ctx, tx); err != nil {
+		return err
+	}
 	var platform, remote string
 	var version int64
 	if err = tx.QueryRow(ctx, `SELECT platform,COALESCE(remote_account_id,''),session_version FROM accounts WHERE id=$1 FOR UPDATE`, c.AccountID).Scan(&platform, &remote, &version); err != nil {

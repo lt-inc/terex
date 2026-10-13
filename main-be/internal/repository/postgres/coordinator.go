@@ -191,7 +191,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 		if p.CancelRequested {
 			phase = "cancel_pending"
 		} else if connection != "connected" || ref.Object == "" {
-			if _, err = tx.Exec(ctx, `UPDATE publications SET status='blocked',error='Account OAuth connection is required' WHERE id=$1`, pid); err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE publications SET status='blocked',error_code=CASE WHEN platform='tiktok' THEN 'auth_required' ELSE error_code END,error='Account OAuth connection is required' WHERE id=$1`, pid); err != nil {
 				return nil, err
 			}
 			if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='failed',error='Account OAuth connection is required' WHERE id=$1`, q.AttemptID); err != nil {
@@ -224,7 +224,7 @@ func (s *Store) ClaimWorkflow(ctx context.Context, q *workflow.ClaimRequest, now
 				return nil, err
 			}
 		}
-		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET worker_id=$2,lease_token=$3,lease_until=$4,execution_started_at=COALESCE(execution_started_at,$5) WHERE id=$1`, q.AttemptID, q.WorkerID, token, until, now); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET worker_id=$2,lease_token=$3,lease_until=$4,execution_started_at=COALESCE(execution_started_at,$5),claimed_session_version=$6 WHERE id=$1`, q.AttemptID, q.WorkerID, token, until, now, out.Publication.SessionVersion); err != nil {
 			return nil, err
 		}
 		state := phase
@@ -267,8 +267,9 @@ func lockAttempt(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now ti
 		return pid, false, nil
 	}
 	var current int
-	err = tx.QueryRow(ctx, `SELECT version FROM publications WHERE id=$1 FOR UPDATE`, pid).Scan(&current)
-	return pid, err == nil && current == version, err
+	var sessionAllowed bool
+	err = tx.QueryRow(ctx, `SELECT p.version,p.platform<>'tiktok' OR (a.claimed_session_version>0 AND a.claimed_session_version=ac.session_version) FROM publications p JOIN publication_attempts a ON a.publication_id=p.id JOIN accounts ac ON ac.id=p.account_id WHERE p.id=$1 AND a.id=$2 FOR UPDATE OF p`, pid, q.AttemptID).Scan(&current, &sessionAllowed)
+	return pid, err == nil && current == version && sessionAllowed, err
 }
 func lockRender(ctx context.Context, tx pgx.Tx, q workflow.LeaseRequest, now time.Time) (int64, bool, error) {
 	var rid int64
