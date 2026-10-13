@@ -206,7 +206,7 @@ func (w *Worker) Handle(ctx context.Context, c workflow.Command) error {
 		if work.Source.Assembly != nil && work.Source.Original != l.Render.Source.Original {
 			source = &work.Source
 		}
-		r, e := w.Coordinator.Complete(ctx, &workflow.CompleteRequest{LeaseRequest: q, Checkpoint: workflow.Checkpoint{State: "rendered"}, Media: media, Source: source})
+		r, e := w.Coordinator.Complete(ctx, &workflow.CompleteRequest{LeaseRequest: q, Checkpoint: workflow.Checkpoint{State: "rendered"}, Media: media, Source: source, MediaSHA256: prepared.MediaSHA256, MediaSizeBytes: prepared.MediaSizeBytes})
 		err = e
 		if e == nil && !r.Accepted {
 			err = fmt.Errorf("render lease expired before completion")

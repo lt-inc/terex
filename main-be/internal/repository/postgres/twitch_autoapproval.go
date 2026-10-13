@@ -45,7 +45,7 @@ func autoApproveTwitchReadyTx(ctx context.Context, tx pgx.Tx, clip string, now t
 	if _, err = tx.Exec(ctx, `INSERT INTO publications(clip_id,sub_job_id,account_id,platform,publish_at,revision_id,timezone,metadata,status,policy_hold_reason,error)
  SELECT c.clip_id,sj.sub_job_id,a.id,a.platform,COALESCE(t.start_at,$2),$3,t.timezone,r.spec,'on_hold','manual_schedule','Выберите время публикации в календаре'
  FROM clips c JOIN twitch_outputs o ON o.clip_id=c.clip_id JOIN twitch_flows f ON f.id=o.flow_id JOIN sub_jobs sj ON sj.job_id=c.job_id JOIN sub_job_targets t ON t.sub_job_id=sj.sub_job_id JOIN accounts a ON a.id=t.account_id JOIN clip_revisions r ON r.id=$3
- WHERE c.clip_id=$1 AND f.enabled AND NOT f.archived AND NOT f.auto_publish ON CONFLICT(clip_id,account_id)DO NOTHING`, clip, now, rid); err != nil {
+ WHERE c.clip_id=$1 AND f.enabled AND NOT f.archived AND NOT f.auto_publish AND NOT EXISTS(SELECT 1 FROM twitch_output_destinations d WHERE d.clip_id=c.clip_id) ON CONFLICT(clip_id,account_id)DO NOTHING`, clip, now, rid); err != nil {
 		return err
 	}
 	// Only an edit-created hold can be resumed. Existing provider sessions keep

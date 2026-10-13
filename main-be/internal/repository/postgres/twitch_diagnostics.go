@@ -43,7 +43,7 @@ func (s *Store) TwitchFlowDiagnostics(ctx context.Context, id string, now time.T
 	if target.IsZero() {
 		target = now
 	}
-	rows, err := tx.Query(ctx, `SELECT i.twitch_clip_id,i.request->'source',i.media_state,i.state,fs.excluded OR i.rejected,COALESCE((m.verified->>'duration_sec')::float8,0),COALESCE(m.storage_state,''),COALESCE(m.id,''),EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=i.media_id),EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations pr ON pr.id=ps.reservation_id WHERE ps.import_id=i.id AND pr.youtube_channel_id=$2 AND pr.format='compilation' AND pr.state='active' AND pr.expires_at>$3 AND(pr.flow_id<>$1 OR pr.clip_id IS NOT NULL)) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1`, id, f.YouTubeChannelID, now)
+	rows, err := tx.Query(ctx, `SELECT i.twitch_clip_id,i.request->'source',i.media_state,i.state,fs.excluded OR i.rejected,COALESCE((m.verified->>'duration_sec')::float8,0),COALESCE(m.storage_state,''),COALESCE(m.id,''),EXISTS(SELECT 1 FROM twitch_source_uses u WHERE u.youtube_channel_id=$2 AND u.format='compilation' AND u.media_id=i.media_id),EXISTS(SELECT 1 FROM twitch_preparation_sources ps JOIN twitch_preparation_reservations pr ON pr.id=ps.reservation_id WHERE ps.import_id=i.id AND pr.youtube_channel_id=$2 AND pr.format='compilation' AND pr.state='active' AND pr.expires_at>$3 AND(pr.flow_id<>$1 OR pr.clip_id IS NOT NULL)) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id LEFT JOIN twitch_media m ON m.id=i.media_id WHERE fs.flow_id=$1`, id, flowDestinationKey(f), now)
 	if err != nil {
 		return out, err
 	}
@@ -151,7 +151,7 @@ func (s *Store) TwitchFlowDiagnostics(ctx context.Context, id string, now time.T
 	rows, err = tx.Query(ctx, `SELECT f.id,COALESCE(f.config->>'name',f.id),x.format,sum(x.scheduled)::integer,sum(x.preparing)::integer,min(x.at) FROM twitch_flows f JOIN (
  SELECT o.flow_id,o.format,1 AS scheduled,0 AS preparing,p.publish_at AS at FROM twitch_outputs o JOIN publications p ON p.clip_id=o.clip_id WHERE o.youtube_channel_id=$1 AND p.status NOT IN('cancelled','on_hold','failed','blocked') AND p.publish_at>=$2 AND p.publish_at<=$3
  UNION ALL SELECT r.flow_id,r.format,0,1,r.slot_at FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.state='active' AND r.expires_at>$2 AND r.slot_at<=$3 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND p.status NOT IN('cancelled','on_hold','failed','blocked'))
- ) x ON x.flow_id=f.id GROUP BY f.id,x.format ORDER BY min(x.at),f.id`, f.YouTubeChannelID, now, out.Capacity.HorizonEnd)
+ ) x ON x.flow_id=f.id GROUP BY f.id,x.format ORDER BY min(x.at),f.id`, flowDestinationKey(f), now, out.Capacity.HorizonEnd)
 	if err != nil {
 		return out, err
 	}

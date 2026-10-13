@@ -75,6 +75,22 @@ export interface AccountRecord {
   remote_account_name?: string;
   connection_error?: string;
   last_checked_at?: string | null;
+  session_version?: number;
+}
+
+export interface TikTokConnection {
+  account_id: number;
+  status: string;
+  pairing_token?: string;
+  expires_at?: string;
+  pairing_expires_at?: string;
+  payload_url?: string;
+  remote_account_id?: string;
+  username?: string;
+  display_name?: string;
+  session_version?: number;
+  error?: string;
+  last_checked_at?: string;
 }
 
 export interface AssetRecord {
@@ -206,10 +222,12 @@ export interface PublicationEvent {
   cancel_requested?: boolean;
   title: string;
   description?: string;
+  caption?: string;
   hashtags?: string[];
   upload_id?: string;
   external_url?: string;
   error?: string;
+  error_code?: string;
   legacy?: boolean;
   history?: PublicationHistory[];
 }

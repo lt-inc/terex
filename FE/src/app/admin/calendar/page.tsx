@@ -9,6 +9,9 @@ import {
   fetchPublicationHistory,
   fetchPublications,
   updatePublication,
+  savePublicationCaption,
+  reconcileTikTokPublication,
+  retryTikTokAfterAbsence,
   fetchTwitchPolicyPreview,
 } from "@/lib/api";
 import {
@@ -45,10 +48,64 @@ const statuses = [
   "cancel_pending",
   "retry_wait",
   "failed",
+  "verifying",
 ];
+const tiktokStates: Record<string, [string, string]> = {
+  waiting_worker: [
+    "Ждёт TikTok исполнителя",
+    "Видео готово; публикация ждёт свободного и подключённого TikTok исполнителя.",
+  ],
+  uploading: [
+    "Загружается в TikTok",
+    "Исполнитель передаёт видео. Не запускайте повторную загрузку.",
+  ],
+  verifying: [
+    "Проверяется результат",
+    "Видео передано; исполнитель проверяет создание поста и его адрес.",
+  ],
+  auth_required: [
+    "Нужно войти в TikTok",
+    "Откройте Accounts и переподключите этот TikTok аккаунт.",
+  ],
+  operator_required: [
+    "Требуется действие оператора",
+    "TikTok запросил подтверждение. Откройте браузер исполнителя в Accounts.",
+  ],
+  upload_unknown: [
+    "Результат загрузки неизвестен",
+    "TikTok мог создать пост. Повторная загрузка запрещена до сверки; проверьте посты аккаунта и состояние исполнителя.",
+  ],
+  published: [
+    "Опубликовано в TikTok",
+    "Пост подтверждён, ссылка доступна ниже.",
+  ],
+  publishing: [
+    "Пост отправляется в TikTok",
+    "Исполнитель подтверждает публикацию. Повторная отправка не требуется.",
+  ],
+  blocked: [
+    "TikTok публикация удерживается",
+    "Причина указана ниже. После устранения причины сервер проверит возможность продолжения.",
+  ],
+};
+function tiktokState(event: PublicationEvent) {
+  if (event.error_code && tiktokStates[event.error_code])
+    return event.error_code;
+  return event.state === "queued"
+    ? "waiting_worker"
+    : event.state === "needs_attention"
+      ? "upload_unknown"
+      : event.state;
+}
+function publicationLabel(event: PublicationEvent) {
+  return event.platform === "tiktok"
+    ? tiktokStates[tiktokState(event)]?.[0] || event.state
+    : event.state;
+}
 function isStarted(event: PublicationEvent) {
   return (
     !!event.started_at ||
+    (event.platform === "tiktok" && event.state === "needs_attention") ||
     [
       "sent",
       "uploading",
@@ -56,6 +113,8 @@ function isStarted(event: PublicationEvent) {
       "processing",
       "publishing",
       "published",
+      "verifying",
+      "upload_unknown",
     ].includes(event.state)
   );
 }
@@ -83,7 +142,10 @@ export default function CalendarPage() {
     [refresh, setRefresh] = useState(0);
   const [observedAt, setObservedAt] = useState("");
   const [updatedAt, setUpdatedAt] = useState("");
-  const days = useMemo(() => date ? calendarDays(date, view) : [], [date, view]);
+  const days = useMemo(
+    () => (date ? calendarDays(date, view) : []),
+    [date, view],
+  );
   const today = observedAt ? zonedParts(observedAt, zone).date : "";
   useEffect(() => {
     const now = new Date().toISOString();
@@ -110,14 +172,17 @@ export default function CalendarPage() {
       setLoading(false);
       return;
     }
-    fetchPublications({
-      from,
-      to,
-      ...(account ? { account_id: account } : {}),
-      ...(platform ? { platform } : {}),
-      ...(state ? { status: state } : {}),
-      limit: "1000",
-    }, controller.signal)
+    fetchPublications(
+      {
+        from,
+        to,
+        ...(account ? { account_id: account } : {}),
+        ...(platform ? { platform } : {}),
+        ...(state ? { status: state } : {}),
+        limit: "1000",
+      },
+      controller.signal,
+    )
       .then((rows) => {
         if (active) {
           setEvents(rows);
@@ -268,7 +333,9 @@ export default function CalendarPage() {
       </div>
       {error && (
         <p role="alert" className="text-red-400">
-          {error}{updatedAt && " Previously loaded events have been kept. Use Refresh to try again."}
+          {error}
+          {updatedAt &&
+            " Previously loaded events have been kept. Use Refresh to try again."}
         </p>
       )}
       <div className="overflow-x-auto">
@@ -300,7 +367,7 @@ export default function CalendarPage() {
                     {event.title || event.clip_id}
                   </span>
                   <span className="text-[10px] text-slate-400">
-                    {event.state} · {event.platform}
+                    {publicationLabel(event)} · {event.platform}
                   </span>
                 </button>
               ))}
@@ -335,8 +402,22 @@ function EventModal({
     "approve" | "retry" | "cancel" | "publish-now" | null
   >(null);
   const [freshnessOverride, setFreshnessOverride] = useState(false);
-  const [policyViolation, setPolicyViolation] = useState<TwitchPolicyPreview["violations"][number] | null>(null);
-  const twitchPublication = !!event.twitch_policy || event.clip_id.startsWith("twitch-") || event.clip_id.startsWith("compilation-");
+  const [caption, setCaption] = useState(event.caption || "");
+  const tiktok = event.platform === "tiktok";
+  const [remoteURL, setRemoteURL] = useState("");
+  const unknownTikTokUpload = tiktok && tiktokState(event) === "upload_unknown";
+  const [confirmAbsent, setConfirmAbsent] = useState(false);
+  useEffect(
+    () => setCaption(event.caption || ""),
+    [event.caption, event.version],
+  );
+  const [policyViolation, setPolicyViolation] = useState<
+    TwitchPolicyPreview["violations"][number] | null
+  >(null);
+  const twitchPublication =
+    !!event.twitch_policy ||
+    event.clip_id.startsWith("twitch-") ||
+    event.clip_id.startsWith("compilation-");
   const [value, setValue] = useState(() => {
       const p = zonedParts(event.publish_at, zone);
       return `${p.date}T${p.time}`;
@@ -360,10 +441,19 @@ function EventModal({
   useEffect(() => {
     if (!twitchPublication) return;
     let active = true;
-    fetchTwitchPolicyPreview().then((result) => {
-      if (active) setPolicyViolation((result.violations || []).find((item) => item.publication_id === event.id) || null);
-    }).catch(() => {});
-    return () => { active = false; };
+    fetchTwitchPolicyPreview()
+      .then((result) => {
+        if (active)
+          setPolicyViolation(
+            (result.violations || []).find(
+              (item) => item.publication_id === event.id,
+            ) || null,
+          );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, [event.id, event.version, twitchPublication]);
   useEffect(() => {
     function key(e: KeyboardEvent) {
@@ -373,15 +463,35 @@ function EventModal({
     return () => window.removeEventListener("keydown", key);
   }, [onClose, busy]);
   let selectedAt = event.publish_at;
-  try { const [date, time] = value.split("T"); selectedAt = zonePartsToISO(date, time, zone); } catch { /* The server validates incomplete dates. */ }
-  const effectiveSelectedAt = Math.max(new Date(selectedAt).getTime(), Date.now());
-  const selectedAge = event.twitch_policy?.source_created_at ? Math.max(0, Math.round((effectiveSelectedAt - new Date(event.twitch_policy.source_created_at).getTime()) / 3600000)) : "неизвестен";
-  const policyStamp = (timestamp?: string) => timestamp ? formatInZone(timestamp, zone) : "неизвестно";
+  try {
+    const [date, time] = value.split("T");
+    selectedAt = zonePartsToISO(date, time, zone);
+  } catch {
+    /* The server validates incomplete dates. */
+  }
+  const effectiveSelectedAt = Math.max(
+    new Date(selectedAt).getTime(),
+    Date.now(),
+  );
+  const selectedAge = event.twitch_policy?.source_created_at
+    ? Math.max(
+        0,
+        Math.round(
+          (effectiveSelectedAt -
+            new Date(event.twitch_policy.source_created_at).getTime()) /
+            3600000,
+        ),
+      )
+    : "неизвестен";
+  const policyStamp = (timestamp?: string) =>
+    timestamp ? formatInZone(timestamp, zone) : "неизвестно";
   async function action(kind: "approve" | "retry" | "cancel" | "publish-now") {
     setBusy(true);
     setError("");
     try {
-      onChanged(await actPublication(event.id, kind, event.version, freshnessOverride));
+      onChanged(
+        await actPublication(event.id, kind, event.version, freshnessOverride),
+      );
     } catch (e) {
       setError(
         e instanceof ApiError && e.status === 409
@@ -419,6 +529,56 @@ function EventModal({
       setBusy(false);
     }
   }
+  async function saveCaption() {
+    if (Array.from(caption).length > 2200) {
+      setError("Подпись TikTok должна содержать не более 2 200 символов.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      onChanged(await savePublicationCaption(event.id, event.version, caption));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function reconcile() {
+    setBusy(true);
+    setError("");
+    try {
+      if (remoteURL.trim()) {
+        const url = new URL(remoteURL.trim());
+        if (
+          url.protocol !== "https:" ||
+          !["tiktok.com", "www.tiktok.com"].includes(url.hostname) ||
+          !/^\/@[^/]+\/video\/\d+\/?$/.test(url.pathname)
+        )
+          throw new Error(
+            "Укажите полный адрес поста: https://www.tiktok.com/@аккаунт/video/…",
+          );
+      }
+      onChanged(
+        await reconcileTikTokPublication(
+          event.id,
+          event.version,
+          remoteURL.trim() || undefined,
+        ),
+      );
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function retryAfterAbsence() {
+    setBusy(true);
+    setError("");
+    try { onChanged(await retryTikTokAfterAbsence(event.id, event.version)); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+    finally { setBusy(false); }
+  }
   return (
     <div
       className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
@@ -444,10 +604,94 @@ function EventModal({
           </button>
         </div>
         <p className="text-sm text-slate-400">
-          {event.account_name} · {event.platform} · {event.state} · render
-          revision {event.revision_id ?? "original"}
+          {event.account_name} · {event.platform} · {publicationLabel(event)} ·
+          render revision {event.revision_id ?? "original"}
         </p>
-        {twitchPublication && event.state === "on_hold" && event.error === "Выберите время публикации в календаре" && <p className="rounded-lg border border-indigo-900 p-3 text-sm text-indigo-200">Версия готова и допущена автоматически. Выберите время ниже и нажмите «Назначить время». Автопубликация потока выключена, поэтому выпуск ожидает вашего расписания.</p>}
+        {tiktok && (
+          <div className="space-y-2 rounded-lg border border-slate-600 p-3">
+            <p className="text-sm text-amber-200">
+              {tiktokStates[tiktokState(event)]?.[1] ||
+                "Расписание и состояние этой TikTok публикации независимы от YouTube."}
+            </p>
+            {["auth_required", "operator_required"].includes(
+              tiktokState(event),
+            ) && (
+              <Link
+                href="/admin/accounts"
+                className="inline-block text-sm text-indigo-300"
+              >
+                Подключение и браузер TikTok →
+              </Link>
+            )}
+            <label className="block text-sm text-slate-300">
+              Подпись TikTok
+              <textarea
+                className={`${cls} mt-1 w-full`}
+                rows={5}
+                value={caption}
+                disabled={
+                  busy || isStarted(event) || event.state === "cancelled"
+                }
+                onChange={(event) => setCaption(event.target.value)}
+              />
+            </label>
+            <p
+              className={`text-xs ${Array.from(caption).length > 2200 ? "text-red-300" : "text-slate-400"}`}
+            >
+              {Array.from(caption).length}/2 200 символов. Подпись этого поста;
+              YouTube описание и видеорендер не меняются. Стандартная подпись
+              TikTok не содержит #shorts.
+            </p>
+            <button
+              className={button}
+              disabled={
+                busy ||
+                isStarted(event) ||
+                event.state === "cancelled" ||
+                Array.from(caption).length > 2200 ||
+                caption === (event.caption || "")
+              }
+              onClick={() => void saveCaption()}
+            >
+              Сохранить подпись без рендера
+            </button>
+            {unknownTikTokUpload && (
+              <div className="space-y-2 border-t border-slate-600 pt-3">
+                <label className="block text-xs text-slate-300">
+                  Адрес подтверждённого поста (если известен)
+                  <input
+                    className={`${cls} mt-1 w-full`}
+                    value={remoteURL}
+                    disabled={busy}
+                    onChange={(event) => setRemoteURL(event.target.value)}
+                    placeholder="https://www.tiktok.com/@account/video/…"
+                  />
+                </label>
+                <button
+                  className={button}
+                  disabled={busy}
+                  onClick={() => void reconcile()}
+                >
+                  Сверить результат — без повторной загрузки
+                </button>
+                {event.state === "needs_attention" && <button className={`${button} text-amber-200`} disabled={busy} onClick={() => setConfirmAbsent(true)}>Пост отсутствует — разрешить новую попытку</button>}
+                <p className="text-xs text-slate-400">
+                  Сервер проверит адрес и владельца поста. Если подтверждения
+                  нет, состояние останется неопределённым.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+        {twitchPublication &&
+          event.state === "on_hold" &&
+          event.error === "Выберите время публикации в календаре" && (
+            <p className="rounded-lg border border-indigo-900 p-3 text-sm text-indigo-200">
+              Версия готова и допущена автоматически. Выберите время ниже и
+              нажмите «Назначить время». Автопубликация потока выключена,
+              поэтому выпуск ожидает вашего расписания.
+            </p>
+          )}
         <Link
           className="text-indigo-400 text-sm"
           href={`/admin/clips/${encodeURIComponent(event.clip_id)}`}
@@ -464,14 +708,76 @@ function EventModal({
             onChange={(e) => setValue(e.target.value)}
           />
         </label>
-        {twitchPublication && !isStarted(event) && <div className="rounded-lg border border-amber-900 bg-amber-950/20 p-3 text-xs">
-          {event.twitch_policy && <><p className="text-slate-300">Самый старый исходник создан {policyStamp(event.twitch_policy.source_created_at)}. Возраст на момент выпуска: {selectedAge} ч при максимуме {event.twitch_policy.max_source_age_hours} ч. Дата в прошлом означает выпуск сейчас.</p><p className="mt-1 text-slate-400">Крайний срок: {policyStamp(event.twitch_policy.deadline)}. Горизонт {event.twitch_policy.horizon_hours} ч: до {policyStamp(event.twitch_policy.horizon_end)}.</p>{(effectiveSelectedAt > new Date(event.twitch_policy.deadline || "").getTime() || new Date(selectedAt) > new Date(event.twitch_policy.horizon_end)) && <p className="mt-2 text-amber-200">Дата выпуска нарушает ограничения. Если срок уже прошёл, подтвердите исключение для ручного выпуска.</p>}</>}
-          {policyViolation && <><p className="text-amber-200">{policyViolation.message}</p><p className="mt-1 text-slate-400">Самый старый исходник: {policyStamp(policyViolation.source_created_at)}. Крайний срок: {policyStamp(policyViolation.deadline)}.</p></>}
-          {event.freshness_override && <p className="mt-2 text-emerald-300">Для сохранённых версии и времени уже подтверждено исключение. Новая дата требует повторного подтверждения.</p>}
-          <p className="mt-2 text-slate-400">Назначение Twitch-выпуска проверяет горизонт календаря и возраст всех исходников. Если выбранная дата выходит за ограничения, сервер укажет причину.</p>
-          <label className="mt-3 flex items-start gap-2 text-amber-100"><input type="checkbox" className="mt-0.5" checked={freshnessOverride} disabled={busy} onChange={(event) => setFreshnessOverride(event.target.checked)} /><span>Я подтверждаю исключение из правил актуальности и горизонта для этой версии и даты. Решение будет сохранено; изменение даты или версии потребует нового подтверждения.</span></label>
-          <p className="mt-2 text-slate-500">«Назначить время» сохраняет выбранную дату. «Upload now» начинает загрузку сохранённой версии сейчас, независимо от даты в поле. Для устаревшего клипа отметьте исключение заново: прежнее подтверждение относится только к сохранённому времени.</p>
-        </div>}
+        {twitchPublication && !isStarted(event) && (
+          <div className="rounded-lg border border-amber-900 bg-amber-950/20 p-3 text-xs">
+            {event.twitch_policy && (
+              <>
+                <p className="text-slate-300">
+                  Самый старый исходник создан{" "}
+                  {policyStamp(event.twitch_policy.source_created_at)}. Возраст
+                  на момент выпуска: {selectedAge} ч при максимуме{" "}
+                  {event.twitch_policy.max_source_age_hours} ч. Дата в прошлом
+                  означает выпуск сейчас.
+                </p>
+                <p className="mt-1 text-slate-400">
+                  Крайний срок: {policyStamp(event.twitch_policy.deadline)}.
+                  Горизонт {event.twitch_policy.horizon_hours} ч: до{" "}
+                  {policyStamp(event.twitch_policy.horizon_end)}.
+                </p>
+                {(effectiveSelectedAt >
+                  new Date(event.twitch_policy.deadline || "").getTime() ||
+                  new Date(selectedAt) >
+                    new Date(event.twitch_policy.horizon_end)) && (
+                  <p className="mt-2 text-amber-200">
+                    Дата выпуска нарушает ограничения. Если срок уже прошёл,
+                    подтвердите исключение для ручного выпуска.
+                  </p>
+                )}
+              </>
+            )}
+            {policyViolation && (
+              <>
+                <p className="text-amber-200">{policyViolation.message}</p>
+                <p className="mt-1 text-slate-400">
+                  Самый старый исходник:{" "}
+                  {policyStamp(policyViolation.source_created_at)}. Крайний
+                  срок: {policyStamp(policyViolation.deadline)}.
+                </p>
+              </>
+            )}
+            {event.freshness_override && (
+              <p className="mt-2 text-emerald-300">
+                Для сохранённых версии и времени уже подтверждено исключение.
+                Новая дата требует повторного подтверждения.
+              </p>
+            )}
+            <p className="mt-2 text-slate-400">
+              Назначение Twitch-выпуска проверяет горизонт календаря и возраст
+              всех исходников. Если выбранная дата выходит за ограничения,
+              сервер укажет причину.
+            </p>
+            <label className="mt-3 flex items-start gap-2 text-amber-100">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={freshnessOverride}
+                disabled={busy}
+                onChange={(event) => setFreshnessOverride(event.target.checked)}
+              />
+              <span>
+                Я подтверждаю исключение из правил актуальности и горизонта для
+                этой версии и даты. Решение будет сохранено; изменение даты или
+                версии потребует нового подтверждения.
+              </span>
+            </label>
+            <p className="mt-2 text-slate-500">
+              «Назначить время» сохраняет выбранную дату. «Upload now» начинает
+              загрузку сохранённой версии сейчас, независимо от даты в поле. Для
+              устаревшего клипа отметьте исключение заново: прежнее
+              подтверждение относится только к сохранённому времени.
+            </p>
+          </div>
+        )}
         <button
           className={button}
           disabled={
@@ -491,7 +797,8 @@ function EventModal({
             "pending_approval",
             "needs_attention",
           ].includes(event.state) &&
-            !isStarted(event) && !twitchPublication && (
+            !isStarted(event) &&
+            !twitchPublication && (
               <button
                 disabled={busy}
                 className="bg-indigo-600 disabled:opacity-40 rounded-lg p-2 text-sm"
@@ -501,15 +808,16 @@ function EventModal({
               </button>
             )}
           {(["failed", "retry_wait"].includes(event.state) ||
-            (event.state === "needs_attention" && isStarted(event))) && (
-            <button
-              disabled={busy}
-              className={button}
-              onClick={() => setConfirmation("retry")}
-            >
-              Retry
-            </button>
-          )}
+            (event.state === "needs_attention" && isStarted(event))) &&
+            !unknownTikTokUpload && (
+              <button
+                disabled={busy}
+                className={button}
+                onClick={() => setConfirmation("retry")}
+              >
+                Retry
+              </button>
+            )}
           {event.state === "blocked" && (
             <Link
               href="/admin/accounts"
@@ -526,6 +834,9 @@ function EventModal({
               "legacy_hold",
               "blocked",
               "needs_attention",
+              "auth_required",
+              "operator_required",
+              "upload_unknown",
             ].includes(event.state) &&
             (event.state !== "on_hold" || twitchPublication) && (
               <button
@@ -547,7 +858,17 @@ function EventModal({
               </button>
             )}
         </div>
-        {event.error && <p className={event.error === "Выберите время публикации в календаре" ? "text-indigo-200 text-sm" : "text-red-400 text-sm"}>{event.error}</p>}
+        {event.error && (
+          <p
+            className={
+              event.error === "Выберите время публикации в календаре"
+                ? "text-indigo-200 text-sm"
+                : "text-red-400 text-sm"
+            }
+          >
+            {event.error}
+          </p>
+        )}
         {event.external_url && (
           <a
             className="text-indigo-400 text-sm"
@@ -555,7 +876,7 @@ function EventModal({
             rel="noopener noreferrer"
             href={event.external_url}
           >
-            Open on YouTube →
+            Open on {tiktok ? "TikTok" : "YouTube"} →
           </a>
         )}
         {event.started_at && (
@@ -635,6 +956,13 @@ function EventModal({
           }}
         />
       )}
+      {confirmAbsent && <ConfirmAction
+        title="Подтвердить отсутствие поста в TikTok"
+        message={`Вы открыли TikTok профиль аккаунта «${event.account_name}», проверили опубликованные и обрабатываемые посты и убедились, что этого видео нет? Если пост уже создан, новая попытка может создать дубль. Предпочтительно сначала сверить результат по адресу существующего поста. Подтверждение разрешит одну новую попытку этой публикации и будет сохранено в истории.`}
+        confirmLabel="Я проверил профиль: поста нет"
+        onCancel={() => setConfirmAbsent(false)}
+        onConfirm={() => { setConfirmAbsent(false); void retryAfterAbsence(); }}
+      />}
     </div>
   );
 }

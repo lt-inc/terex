@@ -100,6 +100,9 @@ func (s *Service) Tick(ctx context.Context) error {
 			return err
 		}
 		queue := w.QueuePublish
+		if o.Kind == "publish_tiktok" {
+			queue = w.QueueTikTokPublish
+		}
 		if o.Kind == "render_revision" {
 			queue = w.QueueRender
 		}

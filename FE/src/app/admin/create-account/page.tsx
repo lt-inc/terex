@@ -89,7 +89,7 @@ export default function CreateAccountPage() {
         ),
       );
       setCards((prev) => prev.filter((c) => !success.has(c.id)));
-      setToast(`${success.size} saved. Open Accounts to connect with Google.`);
+      setToast(`${success.size} saved. Open Accounts to connect YouTube or TikTok.`);
       setTimeout(() => setToast(null), 3000);
     } catch {
       setToast("Failed to create accounts");
@@ -103,7 +103,7 @@ export default function CreateAccountPage() {
     <div className="p-6 flex flex-col gap-6 min-h-full">
       <h1 className="text-xl font-semibold text-slate-100">Create Account</h1>
       <Link href="/admin/accounts" className="text-indigo-400 text-sm">
-        Accounts and Google connections →
+        Accounts and platform connections →
       </Link>
       <div className="flex items-center justify-between">
         <button

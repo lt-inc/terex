@@ -1,4 +1,4 @@
-import type { TwitchFlow } from "@/types/twitch";
+import type { TwitchDestination, TwitchFlow } from "@/types/twitch";
 import { validateMetadataSettings } from "./twitch-metadata";
 export const defaultTwitchFlow = (): TwitchFlow => ({
   id: "",
@@ -45,6 +45,44 @@ export const parseSlots = (value: string) =>
         .filter(Boolean),
     ),
   ].sort();
+export function flowDestinations(flow: TwitchFlow): TwitchDestination[] {
+  if (flow.destinations) return flow.destinations;
+  if (!flow.account_id) return [];
+  return [
+    {
+      provider: "youtube",
+      account_id: flow.account_id,
+      remote_account_id: flow.youtube_channel_id,
+      enabled: true,
+      auto_publish: flow.auto_publish,
+      timezone: flow.timezone,
+      shorts_slots: flow.shorts_slots,
+      daily_shorts: flow.daily_shorts,
+      schedule_horizon_hours: flow.schedule_horizon_hours,
+      visibility: "public",
+    },
+  ];
+}
+
+export function applyFlowDestinations(flow: TwitchFlow): TwitchFlow {
+  const destinations = flowDestinations(flow);
+  const youtube = destinations.find((item) => item.provider === "youtube");
+  return {
+    ...flow,
+    destinations,
+    account_id: youtube?.account_id || 0,
+    youtube_channel_id: youtube?.remote_account_id || "",
+    auto_publish: youtube?.auto_publish || false,
+    ...(youtube
+      ? {
+          timezone: youtube.timezone,
+          shorts_slots: youtube.shorts_slots,
+          daily_shorts: youtube.daily_shorts,
+          schedule_horizon_hours: youtube.schedule_horizon_hours,
+        }
+      : { compilations_enabled: false }),
+  };
+}
 export function validateTwitchFlow(
   flow: TwitchFlow,
   step?: number,
@@ -52,8 +90,18 @@ export function validateTwitchFlow(
   if (step == null || step === 0) {
     if (!flow.name.trim() || flow.name.length > 100)
       return "Название потока должно содержать 1–100 символов.";
-    if (flow.account_id <= 0)
-      return "Выберите подключённый и подтверждённый YouTube-канал.";
+    const destinations = flowDestinations(flow);
+    if (
+      !destinations.length ||
+      destinations.some((item) => item.account_id <= 0)
+    )
+      return "Выберите подключённый YouTube или TikTok аккаунт для каждого назначения.";
+    if (
+      destinations.length > 2 ||
+      new Set(destinations.map((item) => item.provider)).size !==
+        destinations.length
+    )
+      return "Разрешено по одному назначению YouTube и TikTok.";
   }
   if (step == null || step === 1) {
     if (flow.ranking_mode && !["views", "growth"].includes(flow.ranking_mode))
@@ -93,6 +141,13 @@ export function validateTwitchFlow(
   if (step == null || step === 2) {
     if (!flow.shorts_enabled && !flow.compilations_enabled)
       return "Включите хотя бы один формат выпуска.";
+    if (
+      flowDestinations(flow).some(
+        (item) => item.provider === "tiktok" && item.enabled,
+      ) &&
+      !flow.shorts_enabled
+    )
+      return "Для TikTok включите вертикальные клипы. Горизонтальные подборки доступны только YouTube.";
     if (flow.compilations_enabled) {
       if (
         !Number.isSafeInteger(flow.compilation_min_clips) ||
@@ -121,9 +176,54 @@ export function validateTwitchFlow(
   if (step == null || step === 3) {
     const metadataError = validateMetadataSettings(flow.metadata);
     if (metadataError) return metadataError;
-    if (!Number.isSafeInteger(flow.schedule_horizon_hours) || flow.schedule_horizon_hours < 1 || flow.schedule_horizon_hours > 168)
+    for (const destination of flowDestinations(flow)) {
+      const label = destination.provider === "tiktok" ? "TikTok" : "YouTube";
+      try {
+        new Intl.DateTimeFormat("ru", {
+          timeZone: destination.timezone,
+        }).format();
+      } catch {
+        return `${label}: укажите существующий часовой пояс.`;
+      }
+      if (
+        !Number.isSafeInteger(destination.daily_shorts) ||
+        destination.daily_shorts < 1 ||
+        destination.daily_shorts > 100
+      )
+        return `${label}: лимит вертикальных клипов — 1–100 в сутки.`;
+      if (
+        !Number.isSafeInteger(destination.schedule_horizon_hours) ||
+        destination.schedule_horizon_hours < 1 ||
+        destination.schedule_horizon_hours > 168
+      )
+        return `${label}: горизонт календаря — 1–168 часов.`;
+      if (!["public", "private"].includes(destination.visibility))
+        return `${label}: выберите видимость public или private.`;
+      if (
+        destination.shorts_slots.some(
+          (slot) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(slot),
+        )
+      )
+        return `${label}: время задаётся в формате ЧЧ:ММ.`;
+      if (
+        destination.enabled &&
+        destination.auto_publish &&
+        flow.shorts_enabled &&
+        !destination.shorts_slots.length
+      )
+        return `${label}: задайте время автоматических публикаций.`;
+    }
+    if (
+      !Number.isSafeInteger(flow.schedule_horizon_hours) ||
+      flow.schedule_horizon_hours < 1 ||
+      flow.schedule_horizon_hours > 168
+    )
       return "Горизонт календаря: целое число от 1 до 168 часов.";
-    if (!Number.isSafeInteger(flow.max_source_age_hours) || flow.max_source_age_hours < 1 || flow.max_source_age_hours > 720)
+    if (
+      !Number.isSafeInteger(flow.max_source_age_hours) ||
+      flow.max_source_age_hours < 1 ||
+      flow.max_source_age_hours > 720
+    )
       return "Возраст клипа на дату выпуска: целое число от 1 до 720 часов.";
     try {
       new Intl.DateTimeFormat("ru", { timeZone: flow.timezone }).format();

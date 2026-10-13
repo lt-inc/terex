@@ -55,8 +55,6 @@ export function validateTwitchSettings(
       return `${field.replaceAll("_", " ")} must be a whole number between ${minimum} and ${maximum}.`;
     }
   }
-  if (settings.enabled && settings.target_account_id <= 0)
-    return "Select a connected YouTube account before enabling collection.";
   if (settings.min_age_minutes >= settings.window_hours * 60)
     return "Minimum age must be shorter than the discovery window.";
   if (

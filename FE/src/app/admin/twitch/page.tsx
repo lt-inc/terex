@@ -14,6 +14,7 @@ import {
   restoreTwitchFlow,
 } from "@/lib/api";
 import { durationLabel, queueAgeLabel } from "@/lib/twitch-status";
+import { flowDestinations } from "@/lib/twitch-flow";
 import type { TwitchCollectorStatus, TwitchFlow } from "@/types/twitch";
 import type { AccountRecord } from "@/types";
 const button =
@@ -117,7 +118,7 @@ export default function TwitchFlowsPage() {
         Показать архивированные потоки
       </label>
       <p className="max-w-4xl text-sm text-slate-400">
-        Выберите Twitch-каналы или категорию, язык и YouTube-назначение.
+        Выберите Twitch-каналы или категорию, язык и назначения YouTube/TikTok.
         Collector собирает исходники, Terex готовит выпуски. Проверка и
         публикация каждого потока управляются отдельно.
       </p>
@@ -176,7 +177,7 @@ export default function TwitchFlowsPage() {
         <section className="rounded-xl border border-slate-700 bg-slate-800 p-6">
           <h2 className="font-semibold">Создайте первый поток</h2>
           <p className="mt-2 text-sm text-slate-400">
-            Сначала подключите и подтвердите YouTube-канал в Accounts. Затем
+            Сначала подключите и подтвердите YouTube или TikTok в Accounts. Затем
             выберите Twitch-источники, включите поток и разрешите работу
             коллектора в настройках сервиса.
           </p>
@@ -190,7 +191,6 @@ export default function TwitchFlowsPage() {
       )}
       <div className="grid gap-4 xl:grid-cols-2">
         {flows.map((flow) => {
-          const account = accounts.find((item) => item.id === flow.account_id);
           const timestamp = (value?: string) =>
             value
               ? new Intl.DateTimeFormat("ru", {
@@ -214,13 +214,10 @@ export default function TwitchFlowsPage() {
                     {flow.name}
                   </Link>
                   }
-                  <p className="mt-1 break-words text-sm text-slate-400">
-                    YouTube:{" "}
-                    {account?.remote_account_name ||
-                      account?.name ||
-                      flow.youtube_channel_id ||
-                      "назначение недоступно"}
-                  </p>
+                  {flowDestinations(flow).map((destination) => {
+                    const target = accounts.find((item) => item.id === destination.account_id);
+                    return <p key={destination.provider} className="mt-1 break-words text-sm text-slate-400">{destination.provider === "tiktok" ? "TikTok" : "YouTube"}: {target?.remote_account_name || target?.name || destination.remote_account_id || "назначение недоступно"} · {destination.enabled ? destination.auto_publish ? "автопубликация" : "ручное расписание" : "выключено"} · {destination.daily_shorts}/сутки · {destination.schedule_horizon_hours} ч</p>;
+                  })}
                 </div>
                 <span
                   className={`shrink-0 rounded px-2 py-1 text-xs ${flow.enabled ? "bg-emerald-950 text-emerald-300" : "bg-slate-700 text-slate-300"}`}
@@ -241,7 +238,7 @@ export default function TwitchFlowsPage() {
               </p>
               <p className="text-sm text-slate-300">
                 {[
-                  flow.shorts_enabled ? "Shorts" : "",
+                  flow.shorts_enabled ? "Вертикальные клипы" : "",
                   flow.compilations_enabled
                     ? `Подборки ${flow.legacy_length ? "по старым правилам" : `${durationLabel(flow.compilation_min_duration_sec)}–${durationLabel(flow.compilation_max_duration_sec)}`}`
                     : "",
@@ -251,13 +248,13 @@ export default function TwitchFlowsPage() {
               </p>
               <p
                 className={
-                  flow.auto_publish
+                  flowDestinations(flow).some((item) => item.enabled && item.auto_publish)
                     ? "text-sm text-amber-200"
                     : "text-sm text-slate-400"
                 }
               >
-                {flow.auto_publish
-                  ? "Автопубликация новых автоматических выпусков"
+                {flowDestinations(flow).some((item) => item.enabled && item.auto_publish)
+                  ? "Автопубликация включена для выбранных назначений"
                   : "Время публикации назначается вручную"}{" "}
                 · {flow.timezone}
               </p>

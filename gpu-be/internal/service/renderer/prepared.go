@@ -12,12 +12,14 @@ import (
 // PreparedRender is local to this attempt. Work alone is sent to Complete;
 // filesystem paths and cleanup functions never enter a manifest or queue.
 type PreparedRender struct {
-	Work          workflow.RenderWork
-	originalPath  string
-	localAssembly bool
-	ctx           context.Context
-	cleanup       func()
-	once          sync.Once
+	Work           workflow.RenderWork
+	MediaSHA256    string
+	MediaSizeBytes int64
+	originalPath   string
+	localAssembly  bool
+	ctx            context.Context
+	cleanup        func()
+	once           sync.Once
 }
 
 func (p *PreparedRender) Close() {
@@ -56,5 +58,5 @@ func (s *Service) RenderPrepared(ctx context.Context, p *PreparedRender) (domain
 	if err := ctx.Err(); err != nil {
 		return domain.ObjectRef{}, context.Cause(ctx)
 	}
-	return s.renderRevision(p.ctx, p.Work, p.originalPath, p.localAssembly)
+	return s.renderRevision(context.WithValue(p.ctx, renderDigestKey{}, p), p.Work, p.originalPath, p.localAssembly)
 }

@@ -79,8 +79,7 @@ export default function AccountCard({
       {/* Auth file */}
       <div className="flex flex-col gap-2">
         <p className="text-xs text-slate-400">
-          Save the account, then use Connect with Google on the Accounts page.
-          Connections for other providers will be available later.
+          {card.platform === "tiktok" ? "Save the account, then get a connection code on Accounts. Sign in to TikTok in Chrome or Edge and send the session using the Terex extension." : "Save the account, then use Connect with Google on the Accounts page."}
         </p>
       </div>
 

@@ -16,6 +16,7 @@ import (
 	"terex/main-be/internal/service/monitor"
 	"terex/main-be/internal/service/publish"
 	"terex/main-be/internal/service/storagelifecycle"
+	tiktokservice "terex/main-be/internal/service/tiktok"
 	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/twitchreset"
 	"terex/main-be/internal/service/workflow"
@@ -33,6 +34,7 @@ type API struct {
 	Auth      *OperatorAuth
 	Collector *CollectorProxy
 	News      *NewsProxy
+	TikTok    *tiktokservice.Service
 }
 
 func (a *API) Router() http.Handler {
@@ -41,6 +43,16 @@ func (a *API) Router() http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(a.Auth.Protect)
+		if a.TikTok != nil {
+			r.Post("/tiktok/connect/payload", a.tikTokConnectPayload)
+			r.Options("/tiktok/connect/payload", a.tikTokConnectPayload)
+			r.Post("/tiktok/worker/{action:claim|renew|checkpoint|complete|fail|reconcile|release}", a.tikTokWorker)
+			r.Post("/accounts/{id}/tiktok/connect", a.tikTokConnect)
+			r.Get("/accounts/{id}/tiktok/status", a.tikTokConnection)
+			r.Post("/accounts/{id}/tiktok/{action:check|disconnect|browser-help}", a.tikTokConnection)
+			r.Post("/publications/{id}/tiktok/reconcile", a.tikTokReconcile)
+			r.Post("/publications/{id}/tiktok/retry-after-absence", a.tikTokRetryAfterAbsence)
+		}
 		r.Handle("/news/*", a.News)
 		if a.Twitch != nil {
 			r.Post("/twitch/metadata/preview", a.twitchMetadataPreview)

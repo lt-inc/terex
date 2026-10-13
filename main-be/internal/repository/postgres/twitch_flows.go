@@ -22,9 +22,9 @@ func defaultFlow() twitch.Flow {
 const flowBaseCols = `config,version,COALESCE(account_id,0),youtube_channel_id,enabled,auto_publish,auto_enabled_at,created_at,updated_at,work_started_at,last_checked_at,`
 
 const flowAccessCols = `
- CASE WHEN account_id IS NULL THEN 'Выберите YouTube-канал' WHEN NOT EXISTS(SELECT 1 FROM accounts a WHERE a.id=twitch_flows.account_id AND a.connection_state='connected' AND COALESCE(a.remote_account_id,'')=twitch_flows.youtube_channel_id AND twitch_flows.youtube_channel_id<>'') THEN 'Подключите подтверждённый YouTube-канал; назначение потока закреплено' ELSE '' END,
+ CASE WHEN account_id IS NULL THEN 'Выберите канал публикации' WHEN NOT EXISTS(SELECT 1 FROM twitch_flow_destinations d JOIN accounts a ON a.id=d.account_id WHERE d.flow_id=twitch_flows.id AND d.enabled AND a.connection_state='connected' AND a.remote_account_id=d.remote_account_id) THEN 'Подключите подтверждённый аккаунт назначения' ELSE '' END,
  COALESCE((SELECT jsonb_agg(i.twitch_clip_id) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=twitch_flows.id AND fs.excluded),'[]'::jsonb),archived,
- COALESCE((SELECT schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=twitch_flows.youtube_channel_id),48)`
+ COALESCE((SELECT schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=twitch_flows.destination_key),48)`
 
 const flowCols = flowBaseCols + `
  (SELECT count(*) FROM twitch_flow_sources fs WHERE fs.flow_id=twitch_flows.id),
@@ -66,6 +66,9 @@ func scanFlow(row pgx.Row) (twitch.Flow, error) {
 	f.ScheduleHorizonHours = horizon
 	f.AccountID = account
 	f.YouTubeChannelID = channel
+	if f.DestinationKey == "" {
+		f.DestinationKey = channel
+	}
 	f.Enabled = enabled
 	f.AutoPublish = auto
 	f.AutoEnabledAt = since
@@ -210,6 +213,21 @@ func validateFlow(f twitch.Flow) error {
 	return nil
 }
 func confirmedFlow(ctx context.Context, tx pgx.Tx, f twitch.Flow) error {
+	if len(f.Destinations) > 0 {
+		for _, d := range f.Destinations {
+			if !d.Enabled {
+				continue
+			}
+			var ok bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM accounts WHERE id=$1 AND platform=$2 AND connection_state='connected' AND remote_account_id=$3)`, d.AccountID, d.Provider, d.RemoteAccountID).Scan(&ok); err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: connect a destination account", domain.ErrConflict)
+	}
 	var channel, state, platform string
 	if err := tx.QueryRow(ctx, `SELECT platform,COALESCE(remote_account_id,''),connection_state FROM accounts WHERE id=$1`, f.AccountID).Scan(&platform, &channel, &state); err != nil {
 		return mapErr(err)
@@ -256,14 +274,42 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 		if err = tx.QueryRow(ctx, `SELECT work_started_at IS NOT NULL FROM twitch_flows WHERE id=$1`, f.ID).Scan(&started); err != nil {
 			return f, err
 		}
-		if started && (old.AccountID != f.AccountID || (f.YouTubeChannelID != "" && old.YouTubeChannelID != f.YouTubeChannelID)) {
+		if started && len(f.Destinations) == 0 && (old.AccountID != f.AccountID || (f.YouTubeChannelID != "" && old.YouTubeChannelID != f.YouTubeChannelID)) {
 			return f, fmt.Errorf("%w: назначение потока закреплено после начала работы", domain.ErrConflict)
 		}
+	}
+	if !create && len(f.Destinations) > 0 && string(mustJSON(f.Destinations)) == string(mustJSON(old.Destinations)) {
+		// Legacy clients still edit these flat fields. Explicit destination edits
+		// take precedence; otherwise carry their changes into the original target.
+		for i := range f.Destinations {
+			d := &f.Destinations[i]
+			if d.Provider != "youtube" {
+				continue
+			}
+			if f.AutoPublish != old.AutoPublish {
+				d.AutoPublish = f.AutoPublish
+			}
+			if f.Timezone != old.Timezone {
+				d.Timezone = f.Timezone
+			}
+			if f.DailyShorts != old.DailyShorts {
+				d.DailyShorts = f.DailyShorts
+			}
+			if f.ScheduleHorizonHours != old.ScheduleHorizonHours {
+				d.ScheduleHorizonHours = f.ScheduleHorizonHours
+			}
+			if string(mustJSON(f.ShortsSlots)) != string(mustJSON(old.ShortsSlots)) {
+				d.ShortsSlots = f.ShortsSlots
+			}
+		}
+	}
+	if err = normalizeDestinationsTx(ctx, tx, &f); err != nil {
+		return f, err
 	}
 	stopping := !create && f.AccountID == old.AccountID && !(!old.Enabled && f.Enabled) && !(!old.AutoPublish && f.AutoPublish) && ((!f.Enabled && !f.AutoPublish) || (old.Enabled && !f.Enabled) || (old.AutoPublish && !f.AutoPublish))
 	if stopping {
 		f.YouTubeChannelID = old.YouTubeChannelID
-	} else if f.AccountID > 0 {
+	} else if f.AccountID > 0 && len(f.Destinations) == 0 {
 		var channel, state, platform string
 		if err = tx.QueryRow(ctx, `SELECT platform,COALESCE(remote_account_id,''),connection_state FROM accounts WHERE id=$1`, f.AccountID).Scan(&platform, &channel, &state); err != nil {
 			return f, mapErr(err)
@@ -275,7 +321,7 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 			return f, fmt.Errorf("%w: OAuth-аккаунт теперь связан с другим каналом; поток заблокирован", domain.ErrConflict)
 		}
 		f.YouTubeChannelID = channel
-	} else if f.Enabled || f.AutoPublish {
+	} else if f.AccountID == 0 && (f.Enabled || f.AutoPublish) {
 		return f, fmt.Errorf("%w: выберите YouTube-канал", domain.ErrInvalid)
 	}
 	if f.YouTubeChannelID != "" {
@@ -296,8 +342,11 @@ func (s *Store) SaveTwitchFlow(ctx context.Context, f twitch.Flow, create bool, 
 	if err != nil {
 		return f, err
 	}
+	if err = saveDestinationsTx(ctx, tx, f); err != nil {
+		return f, err
+	}
 	// Shared quota controls describe a channel, including all OAuth aliases and flows.
-	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET config=config||jsonb_build_object('daily_shorts',$2::int,'daily_compilations',$3::int,'timezone',$4::text,'schedule_horizon_hours',$6::int),version=version+CASE WHEN id<>$5 AND(config->>'timezone' IS DISTINCT FROM $4 OR config->>'daily_shorts' IS DISTINCT FROM $2::text OR config->>'daily_compilations' IS DISTINCT FROM $3::text OR config->>'schedule_horizon_hours' IS DISTINCT FROM $6::text)THEN 1 ELSE 0 END WHERE youtube_channel_id=$1`, f.YouTubeChannelID, f.DailyShorts, f.DailyCompilations, f.Timezone, f.ID, f.ScheduleHorizonHours); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE twitch_flows SET config=config||jsonb_build_object('daily_shorts',$2::int,'daily_compilations',$3::int,'timezone',$4::text,'schedule_horizon_hours',$6::int),version=version+CASE WHEN id<>$5 AND(config->>'timezone' IS DISTINCT FROM $4 OR config->>'daily_shorts' IS DISTINCT FROM $2::text OR config->>'daily_compilations' IS DISTINCT FROM $3::text OR config->>'schedule_horizon_hours' IS DISTINCT FROM $6::text)THEN 1 ELSE 0 END WHERE youtube_channel_id=$1 AND $1<>''`, f.YouTubeChannelID, f.DailyShorts, f.DailyCompilations, f.Timezone, f.ID, f.ScheduleHorizonHours); err != nil {
 		return f, err
 	}
 	if !f.Enabled {
@@ -455,6 +504,13 @@ func syncLegacyFlow(ctx context.Context, tx pgx.Tx, previous, s twitch.Settings)
 		f.YouTubeChannelID = ""
 	}
 	_, err = tx.Exec(ctx, `UPDATE twitch_flows SET config=$1,account_id=NULLIF($2,0),youtube_channel_id=$3,enabled=$4,version=version+1,updated_at=now()WHERE id='default'`, mustJSON(f), f.AccountID, f.YouTubeChannelID, f.Enabled)
+	if err == nil {
+		f.Destinations = nil
+		if err = normalizeDestinationsTx(ctx, tx, &f); err != nil {
+			return err
+		}
+		err = saveDestinationsTx(ctx, tx, f)
+	}
 	if err != nil {
 		return err
 	}

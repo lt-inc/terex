@@ -175,6 +175,20 @@ export interface TwitchMetadataPreviewRequest {
   revision_id?: number;
 }
 
+export interface TwitchDestination {
+  id?: string;
+  provider: "youtube" | "tiktok";
+  account_id: number;
+  remote_account_id?: string;
+  enabled: boolean;
+  auto_publish: boolean;
+  timezone: string;
+  shorts_slots: string[];
+  daily_shorts: number;
+  schedule_horizon_hours: number;
+  visibility: "" | "public" | "private";
+}
+
 export interface TwitchFlow {
   id: string;
   name: string;
@@ -185,6 +199,7 @@ export interface TwitchFlow {
   auto_publish: boolean;
   account_id: number;
   youtube_channel_id: string;
+  destinations?: TwitchDestination[];
   version: number;
   source_mode: "channels" | "category";
   broadcaster_ids: string[];

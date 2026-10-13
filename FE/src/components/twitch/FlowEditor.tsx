@@ -6,6 +6,7 @@ import Toggle from "@/components/ui/Toggle";
 import TwitchNav from "./TwitchNav";
 import CapacityPanel from "./CapacityPanel";
 import MetadataSettingsEditor from "./MetadataSettingsEditor";
+import DestinationsEditor from "./DestinationsEditor";
 import {
   createTwitchFlow,
   fetchAccountsList,
@@ -18,6 +19,8 @@ import {
   defaultTwitchFlow,
   parseSlots,
   validateTwitchFlow,
+  applyFlowDestinations,
+  flowDestinations,
 } from "@/lib/twitch-flow";
 import type { TwitchFlow } from "@/types/twitch";
 import type { AccountRecord } from "@/types";
@@ -26,7 +29,7 @@ const input =
 const button =
   "rounded-lg bg-slate-700 px-3 py-2 text-sm hover:bg-slate-600 disabled:opacity-40";
 const steps = [
-  "YouTube-канал",
+  "Платформы и аккаунты",
   "Источники и фильтры",
   "Форматы и подборки",
   "Публикация",
@@ -47,7 +50,6 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
     [],
   );
   const [channelsText, setChannelsText] = useState(""),
-    [shortsText, setShortsText] = useState("09:00, 12:00, 15:00, 18:00, 21:00"),
     [compilationText, setCompilationText] = useState("21:30");
   const [dirty, setDirty] = useState(false);
   const load = useCallback(async () => {
@@ -76,6 +78,7 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
               name: `${existing.name} — копия`,
               account_id: 0,
               youtube_channel_id: "",
+              destinations: [],
               enabled: false,
               archived: false,
               auto_publish: false,
@@ -92,9 +95,11 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                 : {}),
             }
           : existing;
-        setFlow(value);
+        setFlow({
+          ...value,
+          destinations: copyID ? [] : flowDestinations(value),
+        });
         setChannelsText((value.channel_inputs || []).join("\n"));
-        setShortsText((value.shorts_slots || []).join(", "));
         setCompilationText((value.compilation_slots || []).join(", "));
       }
       setDirty(false);
@@ -119,38 +124,19 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
   }
   const readyAccounts = accounts.filter(
     (account) =>
-      account.platform === "youtube" &&
+      ["youtube", "tiktok"].includes(account.platform) &&
       account.connection_state === "connected" &&
       account.remote_account_id,
   );
-  function selectAccount(accountID: number) {
-    const account = readyAccounts.find((item) => item.id === accountID);
-    const policy = existingFlows.find(
-      (item) => item.youtube_channel_id === account?.remote_account_id,
-    );
-    setFlow((previous) => ({
-      ...previous,
-      account_id: accountID,
-      ...(policy
-        ? {
-            timezone: policy.timezone,
-            daily_shorts: policy.daily_shorts,
-            daily_compilations: policy.daily_compilations,
-            schedule_horizon_hours: policy.schedule_horizon_hours,
-          }
-        : {}),
-    }));
-    setDirty(true);
-  }
-  const candidate = (): TwitchFlow => ({
-    ...flow,
-    channel_inputs: channelsText
-      .split(/[\s,;]+/)
-      .map((value) => value.trim())
-      .filter(Boolean),
-    shorts_slots: parseSlots(shortsText),
-    compilation_slots: parseSlots(compilationText),
-  });
+  const candidate = (): TwitchFlow =>
+    applyFlowDestinations({
+      ...flow,
+      channel_inputs: channelsText
+        .split(/[\s,;]+/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+      compilation_slots: parseSlots(compilationText),
+    });
   function next() {
     const issue = validateTwitchFlow(candidate(), step);
     if (issue) {
@@ -170,7 +156,15 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
     const stopping =
       !!flowID &&
       !!original &&
-      value.account_id === original.account_id &&
+      flowDestinations(value).every((destination) =>
+        flowDestinations(original).some(
+          (previous) =>
+            previous.provider === destination.provider &&
+            previous.account_id === destination.account_id &&
+            !(destination.enabled && !previous.enabled) &&
+            !(destination.auto_publish && !previous.auto_publish),
+        ),
+      ) &&
       !(value.enabled && !original.enabled) &&
       !(value.auto_publish && !original.auto_publish) &&
       ((!value.enabled && !value.auto_publish) ||
@@ -178,10 +172,18 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
         (original.auto_publish && !value.auto_publish));
     if (
       !stopping &&
-      !readyAccounts.some((account) => account.id === value.account_id)
+      flowDestinations(value).some(
+        (destination) =>
+          destination.enabled &&
+          !readyAccounts.some(
+            (account) =>
+              account.id === destination.account_id &&
+              account.platform === destination.provider,
+          ),
+      )
     ) {
       setError(
-        "Назначение недоступно. Подключите и подтвердите YouTube-канал в разделе Accounts.",
+        "Назначение недоступно. Подключите и подтвердите выбранные YouTube/TikTok аккаунты в разделе Accounts.",
       );
       return;
     }
@@ -250,8 +252,9 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
       </div>
       <TwitchNav />
       <p className="text-sm text-slate-400">
-        Один поток собирает клипы по своим правилам и выпускает их на одном
-        YouTube-канале. Исходные файлы доступны нескольким потокам.
+        Один поток собирает клипы по своим правилам. Вертикальные выпуски можно
+        направить на YouTube, TikTok или обе платформы; подборки — на YouTube.
+        Исходные файлы доступны нескольким потокам.
       </p>
       <ol className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         {steps.map((label, index) => (
@@ -302,42 +305,27 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                     onChange={(event) => change("name", event.target.value)}
                   />
                 </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  YouTube-канал
-                  <select
-                    className={input}
-                    required
-                    value={flow.account_id}
-                    disabled={!!flowID && !!flow.work_started_at}
-                    onChange={(event) =>
-                      selectAccount(Number(event.target.value))
-                    }
-                  >
-                    <option value={0}>Выберите подключённый канал</option>
-                    {flow.account_id > 0 &&
-                      !readyAccounts.some(
-                        (account) => account.id === flow.account_id,
-                      ) && (
-                        <option value={flow.account_id}>
-                          Назначение недоступно · аккаунт {flow.account_id}
-                        </option>
-                      )}
-                    {readyAccounts.map((account) => (
-                      <option value={account.id} key={account.id}>
-                        {account.remote_account_name || account.name} ·{" "}
-                        {account.remote_account_id}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <p className="text-xs text-slate-400">
-                  Подтвердите канал в{" "}
-                  <Link href="/admin/accounts" className="text-indigo-400">
-                    Accounts
-                  </Link>
-                  . Чтобы направить работающий поток в другой YouTube-канал,
-                  создайте копию потока.
-                </p>
+                <DestinationsEditor
+                  flow={flow}
+                  original={original}
+                  accounts={accounts}
+                  existingFlows={existingFlows}
+                  onChange={(destinations) => {
+                    const youtube = destinations.find((item) => item.provider === "youtube");
+                    const shared = existingFlows.find((item) => !!youtube?.remote_account_id && item.youtube_channel_id === youtube.remote_account_id);
+                    setFlow((previous) => ({
+                      ...previous,
+                      destinations,
+                      ...(shared ? { daily_compilations: shared.daily_compilations } : {}),
+                      ...(!destinations.some(
+                        (item) => item.provider === "youtube",
+                      )
+                        ? { compilations_enabled: false, shorts_enabled: true }
+                        : {}),
+                    }));
+                    setDirty(true);
+                  }}
+                />
                 {flowID && (
                   <Link
                     href={`/admin/twitch/new?copy=${encodeURIComponent(flowID)}`}
@@ -477,13 +465,34 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                 </label>
                 <label className="flex flex-col gap-1 text-sm">
                   Как выбирать лучшие клипы
-                  <select className={input} value={flow.ranking_mode || "views"} onChange={(event) => change("ranking_mode", event.target.value as "views" | "growth")}>
+                  <select
+                    className={input}
+                    value={flow.ranking_mode || "views"}
+                    onChange={(event) =>
+                      change(
+                        "ranking_mode",
+                        event.target.value as "views" | "growth",
+                      )
+                    }
+                  >
                     <option value="views">По накопленным просмотрам</option>
-                    <option value="growth">По измеренному росту просмотров</option>
+                    <option value="growth">
+                      По измеренному росту просмотров
+                    </option>
                   </select>
-                  <span className="text-xs text-slate-400">При выборе роста сначала идут клипы с достоверной скоростью, затем клипы без истории — по просмотрам. Порядок применяется к скачиванию и выбору подборки; баланс стримеров сохраняется.</span>
+                  <span className="text-xs text-slate-400">
+                    При выборе роста сначала идут клипы с достоверной скоростью,
+                    затем клипы без истории — по просмотрам. Порядок применяется
+                    к скачиванию и выбору подборки; баланс стримеров
+                    сохраняется.
+                  </span>
                 </label>
-                <p className="text-xs text-slate-400">Период поиска делится на равные окна не длиннее 8 часов. Свежие окна проверяются отдельно от старой выдачи. Если бюджет Twitch исчерпан, коллектор продолжит поиск с сохранённой позиции на следующей проверке.</p>
+                <p className="text-xs text-slate-400">
+                  Период поиска делится на равные окна не длиннее 8 часов.
+                  Свежие окна проверяются отдельно от старой выдачи. Если бюджет
+                  Twitch исчерпан, коллектор продолжит поиск с сохранённой
+                  позиции на следующей проверке.
+                </p>
                 <div className="grid gap-4 sm:grid-cols-2">
                   {numberField(
                     "poll_interval_minutes",
@@ -527,12 +536,17 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
             {step === 2 && (
               <>
                 <Toggle
-                  label="Создавать Shorts"
+                  label="Создавать вертикальные клипы (Shorts / TikTok)"
                   checked={flow.shorts_enabled}
                   onChange={(value) => change("shorts_enabled", value)}
                 />
                 <Toggle
-                  label="Создавать подборки"
+                  label="Создавать подборки для YouTube"
+                  disabled={
+                    !flowDestinations(flow).some(
+                      (item) => item.provider === "youtube",
+                    )
+                  }
                   checked={flow.compilations_enabled}
                   onChange={(value) => change("compilations_enabled", value)}
                 />
@@ -603,7 +617,11 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
                         3,
                         60,
                       )}
-                      <p className="text-xs text-slate-400">Материал готовится заранее для ближайшего места календаря. Не больше одного автоматического черновика на дату выпуска и поток.</p>
+                      <p className="text-xs text-slate-400">
+                        Материал готовится заранее для ближайшего места
+                        календаря. Не больше одного автоматического черновика на
+                        дату выпуска и поток.
+                      </p>
                     </div>
                     <Toggle
                       label="Балансировать время стримеров"
@@ -622,101 +640,70 @@ export default function FlowEditor({ flowID }: { flowID?: string }) {
             )}
             {step === 3 && (
               <>
-                <MetadataSettingsEditor flow={flow} onChange={(value) => change("metadata", value)} />
-                {flowID && !flow.archived && <CapacityPanel flowID={flowID} timezone={original?.timezone || "Asia/Tomsk"} />}
+                <MetadataSettingsEditor
+                  flow={flow}
+                  onChange={(value) => change("metadata", value)}
+                />
+                {flowID && !flow.archived && (
+                  <CapacityPanel
+                    flowID={flowID}
+                    timezone={original?.timezone || "Asia/Tomsk"}
+                  />
+                )}
                 <Toggle
                   label="Включить поток"
                   checked={flow.enabled}
                   onChange={(value) => change("enabled", value)}
                 />
                 <p className="text-xs text-slate-400">
-                  Пауза останавливает новые проверки и начало публикаций. Уже
-                  начатые загрузки YouTube завершатся.
+                  Пауза потока останавливает новые проверки и начало публикаций
+                  на всех его платформах. Уже начатые загрузки завершаются.
                 </p>
-                <Toggle
-                  label="Публиковать автоматически"
-                  checked={flow.auto_publish}
-                  onChange={(value) => change("auto_publish", value)}
+                <DestinationsEditor
+                  flow={flow}
+                  original={original}
+                  accounts={accounts}
+                  settings
+                  onChange={(destinations) =>
+                    change("destinations", destinations)
+                  }
                 />
-                <p
-                  className={`text-sm ${flow.auto_publish ? "text-amber-200" : "text-slate-400"}`}
-                >
-                  {flow.auto_publish
-                    ? "Готовые версии Twitch допускаются автоматически и публикуются в ближайшие свободные места расписания. После правок будущий выпуск ждёт нового рендера."
-                    : "Готовые версии допускаются автоматически, но не публикуются сами. Время выпуска назначается вручную в календаре."}
-                </p>
-                <label className="flex flex-col gap-1 text-sm">
-                  Часовой пояс YouTube-канала
-                  <input
-                    className={input}
-                    value={flow.timezone}
-                    onChange={(event) => change("timezone", event.target.value)}
-                  />
-                  <span className="text-xs text-slate-400">
-                    Один часовой пояс и суммарные лимиты применяются ко всем
-                    потокам этого YouTube-канала.
-                  </span>
-                </label>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {numberField(
-                    "schedule_horizon_hours",
-                    "Заполнять календарь на ближайшие, часов",
-                    1,
-                    168,
-                    "Скользящий горизонт от текущего времени. Общий для всех потоков этого YouTube-канала; изменение повлияет на них все.",
+                {numberField(
+                  "max_source_age_hours",
+                  "Максимальный возраст клипа на дату публикации, часов",
+                  1,
+                  720,
+                  "Считается от создания на Twitch. Окно поиска не продлевает актуальность.",
+                )}
+                {flow.compilations_enabled &&
+                  flowDestinations(flow).some(
+                    (item) => item.provider === "youtube",
+                  ) && (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="flex flex-col gap-1 text-sm">
+                        Время подборок YouTube
+                        <input
+                          className={input}
+                          value={compilationText}
+                          onChange={(event) => {
+                            setCompilationText(event.target.value);
+                            setDirty(true);
+                          }}
+                          placeholder="21:30"
+                        />
+                      </label>
+                      {numberField(
+                        "daily_compilations",
+                        "Подборок на YouTube-канал в сутки",
+                        1,
+                        10,
+                      )}
+                    </div>
                   )}
-                  {numberField(
-                    "max_source_age_hours",
-                    "Максимальный возраст клипа на дату публикации, часов",
-                    1,
-                    720,
-                    "Считается от создания на Twitch, а не скачивания. В подборке проверяется каждый исходник. Окно поиска не продлевает актуальность.",
-                  )}
-                  {flow.shorts_enabled && (
-                    <label className="flex flex-col gap-1 text-sm">
-                      Времена Shorts
-                      <input
-                        className={input}
-                        value={shortsText}
-                        onChange={(event) => {
-                          setShortsText(event.target.value);
-                          setDirty(true);
-                        }}
-                        placeholder="09:00, 12:00"
-                      />
-                    </label>
-                  )}
-                  {flow.compilations_enabled && (
-                    <label className="flex flex-col gap-1 text-sm">
-                      Время подборок
-                      <input
-                        className={input}
-                        value={compilationText}
-                        onChange={(event) => {
-                          setCompilationText(event.target.value);
-                          setDirty(true);
-                        }}
-                        placeholder="21:30"
-                      />
-                    </label>
-                  )}
-                  {numberField(
-                    "daily_shorts",
-                    "Shorts на YouTube-канал в сутки",
-                    1,
-                    100,
-                  )}
-                  {numberField(
-                    "daily_compilations",
-                    "Подборок на YouTube-канал в сутки",
-                    1,
-                    10,
-                  )}
-                </div>
                 <p className="text-xs text-slate-400">
-                  Времена: ЧЧ:ММ через запятую. Исчерпанный лимит или занятый
-                  слот переводят выпуск в ожидание. Выключение автоматики
-                  удерживает ещё не начатые автоматические публикации.
+                  Время каждого назначения — ЧЧ:ММ через запятую. Расписания
+                  YouTube и TikTok независимы; выключение одного назначения не
+                  останавливает другое.
                 </p>
               </>
             )}

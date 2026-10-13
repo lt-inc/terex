@@ -24,6 +24,25 @@ const traefikConfig = {
 };
 const basicConfig = { ...traefikConfig, auth: { ...traefikConfig.auth, mode: "basic" } };
 
+test("only the exact pairing payload accepts the extension and never attaches operator credentials", async () => {
+  const origin = `chrome-extension://${"a".repeat(32)}`;
+  let outbound;
+  const payload = JSON.stringify({ pairing_token: "one-use-token", cookies: [] });
+  const response = await proxy.proxyAPIRequest(new Request("https://admin.example.test/api/tiktok/connect/payload", { method: "POST", headers: { origin, "Content-Type": "application/json", authorization: basic("browser", "discard") }, body: payload }), ["tiktok", "connect", "payload"], traefikConfig, async (_url, init) => {
+    outbound = init;
+    assert.equal(new Headers(init.headers).get("authorization"), null);
+    assert.equal(await new Response(init.body).text(), payload);
+    return new Response("{}", { status: 200 });
+  });
+  assert.ok(outbound);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("access-control-allow-origin"), origin);
+  const denied = await proxy.proxyAPIRequest(new Request("https://admin.example.test/api/tiktok/connect/payload/extra", { method: "POST", headers: { origin }, body: "{}" }), ["tiktok", "connect", "payload", "extra"], traefikConfig, async () => { throw new Error("must not forward"); });
+  assert.equal(denied.status, 403);
+  const web = await proxy.proxyAPIRequest(new Request("https://admin.example.test/api/tiktok/connect/payload", { method: "POST", headers: { origin: "https://other.example" }, body: "{}" }), ["tiktok", "connect", "payload"], traefikConfig, async () => { throw new Error("must not forward"); });
+  assert.equal(web.status, 403);
+});
+
 test("operator proxy replaces browser authorization and preserves encoded IDs, query, status and body", async () => {
   let outbound;
   const request = new Request("https://admin.example.test/api/twitch/channels/channel%2Fid?state=ready%2Fnext", {

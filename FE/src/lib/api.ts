@@ -12,6 +12,7 @@ import type {
   PublicationEvent,
   PublicationHistory,
   PublicationTarget,
+  TikTokConnection,
 } from "@/types";
 import { formatInZone } from "./datetime";
 import type {
@@ -260,6 +261,22 @@ export const actPublication = (
   );
 export const fetchPublicationHistory = (id: number) =>
   request<PublicationHistory[]>(`/publications/${id}/history`);
+export const savePublicationCaption = (id: number, version: number, caption: string) =>
+  request<PublicationEvent>(`/publications/${id}`, json("PATCH", { expected_version: version, caption }));
+export const reconcileTikTokPublication = (id: number, version: number, remoteURL?: string) =>
+  request<PublicationEvent>(`/publications/${id}/tiktok/reconcile`, json("POST", { expected_version: version, ...(remoteURL ? { remote_url: remoteURL } : {}) }));
+export const retryTikTokAfterAbsence = (id: number, version: number) =>
+  request<PublicationEvent>(`/publications/${id}/tiktok/retry-after-absence`, json("POST", { expected_version: version, confirm_absent: true }));
+export const connectTikTok = (account: AccountRecord) =>
+  request<TikTokConnection>(`/accounts/${account.id}/tiktok/connect`, json("POST", { expected_version: account.version }));
+export const fetchTikTokStatus = (id: number) =>
+  request<TikTokConnection>(`/accounts/${id}/tiktok/status`);
+export const checkTikTok = (id: number) =>
+  request<TikTokConnection>(`/accounts/${id}/tiktok/check`, { method: "POST" });
+export const disconnectTikTok = (account: AccountRecord) =>
+  request<TikTokConnection>(`/accounts/${account.id}/tiktok/disconnect`, json("POST", { expected_version: account.version }));
+export const browserHelpTikTok = (id: number) =>
+  request<{ help_url: string; expires_at: string }>(`/accounts/${id}/tiktok/browser-help`, { method: "POST" });
 export const connectAccount = (account: AccountRecord) =>
   request<{ url: string }>(
     `/accounts/${account.id}/oauth/connect`,
@@ -374,6 +391,7 @@ function normalizeFlow(flow: TwitchFlow): TwitchFlow {
     channel_inputs: flow.channel_inputs || [],
     shorts_slots: flow.shorts_slots || [],
     compilation_slots: flow.compilation_slots || [],
+    ...(flow.destinations ? { destinations: flow.destinations.map((destination) => ({ ...destination, shorts_slots: destination.shorts_slots || [] })) } : {}),
   };
 }
 export const fetchTwitchFlows = (includeArchived = false, signal?: AbortSignal) =>

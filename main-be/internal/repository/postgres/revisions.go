@@ -100,6 +100,11 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 	if err != nil {
 		return domain.Revision{}, err
 	}
+	if !rerender {
+		if _, err = tx.Exec(ctx, `UPDATE clip_revisions r SET media_sha256=old.media_sha256,media_size_bytes=old.media_size_bytes FROM clip_revisions old WHERE r.id=$1 AND old.id=$2`, r.ID, prev.ID); err != nil {
+			return domain.Revision{}, err
+		}
+	}
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, r.ID, u.StartSec, u.EndSec, u.Title, u.Hashtags); err != nil {
 		return domain.Revision{}, err
 	}
@@ -476,6 +481,9 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	spec := mustJSON(old.EditSpec)
 	var nextID int64
 	if err = tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,render_state,bucket,object,manifest)VALUES($1,$2,$3,'ready',$4,$5,$6)RETURNING id`, clipID, version+1, spec, old.Bucket, old.Object, old.Manifest).Scan(&nextID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE clip_revisions r SET media_sha256=old.media_sha256,media_size_bytes=old.media_size_bytes FROM clip_revisions old WHERE r.id=$1 AND old.id=$2`, nextID, targetID); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=$3,end_sec=$4,title=$5,hashtags=$6 WHERE clip_id=$1`, clipID, nextID, old.StartSec, old.EndSec, old.Title, old.Hashtags); err != nil {
