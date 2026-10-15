@@ -26,11 +26,18 @@ const flowAccessCols = `
  COALESCE((SELECT jsonb_agg(i.twitch_clip_id) FROM twitch_flow_sources fs JOIN twitch_imports i ON i.id=fs.import_id WHERE fs.flow_id=twitch_flows.id AND fs.excluded),'[]'::jsonb),archived,
  COALESCE((SELECT schedule_horizon_hours FROM twitch_channel_limits WHERE youtube_channel_id=twitch_flows.destination_key),48)`
 
-const flowCols = flowBaseCols + `
- (SELECT count(*) FROM twitch_flow_sources fs WHERE fs.flow_id=twitch_flows.id),
+const flowReadyCol = `
  (SELECT count(*) FROM twitch_outputs o JOIN clips c ON c.clip_id=o.clip_id JOIN clip_revisions r ON r.id=c.latest_revision_id WHERE o.flow_id=twitch_flows.id AND r.render_state='ready'),
  (SELECT min(p.publish_at) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=twitch_flows.id AND p.started_at IS NULL AND p.status IN('scheduled','queued','retry_wait')),
- ` + flowAccessCols
+`
+
+const flowCols = flowBaseCols + `
+ (SELECT count(*) FROM twitch_flow_sources fs WHERE fs.flow_id=twitch_flows.id),` + flowReadyCol + flowAccessCols
+
+// List reads skip the per-flow count over twitch_flow_sources (~8k rows per
+// flow, random heap reads): it made the flows page take up to two minutes.
+// The count is filled from a background-refreshed cache (see found_cache.go).
+const listFlowCols = flowBaseCols + `0,` + flowReadyCol + flowAccessCols
 
 // Collector control reads must not calculate UI counts or scan the calendar on
 // every five-second refresh. Authorization and exclusions remain live reads.
@@ -97,7 +104,7 @@ func (s *Store) GetTwitchFlow(ctx context.Context, id string) (twitch.Flow, erro
 	return scanFlow(s.pool.QueryRow(ctx, `SELECT `+flowCols+` FROM twitch_flows WHERE id=$1`, id))
 }
 func (s *Store) ListTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
-	return s.listTwitchFlows(ctx, flowCols)
+	return s.listTwitchFlows(ctx, listFlowCols)
 }
 func (s *Store) ListCollectorTwitchFlows(ctx context.Context) ([]twitch.Flow, error) {
 	return s.listTwitchFlows(ctx, collectorFlowCols)
@@ -116,7 +123,11 @@ func (s *Store) listTwitchFlows(ctx context.Context, columns string) ([]twitch.F
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	s.fillFoundClips(out)
+	return out, nil
 }
 func validateFlow(f twitch.Flow) error {
 	if problems := twitch.ValidateMetadataSettings(f.Metadata); len(problems) > 0 {

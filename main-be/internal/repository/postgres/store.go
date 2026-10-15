@@ -30,6 +30,7 @@ type Store struct {
 	pressureCount int
 	pressureAt    time.Time
 	pressureEpoch int64
+	found         foundCache
 }
 
 func New(ctx context.Context, dsn string) (*Store, error) {

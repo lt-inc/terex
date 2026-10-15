@@ -908,7 +908,7 @@ func holdFlowAll(ctx context.Context, tx pgx.Tx, id, code, message string) error
 	return err
 }
 func (s *Store) ListTwitchFlowsIncludingArchived(ctx context.Context) ([]twitch.Flow, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+flowCols+` FROM twitch_flows ORDER BY archived,created_at,id`)
+	rows, err := s.pool.Query(ctx, `SELECT `+listFlowCols+` FROM twitch_flows ORDER BY archived,created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -921,7 +921,11 @@ func (s *Store) ListTwitchFlowsIncludingArchived(ctx context.Context) ([]twitch.
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	s.fillFoundClips(out)
+	return out, nil
 }
 func (s *Store) RestoreTwitchFlow(ctx context.Context, id string, now time.Time) (twitch.Flow, error) {
 	tx, err := s.pool.Begin(ctx)

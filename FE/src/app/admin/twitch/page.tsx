@@ -38,18 +38,35 @@ export default function TwitchFlowsPage() {
     const attempt = ++requestID.current;
     setLoading(true);
     try {
-      const results = await Promise.allSettled([
-        fetchTwitchFlows(includeArchived, controller.signal),
-        fetchAccountsList(controller.signal),
-        fetchTwitchStatus(controller.signal),
-      ]);
-      if (attempt !== requestID.current) return;
-      if (results[0].status === "fulfilled") setFlows(results[0].value ?? []);
-      if (results[1].status === "fulfilled")
-        setAccounts(results[1].value ?? []);
-      if (results[2].status === "fulfilled") setStatus(results[2].value);
       const labels = ["Потоки", "Аккаунты", "Collector"];
-      setError(results.flatMap((result, index) => result.status === "rejected" ? [`${labels[index]}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []).join(" · "));
+      const errors: string[] = ["", "", ""];
+      const report = () => {
+        if (attempt === requestID.current) setError(errors.filter(Boolean).join(" · "));
+      };
+      // Each request renders as soon as it arrives instead of waiting for the slowest one.
+      const track = <T,>(index: number, request: Promise<T>, apply: (value: T) => void) =>
+        request.then(
+          (value) => {
+            if (attempt !== requestID.current) return;
+            apply(value);
+            errors[index] = "";
+            report();
+          },
+          (reason) => {
+            if (attempt !== requestID.current) return;
+            errors[index] = `${labels[index]}: ${reason instanceof Error ? reason.message : String(reason)}`;
+            report();
+          },
+        );
+      const flowsLoaded = track(0, fetchTwitchFlows(includeArchived, controller.signal), (value) => {
+        setFlows(value ?? []);
+        setLoading(false);
+      });
+      await Promise.all([
+        flowsLoaded,
+        track(1, fetchAccountsList(controller.signal), (value) => setAccounts(value ?? [])),
+        track(2, fetchTwitchStatus(controller.signal), setStatus),
+      ]);
     } catch (failure) {
       if (attempt === requestID.current) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {

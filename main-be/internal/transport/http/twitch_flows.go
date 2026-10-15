@@ -14,9 +14,12 @@ import (
 )
 
 func (a *API) twitchFlows(w http.ResponseWriter, r *http.Request) {
-	out, e := a.Twitch.Flows(r.Context())
+	var out []twitch.Flow
+	var e error
 	if r.URL.Query().Get("include_archived") == "true" {
 		out, e = a.Twitch.FlowsIncludingArchived(r.Context())
+	} else {
+		out, e = a.Twitch.Flows(r.Context())
 	}
 	if e != nil {
 		fail(w, e)
