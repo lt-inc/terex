@@ -45,6 +45,15 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		cfg.ConnConfig.RuntimeParams["jit"] = "off"
 	}
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer() // a span per SQL query
+	// The default of 4 connections let slow collector/monitoring queries (several
+	// seconds each on a small disk) starve the admin UI of a free connection.
+	if raw := os.Getenv("DB_MAX_CONNS"); raw != "" {
+		n, convErr := strconv.ParseInt(raw, 10, 32)
+		if convErr != nil || n < 2 {
+			return nil, fmt.Errorf("DB_MAX_CONNS must be an integer >= 2")
+		}
+		cfg.MaxConns = int32(n)
+	}
 	reserved := int64(1)
 	if raw := os.Getenv("DB_CONTROL_POOL_RESERVED_CONNS"); raw != "" {
 		reserved, err = strconv.ParseInt(raw, 10, 32)
