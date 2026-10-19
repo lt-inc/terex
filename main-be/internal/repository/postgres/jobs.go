@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,10 +19,10 @@ func (s *Store) CreateJob(ctx context.Context, j domain.NewJob) error {
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx, `INSERT INTO jobs(job_id, channel_id, youtube_url, is_vertical, is_subtitles, slice_mode,
-		min_video_duration, background_id, is_circle, approve_mode, trace, source_kind, source_id, output_format)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),COALESCE(NULLIF($12,''),'youtube'),$13,COALESCE(NULLIF($14,''),'legacy'))`,
+		min_video_duration, background_id, is_circle, approve_mode, trace, source_kind, source_id, output_format, brand)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),COALESCE(NULLIF($12,''),'youtube'),$13,COALESCE(NULLIF($14,''),'legacy'),$15)`,
 		j.JobID, j.ChannelID, j.YoutubeURL, j.IsVertical, j.IsSubtitles, j.SliceMode,
-		j.MinVideoDuration, j.BackgroundID, j.IsCircle, j.ApproveMode, j.Trace, j.SourceKind, j.SourceID, j.OutputFormat)
+		j.MinVideoDuration, j.BackgroundID, j.IsCircle, j.ApproveMode, j.Trace, j.SourceKind, j.SourceID, j.OutputFormat, brandJSON(j.Brand))
 	if err != nil {
 		return err
 	}
@@ -47,6 +48,15 @@ func (s *Store) CreateJob(ctx context.Context, j domain.NewJob) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// brandJSON stores BrandOptions in jobs.brand; nil stays SQL NULL.
+func brandJSON(b *msg.BrandOptions) []byte {
+	if b == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(b)
+	return raw
 }
 
 const jobCols = `j.job_id, j.channel_id, COALESCE(j.youtube_url,''), j.is_vertical, j.is_subtitles, j.slice_mode, j.min_video_duration,
@@ -254,12 +264,19 @@ func (s *Store) JobProcessMessage(ctx context.Context, id string) (msg.ProcessVi
 	var circle, bg bool
 	var bgFile *string
 	var slice string
+	var brand []byte
 	err := s.pool.QueryRow(ctx, `SELECT j.job_id, j.youtube_url, j.is_vertical, j.is_subtitles, j.slice_mode, j.min_video_duration,
-		j.is_circle, j.background_id IS NOT NULL, bg.file_name FROM jobs j LEFT JOIN backgrounds bg ON bg.id=j.background_id
+		j.is_circle, j.background_id IS NOT NULL, bg.file_name, j.brand FROM jobs j LEFT JOIN backgrounds bg ON bg.id=j.background_id
 		WHERE j.job_id=$1`, id).Scan(&m.JobID, &m.YTURL, &m.Options.Vertical, &m.Options.Subtitles, &slice,
-		&m.Options.MinDuration, &circle, &bg, &bgFile)
+		&m.Options.MinDuration, &circle, &bg, &bgFile, &brand)
 	if err != nil {
 		return m, mapErr(err)
+	}
+	if len(brand) > 0 {
+		m.Options.Brand = &msg.BrandOptions{}
+		if err := json.Unmarshal(brand, m.Options.Brand); err != nil {
+			return m, err
+		}
 	}
 	m.Options.SliceMode = msg.SliceMode(slice)
 	m.Options.Shape = "rectangle"

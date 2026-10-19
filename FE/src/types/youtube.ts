@@ -3,6 +3,8 @@ export type YTCandidateState = "new" | "queued" | "done" | "failed" | "skipped";
 
 export interface YTFlowConfig {
   window_hours: number;
+  all_time: boolean;
+  max_videos: number;
   min_views: number;
   min_views_per_hour: number;
   min_duration_sec: number;
@@ -14,6 +16,9 @@ export interface YTFlowConfig {
   quota_daily: number;
   refresh_hours: number;
   scan_hours: number;
+  brand_style: boolean;
+  brand_background: string; // "" = blur of the video
+  brand_banner: string; // "" = no banner
 }
 
 export interface YTSource {

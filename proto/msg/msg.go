@@ -34,6 +34,17 @@ type JobOptions struct {
 	// BannerIDs are banner object names (banners bucket). One output variant per entry;
 	// an empty string means "no banner". Empty list = a single variant without banner.
 	BannerIDs []string `json:"banner_ids,omitempty"`
+	// Brand switches on the branded layout (see BrandOptions). It replaces Vertical/Subtitles.
+	Brand *BrandOptions `json:"brand,omitempty"`
+}
+
+// BrandOptions describe the "фирменный стиль" layout: the video is shrunk and pinned to the top centre of
+// a 1080x1920 canvas over a background (JobOptions.BackgroundID, empty = blurred copy of the video),
+// RU+EN word-by-word subtitles go right under it, the audio pitch is shifted (Content ID) and the banner
+// (JobOptions.BannerIDs) sits at the very bottom.
+type BrandOptions struct {
+	VideoScale     float64 `json:"video_scale"`     // share of the canvas width the video occupies, (0,1]
+	PitchSemitones float64 `json:"pitch_semitones"` // audio pitch shift at the original tempo
 }
 
 type ProcessVideo struct {

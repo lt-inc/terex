@@ -31,6 +31,34 @@ type ShortRenderer interface {
 	RenderShort(context.Context, ShortRenderSpec, string) error
 }
 
+// BrandSpec is the branded 1080x1920 frame: the video shrunk to VideoScale of the width and pinned to the
+// top centre over BgPath (empty = blurred copy of the video), ASSPath burnt in, audio pitch shifted.
+type BrandSpec struct {
+	VideoScale     float64
+	PitchSemitones float64
+	BgPath         string
+	ASSPath        string
+}
+
+// BrandRenderer is optional, like ShortRenderer: media clients without it cannot render branded jobs.
+type BrandRenderer interface {
+	RenderBrand(ctx context.Context, in, out string, spec BrandSpec) error
+}
+
+// BrandSubsObject is the branded subtitles file in the transcripts bucket (under the job id).
+const BrandSubsObject = "brand_subs.ass"
+
+// BrandSubtitleTop is the y of the first subtitle line: just under the video shrunk to scale and pinned to the top.
+func BrandSubtitleTop(scale float64) int { return int(1920*BrandScale(scale)) + 12 }
+
+// BrandScale clamps the video share of the canvas width to a sane range (default 0.75).
+func BrandScale(scale float64) float64 {
+	if scale <= 0.2 || scale > 1 {
+		return 0.75
+	}
+	return scale
+}
+
 type mediaIdentityKey struct{}
 type mediaIdentity struct {
 	job, clip, format string

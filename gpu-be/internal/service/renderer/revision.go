@@ -146,6 +146,10 @@ func (s *Service) renderRevision(ctx context.Context, w workflow.RenderWork, loc
 	if math.IsNaN(w.StartSec) || math.IsNaN(w.EndSec) || math.IsInf(w.StartSec, 0) || math.IsInf(w.EndSec, 0) || w.StartSec < 0 || w.EndSec <= w.StartSec || (w.Source.DurationSec > 0 && w.EndSec > w.Source.DurationSec+0.05) {
 		return domain.ObjectRef{}, fmt.Errorf("invalid clip bounds")
 	}
+	if w.Source.Options.Brand != nil {
+		// Edited cues carry one language; re-rendering would silently drop the RU+EN subtitles and the layout.
+		return domain.ObjectRef{}, fmt.Errorf("branded clips cannot be re-rendered from edited subtitles")
+	}
 	for _, cue := range w.Cues {
 		if math.IsNaN(cue.Start) || math.IsNaN(cue.End) || math.IsInf(cue.Start, 0) || math.IsInf(cue.End, 0) || cue.Start < 0 || cue.End <= cue.Start || (w.Source.DurationSec > 0 && cue.End > w.Source.DurationSec+0.05) {
 			return domain.ObjectRef{}, fmt.Errorf("invalid subtitle cue bounds")

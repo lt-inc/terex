@@ -141,7 +141,7 @@ func (s *Service) PublicVideos(ctx context.Context, q *workflow.PublicVideosRequ
 		return &workflow.PublicVideosResponse{Status: workflow.StatsError, Error: err.Error()}, nil
 	}
 	yt := s.Auth.YouTube(func(context.Context) (string, error) { return token, nil })
-	maxResults := min(max(q.MaxResults, 1), 200)
+	maxResults := min(max(q.MaxResults, 1), 1000)
 	var units int
 	var videos []workflow.PublicVideo
 	var ids []string
