@@ -8,6 +8,8 @@ const base = "/youtube";
 
 export const DEFAULT_YT_CONFIG: YTFlowConfig = {
   window_hours: 72,
+  all_time: false,
+  max_videos: 200,
   min_views: 5000,
   min_views_per_hour: 0,
   min_duration_sec: 3,
@@ -19,6 +21,9 @@ export const DEFAULT_YT_CONFIG: YTFlowConfig = {
   quota_daily: 1000,
   refresh_hours: 6,
   scan_hours: 6,
+  brand_style: false,
+  brand_background: "",
+  brand_banner: "",
 };
 
 export const fetchYTFlows = (signal?: AbortSignal) => request<YTFlow[]>(`${base}/flows`, { signal });
@@ -39,6 +44,7 @@ export const fetchYTQuota = (signal?: AbortSignal) => request<YTQuota>(`${base}/
 
 export const STATUS_LABEL: Record<string, string> = {
   ok: "Работает",
+  waiting: "Ждёт свободного окна",
   quota: "Квота API исчерпана",
   budget: "Бюджет потока исчерпан",
   no_account: "Нет рабочего YouTube-аккаунта",

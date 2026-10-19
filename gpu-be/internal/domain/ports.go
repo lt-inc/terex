@@ -103,6 +103,15 @@ type HighlightFinder interface {
 	Find(ctx context.Context, sents []Sentence, lim ClipLimits) ([]Pick, error)
 }
 
+// WordTranslation is one spoken word rendered in both subtitle languages. An empty side means the word
+// has no counterpart of its own (it is part of a neighbour's phrase); the previous text stays on screen.
+type WordTranslation struct{ RU, EN string }
+
+// WordTranslator translates a spoken word sequence word by word (OpenRouter); the result has one entry per word.
+type WordTranslator interface {
+	TranslateWords(ctx context.Context, words []string) ([]WordTranslation, error)
+}
+
 // EnergySeries is loudness (dBFS) in consecutive windows of Step seconds.
 type EnergySeries struct {
 	Step float64

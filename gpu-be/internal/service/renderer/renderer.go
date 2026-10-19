@@ -71,7 +71,14 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 		return err
 	}
 
-	if o.Vertical {
+	if o.Brand != nil {
+		next, e := s.brand(ctx, msg.JobID, dir, cur, o)
+		if e != nil {
+			return e
+		}
+		cur = next
+		rect = true // the banner goes to the very bottom, as in rectangle mode
+	} else if o.Vertical {
 		spec := domain.VerticalSpec{Width: 1080, Blur: 40, Circle: o.Shape == "circle"}
 		if o.BackgroundID != "" {
 			spec.BgPath = filepath.Join(dir, "bg"+path.Ext(o.BackgroundID))
@@ -86,7 +93,7 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 		cur = next
 	}
 
-	if o.Subtitles {
+	if o.Subtitles && o.Brand == nil {
 		assPath := filepath.Join(dir, "subs.ass")
 		if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: msg.JobID + "/subs.ass"}, assPath); err != nil {
 			return err
@@ -179,6 +186,29 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 	}
 	s.Rep.Report(ctx, msg.JobID, stage, "done", "")
 	return s.Broker.Publish(ctx, domain.QueueClipsReady, domain.ClipsReady{JobID: msg.JobID, Clips: clips})
+}
+
+// brand renders the branded layout: background, shrunk video on top, RU+EN subtitles, shifted pitch.
+func (s *Service) brand(ctx context.Context, jobID, dir, in string, o domain.JobOptions) (string, error) {
+	br, ok := s.Media.(domain.BrandRenderer)
+	if !ok {
+		return "", fmt.Errorf("brand: media client cannot render the branded layout")
+	}
+	spec := domain.BrandSpec{VideoScale: o.Brand.VideoScale, PitchSemitones: o.Brand.PitchSemitones, ASSPath: filepath.Join(dir, "brand.ass")}
+	if err := s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: jobID + "/" + domain.BrandSubsObject}, spec.ASSPath); err != nil {
+		return "", fmt.Errorf("brand subtitles: %w", err)
+	}
+	if o.BackgroundID != "" {
+		spec.BgPath = filepath.Join(dir, "bg"+path.Ext(o.BackgroundID))
+		if err := s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketBackgrounds, Object: o.BackgroundID}, spec.BgPath); err != nil {
+			return "", err
+		}
+	}
+	out := filepath.Join(dir, "branded.mp4")
+	if err := br.RenderBrand(ctx, in, out, spec); err != nil {
+		return "", fmt.Errorf("brand: %w", err)
+	}
+	return out, nil
 }
 
 // patchASSRect rewrites the style for rect mode: top-center alignment, marginTop px from top.

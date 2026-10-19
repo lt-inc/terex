@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"terex/proto/msg"
+)
 
 const (
 	ApproveBy   = "by_approve"
@@ -98,6 +102,7 @@ type VideoCard struct {
 	Schedules         map[string]PublishSchedule `json:"schedules"`
 	Banners           []BannerConfig             `json:"banners"`
 	Targets           []AccountTarget            `json:"targets"`
+	Brand             *msg.BrandOptions          `json:"brand,omitempty"` // branded layout; background/banner come from the fields above
 }
 
 // ── Job views ────────────────────────────────────────────────────────────────
@@ -200,7 +205,8 @@ type NewJob struct {
 	Trace            string // trace id of the request that created the job (shown in FE, look it up in Tempo)
 	SourceKind       string // empty = youtube
 	SourceID         string
-	OutputFormat     string // empty = legacy
+	OutputFormat     string            // empty = legacy
+	Brand            *msg.BrandOptions // nil = ordinary layout
 	SubJobs          []NewSubJob
 }
 

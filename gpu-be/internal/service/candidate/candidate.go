@@ -21,11 +21,13 @@ import (
 const stage = "candidate"
 
 type Service struct {
-	Store  domain.ObjectStore
-	STT    domain.Transcriber
-	LLM    domain.HighlightFinder
-	Audio  domain.AudioAnalyzer // optional: energy/laughter hints for the LLM
-	Limits domain.ClipLimits    // highlights mode: the LLM picks the length inside these bounds
+	Store domain.ObjectStore
+	STT   domain.Transcriber
+	LLM   domain.HighlightFinder
+	// Translator makes the RU+EN word-by-word subtitles of branded jobs (msg.JobOptions.Brand).
+	Translator domain.WordTranslator
+	Audio      domain.AudioAnalyzer // optional: energy/laughter hints for the LLM
+	Limits     domain.ClipLimits    // highlights mode: the LLM picks the length inside these bounds
 	// PromptTags lists the hints the LLM is allowed to see (energy:high, laugh, fast, pause_before).
 	PromptTags []string
 	Broker     domain.Broker
@@ -62,10 +64,24 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 
 	segs := []domain.Segment{}
 	var intervals []domain.Interval
+	var brandASS string
 	if msg.Options.SliceMode == domain.SliceWhole {
 		// Republish as is: no speech recognition (music-only videos must not fail), one interval = the whole video.
 		if intervals, err = s.whole(ctx, msg.JobID, dir); err != nil {
 			return err
+		}
+		if b := msg.Options.Brand; b != nil {
+			// The branded layout needs subtitles: recognise and translate, but a silent video just has none.
+			audio := filepath.Join(dir, msg.JobID+".m4a")
+			if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".m4a"}, audio); err != nil {
+				return err
+			}
+			if segs, err = s.STT.Transcribe(ctx, audio); err != nil {
+				return err
+			}
+			if brandASS, err = s.brandSubtitles(ctx, segs, domain.BrandSubtitleTop(b.VideoScale)); err != nil {
+				return err
+			}
 		}
 	} else {
 		audio := filepath.Join(dir, msg.JobID+".m4a")
@@ -100,6 +116,11 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 	}
 	if err = put("subs.ass", []byte(ASS(segs, 4))); err != nil {
 		return err
+	}
+	if brandASS != "" {
+		if err = put(domain.BrandSubsObject, []byte(brandASS)); err != nil {
+			return err
+		}
 	}
 	raw, _ := json.MarshalIndent(intervals, "", "  ")
 	if err = put("intervals.json", raw); err != nil {

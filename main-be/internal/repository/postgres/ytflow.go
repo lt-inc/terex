@@ -337,43 +337,43 @@ var ytDefaultSlots = []string{"09:00", "12:00", "15:00", "18:00", "21:00"}
 // ReserveYTSlots pairs the best waiting candidates (highest views per hour first) with the earliest
 // free slots of the destination channel. Free slots come from calendarSlotsTx, the function the Twitch
 // scheduler uses, so the channel's daily limit and its occupied windows are shared between both.
-func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time) ([]domain.YTReservation, error) {
+func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time) ([]domain.YTReservation, string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer tx.Rollback(ctx)
 	if err = lockTwitch(ctx, tx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var enabled bool
 	var cfgRaw []byte
 	var remote, state string
 	err = tx.QueryRow(ctx, `SELECT f.enabled,f.config,COALESCE(a.remote_account_id,''),COALESCE(a.connection_state,'') FROM yt_flows f JOIN accounts a ON a.id=f.account_id WHERE f.id=$1`, flowID).Scan(&enabled, &cfgRaw, &remote, &state)
 	if err != nil {
-		return nil, mapErr(err)
+		return nil, "", mapErr(err)
 	}
 	if !enabled || remote == "" || state != "connected" {
-		return nil, nil
+		return nil, "", nil
 	}
 	var cfg domain.YTFlowConfig
 	if err = json.Unmarshal(cfgRaw, &cfg); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(cfg.Slots) == 0 {
 		cfg.Slots = ytDefaultSlots
 	}
 	if err = ensureChannelLimits(ctx, tx, remote); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var zone string
 	if err = tx.QueryRow(ctx, `SELECT timezone FROM twitch_channel_limits WHERE youtube_channel_id=$1`, remote).Scan(&zone); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	loc := mustLocation(zone)
 	slots, err := calendarSlotsTx(ctx, tx, twitch.Flow{YouTubeChannelID: remote, ShortsSlots: cfg.Slots}, "short", 0, "", now)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	free := []time.Time{}
 	for _, sl := range slots {
@@ -383,7 +383,7 @@ func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time
 	}
 	sort.Slice(free, func(i, j int) bool { return free[i].Before(free[j]) })
 	if len(free) == 0 {
-		return nil, nil
+		return nil, domain.YTWaitNoSlots, nil
 	}
 
 	// The flow's own caps: slots per local day and jobs created per local day.
@@ -392,28 +392,32 @@ func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time
 	dayStart := time.Date(now.In(loc).Year(), now.In(loc).Month(), now.In(loc).Day(), 0, 0, 0, 0, loc)
 	rows, err := tx.Query(ctx, `SELECT slot_at FROM yt_candidates WHERE flow_id=$1 AND state IN('queued','done') AND slot_at>=$2`, flowID, dayStart)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for rows.Next() {
 		var at time.Time
 		if err = rows.Scan(&at); err != nil {
 			rows.Close()
-			return nil, err
+			return nil, "", err
 		}
 		perDay[localDay(at)]++
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var downloadsToday int
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM yt_candidates WHERE flow_id=$1 AND queued_at>=$2`, flowID, dayStart).Scan(&downloadsToday); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	window := cfg.WindowHours
 	if window <= 0 {
 		window = 72
+	}
+	minPerHour, byViews := cfg.MinViewsPerHour, false
+	if cfg.AllTime { // the whole history: any age, ranked by total views
+		window, minPerHour, byViews = 24*365*50, 0, true
 	}
 	maxDur := cfg.MaxDurationSec
 	if maxDur <= 0 {
@@ -423,9 +427,9 @@ func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time
  WHERE c.flow_id=$2 AND c.state='new' AND c.published_at>=$1::timestamptz-make_interval(hours=>$3) AND c.views>=$4
   AND c.duration_sec BETWEEN $5 AND $6 AND($7::float8<=0 OR `+ytScore+`>=$7)
   AND NOT EXISTS(SELECT 1 FROM yt_uses u WHERE u.destination_key=$8 AND u.video_id=c.video_id)
- ORDER BY `+ytScore+` DESC,c.views DESC LIMIT $9`, now, flowID, window, cfg.MinViews, cfg.MinDurationSec, maxDur, cfg.MinViewsPerHour, remote, len(free)*2+4)
+ ORDER BY CASE WHEN $10 THEN c.views::float8 ELSE `+ytScore+` END DESC,c.views DESC LIMIT $9`, now, flowID, window, cfg.MinViews, cfg.MinDurationSec, maxDur, minPerHour, remote, len(free)*2+4, byViews)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var cands []domain.YTCandidate
 	for cRows.Next() {
@@ -433,22 +437,27 @@ func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time
 		c, e := scanYTCandidate(cRows, &score)
 		if e != nil {
 			cRows.Close()
-			return nil, e
+			return nil, "", e
 		}
 		cands = append(cands, c)
 	}
 	cRows.Close()
 	if err = cRows.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
+	if len(cands) == 0 {
+		return nil, domain.YTWaitNoCandidates, nil
+	}
 	var out []domain.YTReservation
-	next := 0
+	next, limited := 0, false
 	for _, slot := range free {
 		if cfg.DailyLimit > 0 && perDay[localDay(slot)] >= cfg.DailyLimit {
+			limited = true
 			continue
 		}
 		if cfg.DailyDownloads > 0 && downloadsToday >= cfg.DailyDownloads {
+			limited = true
 			break
 		}
 		for next < len(cands) {
@@ -456,13 +465,13 @@ func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time
 			next++
 			t, e := tx.Exec(ctx, `INSERT INTO yt_uses(destination_key,video_id,flow_id)VALUES($1,$2,$3)ON CONFLICT DO NOTHING`, remote, c.VideoID, flowID)
 			if e != nil {
-				return nil, e
+				return nil, "", e
 			}
 			if t.RowsAffected() == 0 {
 				continue // another flow took the video for this channel
 			}
 			if _, e = tx.Exec(ctx, `UPDATE yt_candidates SET state='queued',slot_at=$3,queued_at=$4,reason='' WHERE flow_id=$1 AND video_id=$2`, flowID, c.VideoID, slot, now); e != nil {
-				return nil, e
+				return nil, "", e
 			}
 			perDay[localDay(slot)]++
 			downloadsToday++
@@ -470,7 +479,11 @@ func (s *Store) ReserveYTSlots(ctx context.Context, flowID string, now time.Time
 			break
 		}
 	}
-	return out, tx.Commit(ctx)
+	wait := ""
+	if len(out) == 0 && limited {
+		wait = domain.YTWaitFlowLimit
+	}
+	return out, wait, tx.Commit(ctx)
 }
 
 func (s *Store) AttachYTJob(ctx context.Context, flowID, videoID, jobID string) error {

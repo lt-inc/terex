@@ -93,6 +93,9 @@ func Defaults(c domain.YTFlowConfig) domain.YTFlowConfig {
 	if c.WindowHours <= 0 {
 		c.WindowHours = 72
 	}
+	if c.MaxVideos <= 0 {
+		c.MaxVideos = 200
+	}
 	if c.MinViews <= 0 {
 		c.MinViews = 5000
 	}
@@ -131,6 +134,12 @@ func (s *Service) validate(ctx context.Context, f domain.YTFlow, create bool) er
 		return bad("choose the YouTube account to publish to")
 	}
 	c := f.Config
+	if !c.BrandStyle && (c.BrandBackground != "" || c.BrandBanner != "") {
+		return bad("background and banner apply only with the branded style")
+	}
+	if len([]rune(c.BrandBackground)) > 200 || len([]rune(c.BrandBanner)) > 200 {
+		return bad("background/banner name is too long")
+	}
 	for _, sl := range c.Slots {
 		if !slotRe.MatchString(sl) {
 			return bad("slot %q must look like 09:00", sl)
@@ -138,6 +147,9 @@ func (s *Service) validate(ctx context.Context, f domain.YTFlow, create bool) er
 	}
 	if c.MinDurationSec > c.MaxDurationSec || c.MaxDurationSec > 180 {
 		return bad("duration must be within 1..180 seconds")
+	}
+	if c.MaxVideos > 1000 {
+		return bad("scan depth is limited to 1000 videos per channel")
 	}
 	if c.WindowHours > 24*14 || c.DailyLimit < 0 || c.DailyDownloads < 0 || c.MinViewsPerHour < 0 {
 		return bad("invalid limits")
@@ -272,7 +284,11 @@ func (s *Service) runFlow(ctx context.Context, f domain.YTFlow, now time.Time, f
 		status, msg = classify(err)
 	}
 	// Scheduling needs no API quota: waiting candidates are published even when reads are paused.
-	if err := s.schedule(ctx, f, now); err != nil {
+	wait, err := s.schedule(ctx, f, now)
+	if err == nil && status == "ok" && wait != "" {
+		status, msg = "waiting", waitingNote(wait)
+	}
+	if err != nil {
 		slog.ErrorContext(ctx, "youtube flow scheduling failed", "flow", f.ID, "err", err)
 		if status == "ok" {
 			status, msg = "error", err.Error()
@@ -300,10 +316,10 @@ func paused(err error) bool {
 }
 
 // schedule binds waiting candidates to free calendar slots and creates their jobs.
-func (s *Service) schedule(ctx context.Context, f domain.YTFlow, now time.Time) error {
-	res, err := s.Repo.ReserveYTSlots(ctx, f.ID, now)
+func (s *Service) schedule(ctx context.Context, f domain.YTFlow, now time.Time) (string, error) {
+	res, wait, err := s.Repo.ReserveYTSlots(ctx, f.ID, now)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var firstErr error
 	for _, r := range res {
@@ -315,6 +331,7 @@ func (s *Service) schedule(ctx context.Context, f domain.YTFlow, now time.Time) 
 			ApproveMode: f.Config.ApproveMode,
 			Targets:     []domain.AccountTarget{{AccountID: f.AccountID, StartAt: &slot, Timezone: r.Timezone}},
 		}
+		applyBrand(&card, f.Config)
 		jobID, err := s.Jobs.CreateFlowJob(ctx, card, jobs.FlowJob{SourceKind: domain.YTJobSourceKind, SourceID: c.VideoID, OutputFormat: domain.YTOutputFormat})
 		if jobID != "" { // a job that failed to dispatch still exists: sync turns it into a failed candidate
 			if e := s.Repo.AttachYTJob(ctx, f.ID, c.VideoID, jobID); e != nil && firstErr == nil {
@@ -335,5 +352,39 @@ func (s *Service) schedule(ctx context.Context, f domain.YTFlow, now time.Time) 
 		}
 		slog.InfoContext(ctx, "youtube flow job created", "flow", f.ID, "video", c.VideoID, "job", jobID, "slot", slot, "views", c.Views, "score", c.Score)
 	}
-	return firstErr
+	return wait, firstErr
+}
+
+// Branded layout: the video takes this share of the canvas width, the audio is shifted by this many semitones.
+const (
+	brandVideoScale     = 0.75
+	brandPitchSemitones = 2.0
+)
+
+// applyBrand turns the flow's "фирменный стиль" settings into job options: the layout itself,
+// the chosen background (blur when empty) and the banner variant at the bottom.
+func applyBrand(card *domain.VideoCard, c domain.YTFlowConfig) {
+	if !c.BrandStyle {
+		return
+	}
+	card.Brand = &msg.BrandOptions{VideoScale: brandVideoScale, PitchSemitones: brandPitchSemitones}
+	if c.BrandBackground != "" {
+		card.AddBackground, card.BackgroundName = true, c.BrandBackground
+	}
+	if c.BrandBanner != "" {
+		card.Banners = []domain.BannerConfig{{BannerName: c.BrandBanner, Targets: card.Targets}}
+	}
+}
+
+// waitingNote explains in the panel why a flow with candidates published nothing.
+func waitingNote(reason string) string {
+	switch reason {
+	case domain.YTWaitNoSlots:
+		return "Нет свободных окон: дневной лимит канала и расписание (общие с Twitch-потоками) заняты. Видео ждут первого свободного окна."
+	case domain.YTWaitFlowLimit:
+		return "Достигнут собственный лимит потока (в день или скачиваний в день)."
+	case domain.YTWaitNoCandidates:
+		return "Нет видео, подходящих под фильтры."
+	}
+	return ""
 }

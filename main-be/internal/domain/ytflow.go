@@ -25,17 +25,22 @@ const (
 // YTFlowConfig is stored as JSON; zero values are replaced by defaults in the service.
 type YTFlowConfig struct {
 	WindowHours     int      `json:"window_hours"`       // only videos published within this window are considered
+	AllTime         bool     `json:"all_time"`           // ignore the window: take the whole channel history, best by total views
+	MaxVideos       int      `json:"max_videos"`         // all-time scan depth per channel (Shorts, newest first)
 	MinViews        int64    `json:"min_views"`          // absolute floor
 	MinViewsPerHour float64  `json:"min_views_per_hour"` // growth floor, 0 = off
 	MinDurationSec  int      `json:"min_duration_sec"`
 	MaxDurationSec  int      `json:"max_duration_sec"`
-	Slots           []string `json:"slots"`           // local HH:MM publication windows
-	DailyLimit      int      `json:"daily_limit"`     // this flow's own cap per local day, 0 = only the channel limit
-	DailyDownloads  int      `json:"daily_downloads"` // jobs this flow may create per local day, 0 = unlimited
-	ApproveMode     string   `json:"approve_mode"`    // auto_approve | by_approve
-	QuotaDaily      int      `json:"quota_daily"`     // YouTube API units per Pacific day, 0 = the shared pool only
-	RefreshHours    int      `json:"refresh_hours"`   // how often statistics of waiting candidates are re-read
-	ScanHours       int      `json:"scan_hours"`      // full rescan of a source (Shorts playlist / search)
+	Slots           []string `json:"slots"`            // local HH:MM publication windows
+	DailyLimit      int      `json:"daily_limit"`      // this flow's own cap per local day, 0 = only the channel limit
+	DailyDownloads  int      `json:"daily_downloads"`  // jobs this flow may create per local day, 0 = unlimited
+	ApproveMode     string   `json:"approve_mode"`     // auto_approve | by_approve
+	QuotaDaily      int      `json:"quota_daily"`      // YouTube API units per Pacific day, 0 = the shared pool only
+	RefreshHours    int      `json:"refresh_hours"`    // how often statistics of waiting candidates are re-read
+	ScanHours       int      `json:"scan_hours"`       // full rescan of a source (Shorts playlist / search)
+	BrandStyle      bool     `json:"brand_style"`      // render with the branded layout (msg.BrandOptions)
+	BrandBackground string   `json:"brand_background"` // background asset name; empty = blur of the video
+	BrandBanner     string   `json:"brand_banner"`     // banner asset name; empty = no banner
 }
 
 type YTSourceParams struct {
@@ -102,6 +107,13 @@ type YTCandidate struct {
 	Score        float64    `json:"score"` // views per hour since publication
 }
 
+// Reasons ReserveYTSlots gives when it reserved nothing.
+const (
+	YTWaitNoCandidates = "no_candidates" // nothing passes the filters
+	YTWaitNoSlots      = "no_free_slots" // the channel calendar (shared with Twitch) has no free window
+	YTWaitFlowLimit    = "flow_limit"    // this flow's own daily limits are reached
+)
+
 // YTReservation is a candidate bound to a free slot of the shared calendar.
 type YTReservation struct {
 	Candidate YTCandidate
@@ -150,7 +162,7 @@ type YTFlowRepo interface {
 
 	// ReserveYTSlots binds the best waiting candidates to free slots of the shared calendar under the
 	// scheduling lock; the returned reservations are already visible to the Twitch scheduler.
-	ReserveYTSlots(ctx context.Context, flowID string, now time.Time) ([]YTReservation, error)
+	ReserveYTSlots(ctx context.Context, flowID string, now time.Time) ([]YTReservation, string, error)
 	AttachYTJob(ctx context.Context, flowID, videoID, jobID string) error
 	ReleaseYTReservation(ctx context.Context, flowID, videoID, reason string, permanent bool) error
 	SyncYTCandidates(ctx context.Context) error

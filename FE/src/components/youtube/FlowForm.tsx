@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { fetchAccountsList } from "@/lib/api";
+import { fetchAccountsList, fetchBackgrounds, fetchBanners } from "@/lib/api";
 import { DEFAULT_YT_CONFIG, validateSlots } from "@/lib/youtube";
 import type { AccountRecord } from "@/types";
 import type { YTFlowConfig } from "@/types/youtube";
@@ -29,6 +29,8 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
   const [draft, setDraft] = useState<FlowDraft>(initial ?? { name: "", account_id: 0, config: DEFAULT_YT_CONFIG });
   const [slots, setSlots] = useState((initial?.config.slots ?? DEFAULT_YT_CONFIG.slots).join(" "));
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
+  const [backgrounds, setBackgrounds] = useState<string[]>([]);
+  const [banners, setBanners] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -40,6 +42,14 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
   useEffect(() => {
     void fetchAccountsList()
       .then((list) => setAccounts((list ?? []).filter((a) => a.platform === "youtube")))
+      .catch((e) => setError(msg(e)));
+  }, []);
+  useEffect(() => {
+    void Promise.all([fetchBackgrounds(), fetchBanners()])
+      .then(([bg, bn]) => {
+        setBackgrounds(bg ?? []);
+        setBanners(bn ?? []);
+      })
       .catch((e) => setError(msg(e)));
   }, []);
 
@@ -80,9 +90,23 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
 
       <section className={`${card} grid gap-4 sm:grid-cols-3`}>
         <h2 className="font-medium sm:col-span-3">Что брать</h2>
-        <Field label="Окно, часов" hint="Только видео не старше этого."><input type="number" min={1} className={input} value={cfg.window_hours} onChange={num("window_hours")} /></Field>
+        <label className="flex items-start gap-3 text-sm text-slate-300 sm:col-span-3">
+          <input type="checkbox" className="mt-1" checked={cfg.all_time} onChange={(e) => setCfg("all_time", e.target.checked)} />
+          <span>
+            Весь канал целиком, а не только последние часы
+            <span className="block text-xs text-slate-500">
+              Берутся лучшие Shorts за всю историю канала по общим просмотрам. Историю читаем один раз (после включения нажмите «Проверить сейчас»), дальше ловим только новые видео.
+              Глубина обхода стоит квоты: 200 видео — около 8 единиц, 1000 — около 40.
+            </span>
+          </span>
+        </label>
+        {cfg.all_time ? (
+          <Field label="Глубина обхода, видео на канал" hint="Не больше 1000, новейшие Shorts первыми."><input type="number" min={1} max={1000} className={input} value={cfg.max_videos} onChange={num("max_videos")} /></Field>
+        ) : (
+          <Field label="Окно, часов" hint="Только видео не старше этого."><input type="number" min={1} className={input} value={cfg.window_hours} onChange={num("window_hours")} /></Field>
+        )}
         <Field label="Минимум просмотров"><input type="number" min={1} className={input} value={cfg.min_views} onChange={num("min_views")} /></Field>
-        <Field label="Минимум просмотров в час" hint="0 — не учитывать."><input type="number" min={0} className={input} value={cfg.min_views_per_hour} onChange={num("min_views_per_hour")} /></Field>
+        {!cfg.all_time && <Field label="Минимум просмотров в час" hint="0 — не учитывать."><input type="number" min={0} className={input} value={cfg.min_views_per_hour} onChange={num("min_views_per_hour")} /></Field>}
         <Field label="Длительность от, сек"><input type="number" min={1} className={input} value={cfg.min_duration_sec} onChange={num("min_duration_sec")} /></Field>
         <Field label="Длительность до, сек" hint="Не больше 180."><input type="number" min={1} max={180} className={input} value={cfg.max_duration_sec} onChange={num("max_duration_sec")} /></Field>
       </section>
@@ -105,6 +129,42 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
         </Field>
         <Field label="Обновлять просмотры, часов"><input type="number" min={1} className={input} value={cfg.refresh_hours} onChange={num("refresh_hours")} /></Field>
         <Field label="Полный обход источника, часов"><input type="number" min={1} className={input} value={cfg.scan_hours} onChange={num("scan_hours")} /></Field>
+      </section>
+
+      <section className={`${card} grid gap-4 sm:grid-cols-2`}>
+        <label className="flex items-start gap-3 text-sm text-slate-300 sm:col-span-2">
+          <input type="checkbox" className="mt-1" checked={cfg.brand_style} onChange={(e) => {
+              const on = e.target.checked;
+              setDraft((d) => ({ ...d, config: { ...d.config, brand_style: on, ...(on ? {} : { brand_background: "", brand_banner: "" }) } }));
+            }} />
+          <span>
+            Добавить фирменный стиль
+            <span className="block text-xs text-slate-500">
+              Видео уменьшается до 75% и прижимается к верху по центру, под ним на фоне идут субтитры RU + EN по одному слову (жёлтым, то слово, что звучит сейчас),
+              тон оригинального звука сдвигается на +2 полутона (против претензий Content ID). Нужны распознавание речи и перевод, поэтому видео обрабатывается дольше.
+            </span>
+          </span>
+        </label>
+        {cfg.brand_style && (
+          <>
+            <Field label="Фон" hint="Блюр — размытая копия самого видео. Остальное — из загруженных на странице Backgrounds.">
+              <select className={input} value={cfg.brand_background} onChange={(e) => setCfg("brand_background", e.target.value)}>
+                <option value="">Блюр</option>
+                {backgrounds.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Баннер" hint="Внизу готового видео. Из загруженных на странице Banners.">
+              <select className={input} value={cfg.brand_banner} onChange={(e) => setCfg("brand_banner", e.target.value)}>
+                <option value="">Без баннера</option>
+                {banners.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </Field>
+          </>
+        )}
       </section>
 
       {error && <p role="alert" className="text-sm text-red-400">{error}</p>}

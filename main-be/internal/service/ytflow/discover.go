@@ -166,6 +166,12 @@ func due(last *time.Time, every time.Duration, now time.Time) bool {
 
 func (s *Service) scanChannel(ctx context.Context, f domain.YTFlow, src domain.YTSource, own map[string]bool, now time.Time, force bool) error {
 	scanDue := due(src.LastScanAt, time.Duration(f.Config.ScanHours)*time.Hour, now)
+	depth := batch
+	if f.Config.AllTime {
+		// the whole history is read once (or on "check now"); afterwards the RSS sentinel finds new videos
+		scanDue = src.LastScanAt == nil || force
+		depth = f.Config.MaxVideos
+	}
 	if !force && !scanDue && !due(src.LastRSSAt, s.Cfg.RSSEvery, now) {
 		return nil
 	}
@@ -195,7 +201,7 @@ func (s *Service) scanChannel(ctx context.Context, f domain.YTFlow, src domain.Y
 	switch {
 	case scanDue:
 		// the Shorts playlist: only Shorts, newest first
-		videos, err = s.read(ctx, f, workflow.PublicVideosRequest{Op: workflow.PublicChannelShorts, ChannelID: src.Value, MaxResults: batch})
+		videos, err = s.read(ctx, f, workflow.PublicVideosRequest{Op: workflow.PublicChannelShorts, ChannelID: src.Value, MaxResults: depth})
 		if err != nil {
 			return err
 		}
@@ -225,8 +231,11 @@ func (s *Service) scanSearch(ctx context.Context, f domain.YTFlow, src domain.YT
 	if !force && !due(src.LastScanAt, time.Duration(f.Config.ScanHours)*time.Hour, now) {
 		return nil
 	}
-	videos, err := s.read(ctx, f, workflow.PublicVideosRequest{Op: workflow.PublicSearch, Query: src.Value, RegionCode: src.Params.RegionCode,
-		Language: src.Params.Language, PublishedAfter: now.Add(-time.Duration(f.Config.WindowHours) * time.Hour), MaxResults: batch})
+	req := workflow.PublicVideosRequest{Op: workflow.PublicSearch, Query: src.Value, RegionCode: src.Params.RegionCode, Language: src.Params.Language, MaxResults: batch}
+	if !f.Config.AllTime {
+		req.PublishedAfter = now.Add(-time.Duration(f.Config.WindowHours) * time.Hour)
+	}
+	videos, err := s.read(ctx, f, req)
 	if err != nil {
 		return err
 	}
@@ -282,6 +291,9 @@ func (s *Service) onlyShorts(ctx context.Context, in []workflow.PublicVideo) []w
 // reason, so they are not read again.
 func (s *Service) store(ctx context.Context, f domain.YTFlow, sourceID *int64, videos []workflow.PublicVideo, known, own map[string]bool, now time.Time) error {
 	cutoff := now.Add(-time.Duration(f.Config.WindowHours) * time.Hour)
+	if f.Config.AllTime {
+		cutoff = time.Time{}
+	}
 	list := make([]domain.YTCandidate, 0, len(videos))
 	for _, v := range videos {
 		published := v.PublishedAt
@@ -302,7 +314,11 @@ func (s *Service) store(ctx context.Context, f domain.YTFlow, sourceID *int64, v
 
 // refresh re-reads statistics of waiting candidates: a Short that keeps growing moves up the queue.
 func (s *Service) refresh(ctx context.Context, f domain.YTFlow, now time.Time) error {
-	ids, err := s.Repo.YTCandidatesToRefresh(ctx, f.ID, now.Add(-time.Duration(f.Config.RefreshHours)*time.Hour), now.Add(-time.Duration(f.Config.WindowHours)*time.Hour), 3*batch)
+	publishedAfter := now.Add(-time.Duration(f.Config.WindowHours) * time.Hour)
+	if f.Config.AllTime {
+		publishedAfter = time.Time{}
+	}
+	ids, err := s.Repo.YTCandidatesToRefresh(ctx, f.ID, now.Add(-time.Duration(f.Config.RefreshHours)*time.Hour), publishedAfter, 3*batch)
 	if err != nil || len(ids) == 0 {
 		return err
 	}

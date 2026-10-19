@@ -119,9 +119,10 @@ func run() error {
 		return err
 	}
 
+	llmClient := newLLM(cfg)
 	svcs := tamqp.Services{
 		Preproc: &preproc.Service{Store: store, Dl: ytdlp.New(), Media: media, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
-		Candidate: &candidate.Service{Store: store, STT: stt, LLM: newLLM(cfg), Audio: acoustic,
+		Candidate: &candidate.Service{Store: store, STT: stt, LLM: llmClient, Translator: llmClient, Audio: acoustic,
 			Limits: domain.ClipLimits{MinSec: cfg.ClipMinSec, MaxSec: cfg.ClipMaxSec, MaxClips: cfg.MaxClips}, PromptTags: cfg.PromptTags, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
 		Renderer:         rendererSvc,
 		Publisher:        &publisher.Service{Pub: publisher.Manual{}, Broker: br},
