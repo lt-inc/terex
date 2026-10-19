@@ -70,6 +70,14 @@ const ADMIN_GROUPS = [
     ],
   },
   {
+    key: "youtube",
+    label: "YouTube",
+    links: [
+      { href: "/admin/youtube", label: "Потоки" },
+      { href: "/admin/youtube/new", label: "Новый поток" },
+    ],
+  },
+  {
     key: "news",
     label: "News",
     links: [

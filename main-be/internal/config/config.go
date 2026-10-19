@@ -34,6 +34,11 @@ type Config struct {
 	TwitchStoragePrometheusURL  string
 	TwitchStorageMinFreeBytes   int64
 	TwitchStorageMinFreePercent float64
+	YTFlowsInterval             time.Duration
+	YTRSSInterval               time.Duration
+	YTQuotaDaily                int
+	YTQuotaReservePublish       int
+	YTQuotaReserveStats         int
 }
 
 func Load() Config {
@@ -65,6 +70,11 @@ func Load() Config {
 		TwitchStoragePrometheusURL:  os.Getenv("TWITCH_STORAGE_PROMETHEUS_URL"),
 		TwitchStorageMinFreeBytes:   positiveInt64("TWITCH_STORAGE_MIN_FREE_BYTES", 1<<30),
 		TwitchStorageMinFreePercent: percentage("TWITCH_STORAGE_MIN_FREE_PERCENT", 10),
+		YTFlowsInterval:             positiveDuration("YT_FLOWS_INTERVAL", time.Minute),
+		YTRSSInterval:               positiveDuration("YT_RSS_INTERVAL", 10*time.Minute),
+		YTQuotaDaily:                int(positiveInt64("YT_QUOTA_DAILY", 10000)),
+		YTQuotaReservePublish:       int(positiveInt64("YT_QUOTA_RESERVE_PUBLISH", 5000)),
+		YTQuotaReserveStats:         int(positiveInt64("YT_QUOTA_RESERVE_STATS", 1000)),
 	}
 }
 

@@ -108,7 +108,10 @@ func calendarSlotsTx(ctx context.Context, tx pgx.Tx, f twitch.Flow, format strin
 	calendarEnd := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day()+1, 0, 0, 0, 0, loc)
 	rows, err := tx.Query(ctx, `SELECT p.publish_at,FALSE FROM publications p JOIN accounts a ON a.id=p.account_id JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id LEFT JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE COALESCE(NULLIF(p.destination_key,''),NULLIF(o.youtube_channel_id,''),a.remote_account_id)=$1 AND j.output_format=$2 AND p.id<>$3 AND `+occupiesCalendar+` AND p.publish_at>=$4 AND p.publish_at<$5
  UNION ALL
- SELECT r.slot_at,TRUE FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$6 AND r.state='active' AND r.expires_at>$7 AND r.slot_at>=$4 AND r.slot_at<$5 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`)`, flowDestinationKey(f), format, excludePID, day, calendarEnd, excludePrep, now)
+ SELECT r.slot_at,TRUE FROM twitch_preparation_reservations r WHERE r.youtube_channel_id=$1 AND r.format=$2 AND r.id<>$6 AND r.state='active' AND r.expires_at>$7 AND r.slot_at>=$4 AND r.slot_at<$5 AND NOT EXISTS(SELECT 1 FROM publications p WHERE p.clip_id=r.clip_id AND `+occupiesCalendar+`)
+ UNION ALL
+ SELECT yc.slot_at,TRUE FROM yt_candidates yc JOIN yt_flows yf ON yf.id=yc.flow_id JOIN accounts ya ON ya.id=yf.account_id WHERE ya.remote_account_id=$1 AND $2='short' AND yc.state='queued' AND yc.slot_at>=$4 AND yc.slot_at<$5
+ AND NOT EXISTS(SELECT 1 FROM publications p JOIN clips yclip ON yclip.clip_id=p.clip_id WHERE yclip.job_id=yc.job_id AND `+occupiesCalendar+`)`, flowDestinationKey(f), format, excludePID, day, calendarEnd, excludePrep, now)
 	if err != nil {
 		return nil, err
 	}

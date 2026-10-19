@@ -198,6 +198,9 @@ type NewJob struct {
 	IsCircle         bool
 	ApproveMode      string
 	Trace            string // trace id of the request that created the job (shown in FE, look it up in Tempo)
+	SourceKind       string // empty = youtube
+	SourceID         string
+	OutputFormat     string // empty = legacy
 	SubJobs          []NewSubJob
 }
 

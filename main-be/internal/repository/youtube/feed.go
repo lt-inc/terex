@@ -4,6 +4,7 @@ package youtube
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -85,3 +86,32 @@ func (f *Feed) get(ctx context.Context, u string) ([]byte, error) {
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }
+
+// IsShort reports whether the video is a YouTube Short: /shorts/<id> answers 200 for a Short and
+// redirects to /watch for any other video. The check needs no API quota.
+func (f *Feed) IsShort(ctx context.Context, videoID string) (bool, error) {
+	if !videoIDRe.MatchString(videoID) {
+		return false, fmt.Errorf("invalid video id %q", videoID)
+	}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, "https://www.youtube.com/shorts/"+videoID, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (terex-monitor)")
+	req.Header.Set("Cookie", "SOCS=CAI") // skips the EU consent redirect, which would look like "not a Short"
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return true, nil
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		if strings.Contains(resp.Header.Get("Location"), "consent.") {
+			return false, errors.New("YouTube asked for cookie consent")
+		}
+		return false, nil
+	}
+	return false, &domain.FeedHTTPError{StatusCode: resp.StatusCode, URL: "shorts/" + videoID}
+}
+
+var videoIDRe = regexp.MustCompile(`^[\w-]{11}$`)

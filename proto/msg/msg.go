@@ -20,6 +20,8 @@ type SliceMode string
 const (
 	SliceHighlights SliceMode = "highlights"
 	SliceFull       SliceMode = "full"
+	// SliceWhole republishes the source as one clip: no transcription, the interval is the whole video.
+	SliceWhole SliceMode = "whole"
 )
 
 type JobOptions struct {

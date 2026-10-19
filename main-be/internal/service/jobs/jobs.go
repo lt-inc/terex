@@ -125,13 +125,25 @@ func (s *Service) subJob(ctx context.Context, jobID string, accounts map[string]
 	return sj, nil
 }
 
+// FlowJob marks a job created by an automatic flow; the zero value is an ordinary job.
+type FlowJob struct{ SourceKind, SourceID, OutputFormat string }
+
 // Create stores a job from the FE card (or a channel template) and queues it on the GPU.
-func (s *Service) Create(ctx context.Context, card domain.VideoCard, channelID *int64) (_ string, err error) {
+func (s *Service) Create(ctx context.Context, card domain.VideoCard, channelID *int64) (string, error) {
+	return s.create(ctx, card, channelID, FlowJob{})
+}
+
+// CreateFlowJob is Create for jobs that belong to an automatic flow (see domain.YTJobSourceKind).
+func (s *Service) CreateFlowJob(ctx context.Context, card domain.VideoCard, fj FlowJob) (string, error) {
+	return s.create(ctx, card, nil, fj)
+}
+
+func (s *Service) create(ctx context.Context, card domain.VideoCard, channelID *int64, fj FlowJob) (_ string, err error) {
 	jobID := shortID()
 	ctx, span := telemetry.Start(ctx, "job.create", attribute.String("job.id", jobID), attribute.String("youtube.url", card.YoutubeURL))
 	defer func() { telemetry.End(span, err) }()
 	mode := card.SliceMode
-	if mode != string(msg.SliceHighlights) {
+	if mode != string(msg.SliceHighlights) && mode != string(msg.SliceWhole) {
 		mode = string(msg.SliceFull)
 	}
 	approve := card.ApproveMode
@@ -146,6 +158,7 @@ func (s *Service) Create(ctx context.Context, card domain.VideoCard, channelID *
 		JobID: jobID, ChannelID: channelID, YoutubeURL: card.YoutubeURL, IsVertical: card.MakeVertical,
 		IsSubtitles: card.AddSubtitles, SliceMode: mode, MinVideoDuration: minDur,
 		IsCircle: card.Shape == "circle", ApproveMode: approve, Trace: telemetry.TraceID(ctx),
+		SourceKind: fj.SourceKind, SourceID: fj.SourceID, OutputFormat: fj.OutputFormat,
 	}
 	if card.AddBackground && card.BackgroundName != "" {
 		id, err := s.Assets.GetOrCreateAssetByName(ctx, domain.KindBackground, card.BackgroundName)

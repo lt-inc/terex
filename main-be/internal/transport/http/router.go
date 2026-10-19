@@ -20,6 +20,7 @@ import (
 	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/twitchreset"
 	"terex/main-be/internal/service/workflow"
+	"terex/main-be/internal/service/ytflow"
 )
 
 type API struct {
@@ -35,6 +36,7 @@ type API struct {
 	Collector *CollectorProxy
 	News      *NewsProxy
 	TikTok    *tiktokservice.Service
+	YouTube   *ytflow.Service
 }
 
 func (a *API) Router() http.Handler {
@@ -54,6 +56,20 @@ func (a *API) Router() http.Handler {
 			r.Post("/publications/{id}/tiktok/retry-after-absence", a.tikTokRetryAfterAbsence)
 		}
 		r.Handle("/news/*", a.News)
+		if a.YouTube != nil {
+			r.Get("/youtube/flows", a.ytFlows)
+			r.Post("/youtube/flows", a.saveYTFlow)
+			r.Get("/youtube/flows/{id}", a.ytFlow)
+			r.Patch("/youtube/flows/{id}", a.saveYTFlow)
+			r.Put("/youtube/flows/{id}", a.saveYTFlow)
+			r.Delete("/youtube/flows/{id}", a.deleteYTFlow)
+			r.Post("/youtube/flows/{id}/run", a.runYTFlow)
+			r.Post("/youtube/flows/{id}/sources", a.addYTSource)
+			r.Delete("/youtube/flows/{id}/sources/{sid}", a.deleteYTSource)
+			r.Get("/youtube/flows/{id}/candidates", a.ytCandidates)
+			r.Post("/youtube/flows/{id}/candidates/{video}/skip", a.skipYTCandidate)
+			r.Get("/youtube/quota", a.ytQuota)
+		}
 		if a.Twitch != nil {
 			r.Post("/twitch/metadata/preview", a.twitchMetadataPreview)
 			r.Get("/twitch/flows", a.twitchFlows)

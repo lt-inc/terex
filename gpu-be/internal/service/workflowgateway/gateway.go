@@ -126,6 +126,56 @@ func (s *Service) ChannelStats(ctx context.Context, q *workflow.ChannelStatsRequ
 	return resp, nil
 }
 
+// PublicVideos reads public Shorts data with the token of one account. Like ChannelStats it reports
+// account-level problems in the status so the caller can fall back to another account.
+func (s *Service) PublicVideos(ctx context.Context, q *workflow.PublicVideosRequest) (*workflow.PublicVideosResponse, error) {
+	id, err := credentialID(&workflow.ConnectionRequest{AccountID: q.AccountID, CredentialRef: q.CredentialRef})
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.Auth.AccessToken(ctx, id)
+	if err != nil {
+		if errors.Is(err, domain.ErrReauthentication) {
+			return &workflow.PublicVideosResponse{Status: workflow.StatsNeedsReauth, Error: err.Error()}, nil
+		}
+		return &workflow.PublicVideosResponse{Status: workflow.StatsError, Error: err.Error()}, nil
+	}
+	yt := s.Auth.YouTube(func(context.Context) (string, error) { return token, nil })
+	maxResults := min(max(q.MaxResults, 1), 200)
+	var units int
+	var videos []workflow.PublicVideo
+	var ids []string
+	var spent int
+	switch q.Op {
+	case workflow.PublicChannelShorts:
+		ids, spent, err = yt.ChannelShortIDs(ctx, q.ChannelID, maxResults)
+	case workflow.PublicSearch:
+		ids, spent, err = yt.SearchShorts(ctx, *q)
+	case workflow.PublicVideoStats:
+		ids = q.VideoIDs
+	default:
+		return nil, fmt.Errorf("unknown public videos operation %q", q.Op)
+	}
+	units += spent
+	if err == nil && len(ids) > 0 {
+		videos, spent, err = yt.Videos(ctx, ids)
+		units += spent
+	}
+	resp := &workflow.PublicVideosResponse{QuotaUnits: units}
+	var api *youtube.APIError
+	switch {
+	case errors.As(err, &api) && (api.Reason == "quotaExceeded" || api.Reason == "dailyLimitExceeded" || api.Reason == "rateLimitExceeded"):
+		resp.Status, resp.Error = workflow.StatsQuota, err.Error()
+	case errors.As(err, &api) && api.Status == 401:
+		resp.Status, resp.Error = workflow.StatsNeedsReauth, err.Error()
+	case err != nil:
+		resp.Status, resp.Error = workflow.StatsError, err.Error()
+	default:
+		resp.Status, resp.Videos = workflow.StatsOK, videos
+	}
+	return resp, nil
+}
+
 func (s *Service) Disconnect(ctx context.Context, q *workflow.ConnectionRequest) (*workflow.Result, error) {
 	id, err := credentialID(q)
 	if err != nil {

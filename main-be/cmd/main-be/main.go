@@ -29,6 +29,7 @@ import (
 	"terex/main-be/internal/service/twitchmonitor"
 	"terex/main-be/internal/service/twitchreset"
 	workflowservice "terex/main-be/internal/service/workflow"
+	"terex/main-be/internal/service/ytflow"
 	tamqp "terex/main-be/internal/transport/amqp"
 	"terex/main-be/internal/transport/cron"
 	thttp "terex/main-be/internal/transport/http"
@@ -99,6 +100,9 @@ func run() error {
 	pubMgr.Workflow = flow
 	tiktokSvc := &tiktokservice.Service{Repo: store, Workflow: flow, Gpu: gpu, URL: cfg.TikTokUploaderURL, Token: cfg.TikTokUploaderToken, WorkerToken: cfg.TikTokWorkerToken, AppURL: cfg.AppPublicURL}
 	mon := &monitor.Service{Channels: store, Feed: youtube.New(), Jobs: jobSvc}
+	ytFlows := &ytflow.Service{Repo: store, Gateway: gpu.WorkflowGateway(), Feed: youtube.New(), Jobs: jobSvc,
+		Cfg: ytflow.Config{QuotaDaily: cfg.YTQuotaDaily, ReservePublish: cfg.YTQuotaReservePublish, ReserveStats: cfg.YTQuotaReserveStats, RSSEvery: cfg.YTRSSInterval}}
+	pubMgr.Titles = ytFlows
 
 	twitchSvc := &twitchservice.Service{Repo: store, Gateway: gpu.IngestGateway(), Gpu: gpu}
 	monitorSvc := &twitchmonitor.Service{Repo: store, Flows: store, Diagnostics: twitchSvc, Collector: collector.NewMonitoring(cfg.CollectorURL, cfg.CollectorToken), AppURL: cfg.AppPublicURL, FlowsPerTick: cfg.TwitchMonitorFlowsPerTick}
@@ -112,12 +116,14 @@ func run() error {
 		Twitch: twitchSvc, Storage: storageSvc, Reset: resetSvc, Auth: &thttp.OperatorAuth{Username: cfg.AdminUsername, Password: cfg.AdminPassword, ServiceToken: cfg.ServiceToken, AllowedOrigin: cfg.AppPublicURL},
 		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken},
 		TikTok:    tiktokSvc,
+		YouTube:   ytFlows,
 		News:      &thttp.NewsProxy{URL: cfg.NewsCollectorURL, Token: cfg.NewsCollectorToken}}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 
 	go func() { _ = tamqp.Run(ctx, br, jobSvc, pubMgr) }()
 	go cron.Every(ctx, "monitor", cfg.MonitorInterval, mon)
 	go cron.Every(ctx, "publish", cfg.PublishInterval, pubMgr)
+	go cron.Every(ctx, "youtube flows", cfg.YTFlowsInterval, ytFlows)
 	go cron.Every(ctx, "twitch compilation", time.Minute, twitchSvc)
 	go cron.Every(ctx, "twitch monitoring", time.Minute, monitorSvc)
 	go cron.Every(ctx, "twitch growth cleanup", time.Hour, cron.Func(func(ctx context.Context) error { return store.CleanupTwitchGrowth(ctx, time.Now().UTC()) }))

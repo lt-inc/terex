@@ -18,9 +18,10 @@ func (s *Store) CreateJob(ctx context.Context, j domain.NewJob) error {
 	defer tx.Rollback(ctx)
 
 	_, err = tx.Exec(ctx, `INSERT INTO jobs(job_id, channel_id, youtube_url, is_vertical, is_subtitles, slice_mode,
-		min_video_duration, background_id, is_circle, approve_mode, trace) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''))`,
+		min_video_duration, background_id, is_circle, approve_mode, trace, source_kind, source_id, output_format)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''),COALESCE(NULLIF($12,''),'youtube'),$13,COALESCE(NULLIF($14,''),'legacy'))`,
 		j.JobID, j.ChannelID, j.YoutubeURL, j.IsVertical, j.IsSubtitles, j.SliceMode,
-		j.MinVideoDuration, j.BackgroundID, j.IsCircle, j.ApproveMode, j.Trace)
+		j.MinVideoDuration, j.BackgroundID, j.IsCircle, j.ApproveMode, j.Trace, j.SourceKind, j.SourceID, j.OutputFormat)
 	if err != nil {
 		return err
 	}
