@@ -13,11 +13,15 @@ import (
 )
 
 type Manager struct {
-	Clips    domain.ClipRepo
-	Jobs     domain.JobRepo
-	Broker   domain.Broker
-	Gpu      domain.Gpu
-	Now      func() time.Time
+	Clips  domain.ClipRepo
+	Jobs   domain.JobRepo
+	Broker domain.Broker
+	Gpu    domain.Gpu
+	Now    func() time.Time
+	// Titles optionally names clips of automatic flows after their source video.
+	Titles interface {
+		ClipTitle(ctx context.Context, jobID string) (string, bool, error)
+	}
 	Workflow interface {
 		InitializeClip(context.Context, string, json.RawMessage) error
 		Approve(context.Context, string) error
@@ -45,6 +49,15 @@ func (m *Manager) HandleClipsReady(ctx context.Context, ready msg.ClipsReady) er
 			Idx: idxByBanner[c.Banner], StartSec: c.Start, EndSec: c.End, Title: c.Title, Hashtags: c.Hashtags,
 		})
 		idxByBanner[c.Banner]++
+	}
+	if m.Titles != nil {
+		if title, ok, err := m.Titles.ClipTitle(ctx, ready.JobID); err != nil {
+			return err
+		} else if ok {
+			for i := range clips {
+				clips[i].Title = title
+			}
+		}
 	}
 	if err := m.Clips.SaveClips(ctx, ready.JobID, clips); err != nil {
 		return err

@@ -25,6 +25,7 @@ type Gateway interface {
 	Disconnect(context.Context, *ConnectionRequest) (*Result, error)
 	EditorContext(context.Context, *EditorContextRequest) (*EditorContextResponse, error)
 	ChannelStats(context.Context, *ChannelStatsRequest) (*ChannelStatsResponse, error)
+	PublicVideos(context.Context, *PublicVideosRequest) (*PublicVideosResponse, error)
 }
 
 type coordinatorClient struct{ conn grpc.ClientConnInterface }
@@ -40,6 +41,9 @@ func call[Q, R any](ctx context.Context, conn grpc.ClientConnInterface, method s
 	}
 	if strings.HasSuffix(method, "/ChannelStats") {
 		timeout = 2 * time.Minute
+	}
+	if strings.HasSuffix(method, "/PublicVideos") {
+		timeout = time.Minute
 	}
 	if strings.HasSuffix(method, "/EditorContext") {
 		timeout = 2 * time.Minute
@@ -97,6 +101,10 @@ func (c *gatewayClient) ChannelStats(ctx context.Context, q *ChannelStatsRequest
 	return call[ChannelStatsRequest, ChannelStatsResponse](ctx, c.conn, "/terex.workflow.v1.Gateway/ChannelStats", q)
 }
 
+func (c *gatewayClient) PublicVideos(ctx context.Context, q *PublicVideosRequest) (*PublicVideosResponse, error) {
+	return call[PublicVideosRequest, PublicVideosResponse](ctx, c.conn, "/terex.workflow.v1.Gateway/PublicVideos", q)
+}
+
 // method is the same unary dispatch used by generated gRPC code; the wire
 // message remains protobuf, and domain payload validation belongs to services.
 func method[S, Q, R any](service, name string, invoke func(S, context.Context, *Q) (*R, error)) grpc.MethodDesc {
@@ -135,6 +143,6 @@ func RegisterCoordinatorServer(reg grpc.ServiceRegistrar, srv Coordinator) {
 func RegisterGatewayServer(reg grpc.ServiceRegistrar, srv Gateway) {
 	const s = "terex.workflow.v1.Gateway"
 	reg.RegisterService(&grpc.ServiceDesc{ServiceName: s, HandlerType: (*Gateway)(nil), Methods: []grpc.MethodDesc{
-		method(s, "OAuthURL", Gateway.OAuthURL), method(s, "OAuthExchange", Gateway.OAuthExchange), method(s, "CheckConnection", Gateway.CheckConnection), method(s, "Disconnect", Gateway.Disconnect), method(s, "EditorContext", Gateway.EditorContext), method(s, "ChannelStats", Gateway.ChannelStats),
+		method(s, "OAuthURL", Gateway.OAuthURL), method(s, "OAuthExchange", Gateway.OAuthExchange), method(s, "CheckConnection", Gateway.CheckConnection), method(s, "Disconnect", Gateway.Disconnect), method(s, "EditorContext", Gateway.EditorContext), method(s, "ChannelStats", Gateway.ChannelStats), method(s, "PublicVideos", Gateway.PublicVideos),
 	}, Metadata: "workflow/workflow.proto"}, srv)
 }

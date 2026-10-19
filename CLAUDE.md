@@ -55,6 +55,7 @@ terex/
     internal/{transport,service,repository,domain,config}
   FE/                 # Next.js 15 + TS + Tailwind
   stats-collector/    # image terex-stats-collector: YouTube channel/video stats -> yt_stats schema -> Grafana (docs/YOUTUBE-STATS.ru.md)
+  # YouTube flows (find popular Shorts and republish) live inside main-be: internal/service/ytflow, docs/YOUTUBE-FLOWS.ru.md
   news-collector/     # image terex-news-collector: RSS/Google News -> stories -> LLM posts -> Telegram channels; panel tab /admin/news (docs/NEWS-COLLECTOR.ru.md)
   docker-compose.yml  # local stack; docker-compose.gpu.yml = overlay for the GPU host
   go.work             # ties proto + main-be + gpu-be
@@ -109,12 +110,13 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 | Banners / backgrounds | `GET /{banners\|backgrounds}` (names), `/list` (with `preview_url`), `POST /presign` → `{url,bucket,object}`, `POST /` register after the browser PUT, `PATCH/DELETE /{id}` |
 | Channels | `GET/POST /channels`, `PATCH/DELETE /channels/{id}` (`approve_mode`, `enabled`, `spec` = job template) |
 | Clips | `GET /clips?approval=pending\|approved\|rejected`, `POST /clips/{id}/approve\|reject` |
+| YouTube flows | `/youtube/flows`, `/flows/{id}/{run,sources,candidates}`, `/youtube/quota`; see `docs/YOUTUBE-FLOWS.ru.md` |
 | News | `/api/news/*` is proxied to news-collector (`NEWS_COLLECTOR_URL`, bearer `NEWS_SERVICE_TOKEN`): sources, Telegram channels, flows, posts; see `docs/NEWS-COLLECTOR.ru.md` |
 | Health | `GET /healthz` |
 
 ## Database (PostgreSQL `main`, goose migration `main-be/migrations/001_init.sql`)
 
-`accounts`, `banners`, `backgrounds` (name, note, bucket, file_name) · `channels` (yt_channel_id, approve_mode, enabled, spec jsonb) · `seen_videos` · `jobs` (slice_mode `highlights|full`, approve_mode, status `pending|queued|processing|done|failed`, fail_place) · `sub_jobs` (banner variant + accounts + schedule + step) · `clips` (bucket/object, banner_object, idx, approval) · `publications` (clip × account, status `scheduled|sent|published|failed`).
+`yt_flows`, `yt_flow_sources`, `yt_candidates`, `yt_uses`, `yt_quota`, `yt_quota_breaker` (YouTube flows, migration `021`) · `accounts`, `banners`, `backgrounds` (name, note, bucket, file_name) · `channels` (yt_channel_id, approve_mode, enabled, spec jsonb) · `seen_videos` · `jobs` (slice_mode `highlights|full`, approve_mode, status `pending|queued|processing|done|failed`, fail_place) · `sub_jobs` (banner variant + accounts + schedule + step) · `clips` (bucket/object, banner_object, idx, approval) · `publications` (clip × account, status `scheduled|sent|published|failed`).
 
 Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.idx × publish_step` minutes. Banner variants: each distinct sub-job banner is rendered as its own clip set; a clip is published by the sub-job whose banner matches.
 
@@ -138,6 +140,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_FORMAT`, `LOG_LEVEL` | both | service name, empty (off), `text`, `info` |
 | `BACKEND_URL` | FE | `http://localhost:8000` |
 | `GPU_GRPC_ADDR`, `STATS_INTERVAL`, `MAX_VIDEOS_PER_CHANNEL`, `FULL_RESOLUTION_DAYS` | stats-collector | `gpu-be:9090`, `1h`, `200`, `14` |
+| `YT_FLOWS_INTERVAL`, `YT_RSS_INTERVAL`, `YT_QUOTA_DAILY`, `YT_QUOTA_RESERVE_PUBLISH`, `YT_QUOTA_RESERVE_STATS` | main-be | `1m`, `10m`, `10000`, `5000`, `1000` |
 | `NEWS_COLLECTOR_URL`, `NEWS_SERVICE_TOKEN` | main-be | empty (News tab answers 503) |
 | `DATABASE_URL`, `NEWS_SERVICE_TOKEN`, `NEWS_SECRET_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `NEWS_EMBEDDING_MODEL`, `NEWS_TICK_INTERVAL` | news-collector | required: first two; see `docs/NEWS-COLLECTOR.ru.md` |
 
@@ -155,7 +158,7 @@ not here.
 
 ## FE notes
 
-- Sidebar groups: Jobs, Accounts, Banners, Backgrounds, **Channels**, **Clips**, Twitch, **News**, plus external service links.
+- Sidebar groups: Jobs, Accounts, Banners, Backgrounds, **Channels**, **Clips**, Twitch, **YouTube**, **News**, plus external service links.
 - Upload pages (banners/backgrounds) do presign → browser `PUT` to MinIO → register; they keep a localStorage draft.
 - Removed with the Go rewrite: warmup jobs and "capture auth via noVNC" (no backend yet).
 - FE → MinIO needs CORS (MinIO default allows all origins).

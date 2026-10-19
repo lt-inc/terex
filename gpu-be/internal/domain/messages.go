@@ -39,4 +39,5 @@ type (
 const (
 	SliceHighlights = msg.SliceHighlights
 	SliceFull       = msg.SliceFull
+	SliceWhole      = msg.SliceWhole
 )

@@ -60,26 +60,32 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 	}
 	defer cleanup()
 
-	audio := filepath.Join(dir, msg.JobID+".m4a")
-	if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".m4a"}, audio); err != nil {
-		return err
-	}
-	segs, err := s.STT.Transcribe(ctx, audio)
-	if err != nil {
-		return err
-	}
-
+	segs := []domain.Segment{}
 	var intervals []domain.Interval
-	if msg.Options.SliceMode == domain.SliceHighlights {
-		if intervals, err = s.highlights(ctx, msg.JobID, audio, segs); err != nil {
+	if msg.Options.SliceMode == domain.SliceWhole {
+		// Republish as is: no speech recognition (music-only videos must not fail), one interval = the whole video.
+		if intervals, err = s.whole(ctx, msg.JobID, dir); err != nil {
 			return err
 		}
 	} else {
-		minDur := msg.Options.MinDuration
-		if minDur <= 0 {
-			minDur = 60
+		audio := filepath.Join(dir, msg.JobID+".m4a")
+		if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".m4a"}, audio); err != nil {
+			return err
 		}
-		intervals = GroupSegments(segs, float64(minDur))
+		if segs, err = s.STT.Transcribe(ctx, audio); err != nil {
+			return err
+		}
+		if msg.Options.SliceMode == domain.SliceHighlights {
+			if intervals, err = s.highlights(ctx, msg.JobID, audio, segs); err != nil {
+				return err
+			}
+		} else {
+			minDur := msg.Options.MinDuration
+			if minDur <= 0 {
+				minDur = 60
+			}
+			intervals = GroupSegments(segs, float64(minDur))
+		}
 	}
 
 	put := func(name string, data []byte) error {
@@ -109,6 +115,28 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 
 	s.Rep.Report(ctx, msg.JobID, stage, "done", "")
 	return s.Broker.Publish(ctx, domain.QueueRender, msg)
+}
+
+// whole returns the single interval covering the downloaded video; preproc stores its duration in source.json.
+func (s *Service) whole(ctx context.Context, jobID, dir string) ([]domain.Interval, error) {
+	p := filepath.Join(dir, "source.json")
+	if err := s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: jobID + "/source.json"}, p); err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	var m struct {
+		DurationSec float64 `json:"duration_sec"`
+	}
+	if err = json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if m.DurationSec <= 0 {
+		return nil, errors.New("source duration is unknown")
+	}
+	return []domain.Interval{{ID: 0, Start: 0, End: m.DurationSec}}, nil
 }
 
 // highlights: sentences -> acoustic hints -> LLM picks (by sentence id) -> validated intervals.

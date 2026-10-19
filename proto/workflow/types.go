@@ -227,6 +227,46 @@ type ChannelStatsResponse struct {
 	QuotaUnits int          `json:"quota_units"` // YouTube Data API units spent by this call
 }
 
+// PublicVideos operations. The read is authorised with an account token, but returns only public data.
+const (
+	PublicChannelShorts = "channel_shorts" // Shorts of ChannelID (UUSH playlist), enriched with statistics
+	PublicVideoStats    = "videos"         // statistics of VideoIDs
+	PublicSearch        = "search"         // Shorts matching Query, most viewed first (100 quota units)
+)
+
+type PublicVideosRequest struct {
+	AccountID        int64     `json:"account_id"`
+	CredentialRef    ObjectRef `json:"credential_ref"`
+	ExpectedRemoteID string    `json:"expected_remote_id,omitempty"`
+	Op               string    `json:"op"`
+	ChannelID        string    `json:"channel_id,omitempty"`
+	VideoIDs         []string  `json:"video_ids,omitempty"`
+	Query            string    `json:"query,omitempty"`
+	RegionCode       string    `json:"region_code,omitempty"`
+	Language         string    `json:"language,omitempty"`
+	PublishedAfter   time.Time `json:"published_after,omitempty"`
+	MaxResults       int       `json:"max_results,omitempty"`
+}
+type PublicVideo struct {
+	ID           string    `json:"id"`
+	ChannelID    string    `json:"channel_id"`
+	ChannelTitle string    `json:"channel_title"`
+	Title        string    `json:"title"`
+	PublishedAt  time.Time `json:"published_at"`
+	DurationSec  int       `json:"duration_sec"`
+	Views        int64     `json:"views"`
+	Likes        *int64    `json:"likes"`
+}
+
+// PublicVideosResponse reuses the ChannelStats statuses: needs_reauth lets the caller
+// switch to another account, quota stops all reads until the Google quota resets.
+type PublicVideosResponse struct {
+	Status     string        `json:"status"`
+	Error      string        `json:"error,omitempty"`
+	Videos     []PublicVideo `json:"videos"`
+	QuotaUnits int           `json:"quota_units"`
+}
+
 type EditorContextRequest struct {
 	JobID    string         `json:"job_id"`
 	ClipID   string         `json:"clip_id"`
