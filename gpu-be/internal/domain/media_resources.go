@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"syscall"
 )
 
@@ -50,6 +51,18 @@ const BrandSubsObject = "brand_subs.ass"
 
 // BrandSubtitleTop is the y of the first subtitle line: just under the video shrunk to scale and pinned to the top.
 func BrandSubtitleTop(scale float64) int { return int(1920*BrandScale(scale)) + 12 }
+
+// BrandVideoHeight is the height the video really takes on the canvas: it is fitted into the scaled box
+// keeping its aspect ratio, so anything but a 9:16 source ends above the box bottom. Unknown size = the box.
+func BrandVideoHeight(scale float64, width, height int) int {
+	scale = BrandScale(scale)
+	boxW, boxH := 1080*scale, 1920*scale
+	if width <= 0 || height <= 0 {
+		return int(boxH)
+	}
+	k := min(boxW/float64(width), boxH/float64(height))
+	return int(math.Round(float64(height)*k/2)) * 2 // same rounding as the scale filter's even sizes
+}
 
 // BrandScale clamps the video share of the canvas width to a sane range (default 0.75).
 func BrandScale(scale float64) float64 {

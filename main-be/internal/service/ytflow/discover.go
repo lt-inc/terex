@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"terex/main-be/internal/domain"
@@ -205,6 +206,8 @@ func (s *Service) scanChannel(ctx context.Context, f domain.YTFlow, src domain.Y
 		if err != nil {
 			return err
 		}
+		// the statistics call returns videos in no promised order: store them newest first
+		sort.SliceStable(videos, func(i, j int) bool { return videos[i].PublishedAt.After(videos[j].PublishedAt) })
 		scanned := now
 		if err = s.Repo.TouchYTSource(ctx, src.ID, nil, &scanned, ""); err != nil {
 			return err

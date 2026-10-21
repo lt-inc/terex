@@ -59,6 +59,8 @@ export interface AssetCardData {
   name: string;
   file: File | null;
   note: string;
+  source?: "file" | "youtube"; // backgrounds only; missing = file
+  url?: string; // YouTube link when source is "youtube"
 }
 
 export interface AccountRecord {

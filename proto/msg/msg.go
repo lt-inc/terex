@@ -45,6 +45,7 @@ type JobOptions struct {
 type BrandOptions struct {
 	VideoScale     float64 `json:"video_scale"`     // share of the canvas width the video occupies, (0,1]
 	PitchSemitones float64 `json:"pitch_semitones"` // audio pitch shift at the original tempo
+	NoSubtitles    bool    `json:"no_subtitles,omitempty"` // skip recognition and burn no subtitles; unset = subtitles on
 }
 
 type ProcessVideo struct {

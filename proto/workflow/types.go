@@ -267,6 +267,16 @@ type PublicVideosResponse struct {
 	QuotaUnits int           `json:"quota_units"`
 }
 
+// ImportBackgroundRequest asks gpu-be to download a YouTube video into the backgrounds bucket.
+type ImportBackgroundRequest struct {
+	URL  string `json:"url"`
+	Name string `json:"name,omitempty"` // used in the object name only
+}
+type ImportBackgroundResponse struct {
+	Bucket string `json:"bucket"`
+	Object string `json:"object"`
+}
+
 type EditorContextRequest struct {
 	JobID    string         `json:"job_id"`
 	ClipID   string         `json:"clip_id"`

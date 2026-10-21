@@ -194,9 +194,22 @@ func (s *Service) brand(ctx context.Context, jobID, dir, in string, o domain.Job
 	if !ok {
 		return "", fmt.Errorf("brand: media client cannot render the branded layout")
 	}
-	spec := domain.BrandSpec{VideoScale: o.Brand.VideoScale, PitchSemitones: o.Brand.PitchSemitones, ASSPath: filepath.Join(dir, "brand.ass")}
-	if err := s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: jobID + "/" + domain.BrandSubsObject}, spec.ASSPath); err != nil {
-		return "", fmt.Errorf("brand subtitles: %w", err)
+	spec := domain.BrandSpec{VideoScale: o.Brand.VideoScale, PitchSemitones: o.Brand.PitchSemitones}
+	if !o.Brand.NoSubtitles {
+		spec.ASSPath = filepath.Join(dir, "brand.ass")
+		if err := s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketTranscripts, Object: jobID + "/" + domain.BrandSubsObject}, spec.ASSPath); err != nil {
+			return "", fmt.Errorf("brand subtitles: %w", err)
+		}
+		// The ASS file was written before the source size was known: put the text right under the video as it is.
+		if p, ok := s.Media.(interface {
+			Probe(context.Context, string) (domain.MediaProbe, error)
+		}); ok {
+			if pr, err := p.Probe(ctx, in); err == nil {
+				if spec.ASSPath, err = patchASSRect(spec.ASSPath, domain.BrandVideoHeight(o.Brand.VideoScale, pr.Width, pr.Height)); err != nil {
+					return "", fmt.Errorf("brand subtitles: %w", err)
+				}
+			}
+		}
 	}
 	if o.BackgroundID != "" {
 		spec.BgPath = filepath.Join(dir, "bg"+path.Ext(o.BackgroundID))

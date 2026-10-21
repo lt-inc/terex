@@ -240,6 +240,32 @@ func (a *API) registerAsset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// importBackground downloads a YouTube video as a background (gpu-be) instead of a browser upload.
+func (a *API) importBackground(w http.ResponseWriter, r *http.Request) {
+	if kindParam(r) != domain.KindBackground {
+		badRequest(w, "only backgrounds can be imported from YouTube")
+		return
+	}
+	var in struct {
+		Name string  `json:"name"`
+		Note *string `json:"note"`
+		URL  string  `json:"url"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.URL) == "" {
+		badRequest(w, "name and url are required")
+		return
+	}
+	out, err := a.Assets.ImportBackground(r.Context(), strings.TrimSpace(in.Name), in.Note, strings.TrimSpace(in.URL))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
 func (a *API) patchAsset(w http.ResponseWriter, r *http.Request) {
 	id, ok := idParam(w, r)
 	if !ok {

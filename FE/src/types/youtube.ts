@@ -19,6 +19,7 @@ export interface YTFlowConfig {
   brand_style: boolean;
   brand_background: string; // "" = blur of the video
   brand_banner: string; // "" = no banner
+  brand_subtitles?: boolean; // missing (older flows) = on
 }
 
 export interface YTSource {

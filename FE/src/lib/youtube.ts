@@ -24,6 +24,7 @@ export const DEFAULT_YT_CONFIG: YTFlowConfig = {
   brand_style: false,
   brand_background: "",
   brand_banner: "",
+  brand_subtitles: true,
 };
 
 export const fetchYTFlows = (signal?: AbortSignal) => request<YTFlow[]>(`${base}/flows`, { signal });

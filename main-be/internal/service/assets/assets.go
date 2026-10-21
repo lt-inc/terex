@@ -4,15 +4,23 @@ package assets
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"path"
+	"strings"
 
 	"terex/main-be/internal/domain"
+	"terex/proto/workflow"
 )
 
 type Service struct {
 	Assets   domain.AssetRepo
 	Accounts domain.AccountRepo
 	Gpu      domain.Gpu
+	// Importer downloads a YouTube video into the backgrounds bucket (gpu-be, yt-dlp).
+	Importer interface {
+		ImportBackground(context.Context, *workflow.ImportBackgroundRequest) (*workflow.ImportBackgroundResponse, error)
+	}
 }
 
 // ── banners / backgrounds ────────────────────────────────────────────────────
@@ -70,6 +78,25 @@ func (s *Service) Register(ctx context.Context, kind domain.AssetKind, name stri
 	}
 	s.fillPreview(ctx, &a)
 	return a, nil
+}
+
+// ImportBackground fetches a YouTube video on gpu-be and registers it as a background.
+func (s *Service) ImportBackground(ctx context.Context, name string, note *string, link string) (domain.Asset, error) {
+	if s.Importer == nil {
+		return domain.Asset{}, fmt.Errorf("%w: background import is not configured", domain.ErrInvalid)
+	}
+	if u, err := url.Parse(link); err != nil || (u.Hostname() != "youtu.be" && u.Hostname() != "youtube.com" && !strings.HasSuffix(u.Hostname(), ".youtube.com")) {
+		return domain.Asset{}, fmt.Errorf("%w: expected a YouTube video link", domain.ErrInvalid)
+	}
+	out, err := s.Importer.ImportBackground(ctx, &workflow.ImportBackgroundRequest{URL: link, Name: name})
+	if err != nil {
+		return domain.Asset{}, err
+	}
+	a, err := s.Register(ctx, domain.KindBackground, name, note, out.Bucket, out.Object)
+	if err != nil {
+		_ = s.Gpu.DeleteObject(ctx, out.Bucket, out.Object) // best effort: no record points at the file
+	}
+	return a, err
 }
 
 func (s *Service) Update(ctx context.Context, kind domain.AssetKind, id int64, u domain.AssetUpdate) (domain.Asset, error) {

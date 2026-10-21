@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import AssetCard from "@/components/assets/AssetCard";
-import { uploadAsset } from "@/lib/api";
+import { importBackgroundFromYouTube, uploadAsset } from "@/lib/api";
 import type { AssetCardData } from "@/types";
 export default function AssetUploadPage({
   kind,
@@ -39,10 +39,16 @@ export default function AssetUploadPage({
     setNotice("");
     const results = await Promise.all(
       cards.map(async (card) => {
-        if (!card.file || !card.name.trim())
-          return { id: card.id, error: "Choose a file and a name" };
+        const youtube = kind === "backgrounds" && card.source === "youtube";
+        if (!card.name.trim() || (youtube ? !card.url?.trim() : !card.file))
+          return {
+            id: card.id,
+            error: youtube ? "Enter a name and a YouTube link" : "Choose a file and a name",
+          };
         try {
-          await uploadAsset(kind, card.name.trim(), card.note, card.file);
+          if (youtube)
+            await importBackgroundFromYouTube(card.name.trim(), card.note, card.url!.trim());
+          else await uploadAsset(kind, card.name.trim(), card.note, card.file!);
           return { id: card.id, error: "" };
         } catch (e) {
           return {
@@ -74,6 +80,7 @@ export default function AssetUploadPage({
       </div>
       <p className="text-xs text-slate-500">
         Draft details are saved locally. Choose files again after reloading.
+        {kind === "backgrounds" && " A YouTube link is downloaded on the server, so it may take a minute."}
       </p>
       <div className="flex justify-between">
         <button
@@ -110,6 +117,7 @@ export default function AssetUploadPage({
           )}
           <AssetCard
             card={card}
+            allowYouTube={kind === "backgrounds"}
             onChange={(u) =>
               setCards((p) => p.map((c) => (c.id === card.id ? u : c)))
             }

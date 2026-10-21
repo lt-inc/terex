@@ -94,7 +94,7 @@ func run() error {
 	defer br.Close()
 
 	jobSvc := &jobs.Service{Jobs: store, Assets: store, Accounts: store, Broker: br}
-	assetSvc := &assets.Service{Assets: store, Accounts: store, Gpu: gpu}
+	assetSvc := &assets.Service{Assets: store, Accounts: store, Gpu: gpu, Importer: gpu.WorkflowGateway()}
 	pubMgr := &publish.Manager{Clips: store, Jobs: store, Broker: br, Gpu: gpu}
 	flow := &workflowservice.Service{Repo: store, Coordinator: store, Accounts: store, Clips: store, Gpu: gpu, Gateway: gpu.WorkflowGateway(), Broker: br, RedirectURL: cfg.OAuthRedirectURL, AppURL: cfg.AppPublicURL}
 	pubMgr.Workflow = flow

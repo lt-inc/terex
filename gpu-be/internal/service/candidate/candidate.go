@@ -70,8 +70,8 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 		if intervals, err = s.whole(ctx, msg.JobID, dir); err != nil {
 			return err
 		}
-		if b := msg.Options.Brand; b != nil {
-			// The branded layout needs subtitles: recognise and translate, but a silent video just has none.
+		if b := msg.Options.Brand; b != nil && !b.NoSubtitles {
+			// Branded subtitles: recognise and translate, but a silent video just has none.
 			audio := filepath.Join(dir, msg.JobID+".m4a")
 			if err = s.Store.Download(ctx, domain.ObjectRef{Bucket: domain.BucketProxy, Object: msg.JobID + ".m4a"}, audio); err != nil {
 				return err
