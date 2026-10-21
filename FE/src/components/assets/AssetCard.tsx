@@ -7,9 +7,11 @@ interface AssetCardProps {
   card: AssetCardData;
   onChange: (card: AssetCardData) => void;
   onDelete: () => void;
+  allowYouTube?: boolean;
 }
 
-export default function AssetCard({ card, onChange, onDelete }: AssetCardProps) {
+export default function AssetCard({ card, onChange, onDelete, allowYouTube }: AssetCardProps) {
+  const youtube = !!allowYouTube && card.source === "youtube";
   function update<K extends keyof AssetCardData>(key: K, value: AssetCardData[K]) {
     onChange({ ...card, [key]: value });
   }
@@ -41,10 +43,35 @@ export default function AssetCard({ card, onChange, onDelete }: AssetCardProps) 
         />
       </div>
 
-      {/* File */}
+      {/* File or YouTube link */}
       <div className="flex flex-col gap-1">
-        <label className="text-xs text-slate-400">File</label>
-        <FileDropzone file={card.file} onChange={handleFile} />
+        {allowYouTube ? (
+          <div className="flex gap-1 text-xs">
+            {(["file", "youtube"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => update("source", s)}
+                className={`px-3 py-1 rounded-md ${(youtube ? "youtube" : "file") === s ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}
+              >
+                {s === "file" ? "File" : "YouTube link"}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <label className="text-xs text-slate-400">File</label>
+        )}
+        {youtube ? (
+          <input
+            type="url"
+            value={card.url ?? ""}
+            onChange={(e) => update("url", e.target.value)}
+            placeholder="https://www.youtube.com/watch?v=…"
+            className="bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+        ) : (
+          <FileDropzone file={card.file} onChange={handleFile} />
+        )}
       </div>
 
       {/* Note */}

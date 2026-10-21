@@ -170,6 +170,8 @@ export async function uploadAsset(
     }),
   );
 }
+export const importBackgroundFromYouTube = (name: string, note: string, url: string) =>
+  request<AssetRecord>("/backgrounds/import", json("POST", { name, note: note || null, url }));
 export const fetchChannels = () => request<Channel[]>("/channels");
 export const createChannel = (data: {
   name: string;

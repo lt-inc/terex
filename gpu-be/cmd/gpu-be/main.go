@@ -137,7 +137,7 @@ func run() error {
 	}
 	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	gpuv1.RegisterGpuServiceServer(gs, &tgrpc.Server{State: state, GW: gw})
-	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, TmpDir: cfg.TmpDir, Resources: resources})
+	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, Backgrounds: ytdlp.New(), TmpDir: cfg.TmpDir, Resources: resources})
 	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir, Reset: resetGate, Resources: resources})
 	workflow.RegisterResetGatewayServer(gs, resetGate)
 	workflow.RegisterStorageGatewayServer(gs, &storagecleanup.Service{Store: store})

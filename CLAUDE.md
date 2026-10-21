@@ -107,7 +107,7 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 |------|-----------|
 | Jobs | `GET/POST /jobs`, `PATCH/DELETE /jobs/{id}`, `PATCH/DELETE /sub_jobs/{id}` |
 | Accounts | `GET /accounts` (names per platform), `GET /accounts/list`, `POST /accounts/create` (multipart, `auth_file`), `PATCH/DELETE /accounts/{id}`, `GET /accounts/{id}/clips\|scheduled\|published` |
-| Banners / backgrounds | `GET /{banners\|backgrounds}` (names), `/list` (with `preview_url`), `POST /presign` → `{url,bucket,object}`, `POST /` register after the browser PUT, `PATCH/DELETE /{id}` |
+| Banners / backgrounds | `GET /{banners\|backgrounds}` (names), `/list` (with `preview_url`), `POST /presign` → `{url,bucket,object}`, `POST /` register after the browser PUT, `POST /backgrounds/import` `{name,note,url}` (gpu-be downloads a YouTube video ≤1080p via yt-dlp, then registers it), `PATCH/DELETE /{id}` |
 | Channels | `GET/POST /channels`, `PATCH/DELETE /channels/{id}` (`approve_mode`, `enabled`, `spec` = job template) |
 | Clips | `GET /clips?approval=pending\|approved\|rejected`, `POST /clips/{id}/approve\|reject` |
 | YouTube flows | `/youtube/flows`, `/flows/{id}/{run,sources,candidates}`, `/youtube/quota`; see `docs/YOUTUBE-FLOWS.ru.md` |

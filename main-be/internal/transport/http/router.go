@@ -151,6 +151,7 @@ func (a *API) Router() http.Handler {
 			r.Get("/", a.assetNames)
 			r.Get("/list", a.listAssets)
 			r.Post("/presign", a.presignAsset)
+			r.Post("/import", a.importBackground)
 			r.Post("/", a.registerAsset)
 			r.Patch("/{id}", a.patchAsset)
 			r.Delete("/{id}", a.deleteAsset)

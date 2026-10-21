@@ -41,6 +41,7 @@ type YTFlowConfig struct {
 	BrandStyle      bool     `json:"brand_style"`      // render with the branded layout (msg.BrandOptions)
 	BrandBackground string   `json:"brand_background"` // background asset name; empty = blur of the video
 	BrandBanner     string   `json:"brand_banner"`     // banner asset name; empty = no banner
+	BrandSubtitles  *bool    `json:"brand_subtitles"`  // burn RU+EN subtitles under the video; nil (older flows) = on
 }
 
 type YTSourceParams struct {

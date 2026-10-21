@@ -27,11 +27,13 @@ type Store interface {
 }
 
 type Service struct {
-	Auth      *googleauth.Service
-	Store     Store
-	Media     domain.Media
-	TmpDir    string
-	Resources domain.MediaResources
+	Auth  *googleauth.Service
+	Store Store
+	Media domain.Media
+	// Backgrounds downloads YouTube videos for ImportBackground; nil disables the import.
+	Backgrounds BackgroundDownloader
+	TmpDir      string
+	Resources   domain.MediaResources
 }
 
 func (s *Service) OAuthURL(_ context.Context, q *workflow.OAuthURLRequest) (*workflow.OAuthURLResponse, error) {

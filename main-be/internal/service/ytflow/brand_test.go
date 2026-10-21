@@ -35,3 +35,18 @@ func TestApplyBrandBlurAndNoBanner(t *testing.T) {
 		t.Fatalf("blur without banner expected: %+v", card)
 	}
 }
+
+func TestApplyBrandSubtitlesSwitch(t *testing.T) {
+	off, on := false, true
+	for _, c := range []struct {
+		name string
+		subs *bool
+		want bool // NoSubtitles
+	}{{"older flow without the setting keeps subtitles", nil, false}, {"on", &on, false}, {"off", &off, true}} {
+		card := domain.VideoCard{}
+		applyBrand(&card, domain.YTFlowConfig{BrandStyle: true, BrandSubtitles: c.subs})
+		if card.Brand.NoSubtitles != c.want {
+			t.Errorf("%s: NoSubtitles=%v, want %v", c.name, card.Brand.NoSubtitles, c.want)
+		}
+	}
+}

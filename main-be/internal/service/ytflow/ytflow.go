@@ -120,6 +120,10 @@ func Defaults(c domain.YTFlowConfig) domain.YTFlowConfig {
 	if c.ScanHours <= 0 {
 		c.ScanHours = 6
 	}
+	if c.BrandSubtitles == nil {
+		on := true
+		c.BrandSubtitles = &on
+	}
 	return c
 }
 
@@ -367,7 +371,7 @@ func applyBrand(card *domain.VideoCard, c domain.YTFlowConfig) {
 	if !c.BrandStyle {
 		return
 	}
-	card.Brand = &msg.BrandOptions{VideoScale: brandVideoScale, PitchSemitones: brandPitchSemitones}
+	card.Brand = &msg.BrandOptions{VideoScale: brandVideoScale, PitchSemitones: brandPitchSemitones, NoSubtitles: c.BrandSubtitles != nil && !*c.BrandSubtitles}
 	if c.BrandBackground != "" {
 		card.AddBackground, card.BackgroundName = true, c.BrandBackground
 	}

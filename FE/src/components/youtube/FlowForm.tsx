@@ -141,12 +141,19 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
             Добавить фирменный стиль
             <span className="block text-xs text-slate-500">
               Видео уменьшается до 75% и прижимается к верху по центру, под ним на фоне идут субтитры RU + EN по одному слову (жёлтым, то слово, что звучит сейчас),
-              тон оригинального звука сдвигается на +2 полутона (против претензий Content ID). Нужны распознавание речи и перевод, поэтому видео обрабатывается дольше.
+              тон оригинального звука сдвигается на +2 полутона (против претензий Content ID). С субтитрами нужны распознавание речи и перевод, поэтому видео обрабатывается дольше.
             </span>
           </span>
         </label>
         {cfg.brand_style && (
           <>
+            <label className="flex items-start gap-3 text-sm text-slate-300 sm:col-span-2">
+              <input type="checkbox" className="mt-1" checked={cfg.brand_subtitles !== false} onChange={(e) => setCfg("brand_subtitles", e.target.checked)} />
+              <span>
+                Субтитры
+                <span className="block text-xs text-slate-500">Идут прямо под видео. Без галочки распознавание и перевод пропускаются, видео готовится быстрее.</span>
+              </span>
+            </label>
             <Field label="Фон" hint="Блюр — размытая копия самого видео. Остальное — из загруженных на странице Backgrounds.">
               <select className={input} value={cfg.brand_background} onChange={(e) => setCfg("brand_background", e.target.value)}>
                 <option value="">Блюр</option>
