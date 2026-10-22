@@ -46,6 +46,8 @@ type Config struct {
 	GoogleClientID          string
 	GoogleClientSecret      string
 	GoogleRedirectURL       string
+	YtdlpCookiesFile        string // yt-dlp --cookies source (Netscape cookies.txt); empty = no cookies
+	YtdlpJSRuntime          string // yt-dlp --js-runtimes value (node, deno, ...); empty = yt-dlp default
 }
 
 func Load() Config {
@@ -67,6 +69,8 @@ func Load() Config {
 		FFmpegThreads:           max(1, envInt("FFMPEG_THREADS", 2)),
 		MediaVerifyWait:         envDuration("MEDIA_VERIFY_WAIT", 10*time.Second),
 		TwitchRenderFastPath:    env("TWITCH_RENDER_FAST_PATH", "false") == "true",
+		YtdlpCookiesFile:        env("YTDLP_COOKIES_FILE", ""),
+		YtdlpJSRuntime:          env("YTDLP_JS_RUNTIME", ""),
 		AssemblyLocalReuse:      env("ASSEMBLY_LOCAL_REUSE", "false") == "true",
 		WhisperBin:              env("WHISPER_BIN", "whisper"),
 		WhisperModel:            env("WHISPER_MODEL", "base"),

@@ -119,9 +119,12 @@ func run() error {
 		return err
 	}
 
+	downloader := ytdlp.New()
+	downloader.CookiesFile, downloader.JSRuntime = cfg.YtdlpCookiesFile, cfg.YtdlpJSRuntime
+
 	llmClient := newLLM(cfg)
 	svcs := tamqp.Services{
-		Preproc: &preproc.Service{Store: store, Dl: ytdlp.New(), Media: media, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
+		Preproc: &preproc.Service{Store: store, Dl: downloader, Media: media, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
 		Candidate: &candidate.Service{Store: store, STT: stt, LLM: llmClient, Translator: llmClient, Audio: acoustic,
 			Limits: domain.ClipLimits{MinSec: cfg.ClipMinSec, MaxSec: cfg.ClipMaxSec, MaxClips: cfg.MaxClips}, PromptTags: cfg.PromptTags, Broker: br, Rep: rep, TmpDir: cfg.TmpDir, Resources: resources},
 		Renderer:         rendererSvc,
@@ -137,7 +140,7 @@ func run() error {
 	}
 	gs := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	gpuv1.RegisterGpuServiceServer(gs, &tgrpc.Server{State: state, GW: gw})
-	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, Backgrounds: ytdlp.New(), Previews: ytdlp.New(), TmpDir: cfg.TmpDir, Resources: resources})
+	workflow.RegisterGatewayServer(gs, &workflowgateway.Service{Auth: auth, Store: store, Media: media, Backgrounds: downloader, Previews: downloader, TmpDir: cfg.TmpDir, Resources: resources})
 	workflow.RegisterIngestGatewayServer(gs, &ingestgateway.Service{Store: store, Media: media, TmpDir: cfg.TmpDir, Reset: resetGate, Resources: resources})
 	workflow.RegisterResetGatewayServer(gs, resetGate)
 	workflow.RegisterStorageGatewayServer(gs, &storagecleanup.Service{Store: store})
