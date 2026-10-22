@@ -2,7 +2,9 @@ package ytdlp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -17,7 +19,7 @@ import (
 
 type Client struct {
 	// CookiesFile is a Netscape cookies.txt of a logged-in YouTube session. YouTube answers datacenter and
-	// proxy IPs with "Sign in to confirm you're not a bot"; the cookies are the way past that. Empty = none.
+	// proxy IPs with "Sign in to confirm you're not a bot"; the cookies are the way past that. Empty or absent file = none.
 	CookiesFile string
 	// JSRuntime names a JavaScript runtime installed on the host (node, deno, ...) for yt-dlp's YouTube
 	// extraction: without one some formats are missing. Empty = yt-dlp's default (deno only).
@@ -36,6 +38,12 @@ func (c *Client) common(dir string) ([]string, error) {
 	}
 	if c.CookiesFile != "" {
 		raw, err := os.ReadFile(c.CookiesFile)
+		if errors.Is(err, fs.ErrNotExist) {
+			// the secret is optional in the manifest: until the cookies are in Infisical the file is absent,
+			// and downloads must keep working as they did without cookies
+			slog.Warn("yt-dlp cookies file is absent, running without cookies", "path", c.CookiesFile)
+			return args, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("yt-dlp cookies: %w", err)
 		}
