@@ -1,9 +1,11 @@
 package ytdlp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -106,12 +108,20 @@ func (c *Client) DownloadBackground(ctx context.Context, url, dir string) (path 
 	return "", fmt.Errorf("yt-dlp produced no file")
 }
 
-// previewSeconds is how much of the video DownloadPreview fetches: the overlays are there from the first
+// previewSeconds is how much of the video DownloadPreview keeps: the overlays are there from the first
 // second, and a stretch of a few minutes is enough to see them against changing pictures.
 const previewSeconds = 240
 
-// DownloadPreview fetches the first minutes of a video without audio, capped at 720p, into dir and returns
-// its path. It is for looking at the picture (stills for the watermark editor), not for rendering.
+// previewMaxBytes caps what DownloadPreview reads: at 480p that is well over previewSeconds of video, and
+// a long video must not be fetched whole (through a metered proxy every byte costs).
+const previewMaxBytes = 40 << 20
+
+// DownloadPreview fetches the start of a video without audio, at most 480p, into dir and returns its path.
+// It is for looking at the picture (stills for the watermark editor), not for rendering.
+//
+// yt-dlp's own downloader writes the stream to stdout and is cut off at previewMaxBytes. --download-sections
+// is not used: it hands the stream URL to ffmpeg, and googlevideo URLs are bound to the IP of the proxy
+// yt-dlp used, so ffmpeg is answered with 403.
 func (c *Client) DownloadPreview(ctx context.Context, url, dir string) (path string, err error) {
 	ctx, span := telemetry.Start(ctx, "yt-dlp preview", attribute.String("youtube.url", url))
 	defer func() { telemetry.End(span, err) }()
@@ -120,19 +130,53 @@ func (c *Client) DownloadPreview(ctx context.Context, url, dir string) (path str
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "yt-dlp", append(common, "--no-playlist", "-f", "bv*[height<=720][vcodec^=avc1]/bv*[height<=720]/b[height<=720]",
-		"--download-sections", fmt.Sprintf("*0-%d", previewSeconds), "--merge-output-format", "mp4", url, "-o", filepath.Join(dir, "preview.%(ext)s"))...)
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
-		return "", fmt.Errorf("yt-dlp: %w: %s", runErr, tail(out))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "yt-dlp", append(common, "--no-playlist", "-q", "--no-warnings", "-f",
+		"bv*[height<=480][vcodec^=avc1]/bv*[height<=480]/b[height<=480]", "-o", "-", url)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
 	}
-	files, _ := filepath.Glob(filepath.Join(dir, "preview.*"))
-	for _, f := range files {
-		if !strings.HasSuffix(f, ".part") && !strings.HasSuffix(f, ".ytdl") {
-			slog.InfoContext(ctx, "yt-dlp preview finished", "url", url, "took", time.Since(start).Round(time.Millisecond))
-			return f, nil
-		}
+	raw := filepath.Join(dir, "preview.raw")
+	out, err := os.Create(raw)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("yt-dlp produced no file")
+	if err = cmd.Start(); err != nil {
+		out.Close()
+		return "", fmt.Errorf("yt-dlp: %w", err)
+	}
+	n, copyErr := io.Copy(out, io.LimitReader(stdout, previewMaxBytes))
+	closeErr := out.Close()
+	capped := n >= previewMaxBytes
+	if capped {
+		cancel() // enough: stop yt-dlp, the rest of the video is not needed
+	}
+	waitErr := cmd.Wait()
+	switch {
+	case copyErr != nil:
+		return "", fmt.Errorf("yt-dlp: %w", copyErr)
+	case closeErr != nil:
+		return "", closeErr
+	case !capped && waitErr != nil:
+		return "", fmt.Errorf("yt-dlp: %w: %s", waitErr, tail(stderr.Bytes()))
+	case n == 0:
+		return "", fmt.Errorf("yt-dlp produced no data: %s", tail(stderr.Bytes()))
+	}
+	// A cut-off file still announces the length of the whole video. Copying the streams into a new container
+	// leaves a file whose duration is what is really there, which the frame sampler relies on.
+	path = filepath.Join(dir, "preview.mp4")
+	trim := exec.CommandContext(context.WithoutCancel(ctx), "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", raw,
+		"-t", fmt.Sprint(previewSeconds), "-c", "copy", path)
+	if b, e := trim.CombinedOutput(); e != nil {
+		return "", fmt.Errorf("ffmpeg trim preview: %w: %s", e, tail(b))
+	}
+	_ = os.Remove(raw)
+	slog.InfoContext(ctx, "yt-dlp preview finished", "url", url, "bytes", n, "capped", capped, "took", time.Since(start).Round(time.Millisecond))
+	return path, nil
 }
 
 func tail(b []byte) string {
