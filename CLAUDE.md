@@ -90,6 +90,12 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 
 `min_video_duration` applies to `full` mode only.
 
+## Watermark blur
+
+`watermark` in a job card / channel template (`msg.WatermarkOptions`, stored in `jobs.watermark`): `auto` detects static overlays per video at render time, `manual` blurs rectangles drawn in the FE editor (shares of the frame, so resolution-independent). Renderer blurs the **source before** vertical/subtitles/banner (`renderer/watermark.go`); revisions blur after the cut. A job that asks for the blur but cannot get it fails; "auto found nothing" passes through.
+- Detector `gpu-be/internal/service/watermark`: 16 stills (ffmpeg seeks, 360 px luma), per-pixel persistent edges (20th percentile of |dx|+|dy| over frames), dilate → blobs → filter (compact, off-centre, not a bar). Skips near-static videos. Limits: static scene edges can look like an overlay, centre watermarks and moving ones are not found (draw them by hand / not covered).
+- Editor frames: `Gateway.WatermarkFrames` (JSON-over-gRPC): yt-dlp first 4 min ≤720p → stills returned inline (nothing stored in MinIO).
+
 ## Logs and tracing (Tempo)
 
 - `proto/telemetry` sets up OpenTelemetry (OTLP gRPC → Tempo) and `slog`. Tracing is **off** unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (compose default `http://tempo:4317`; point it at the infra Tempo in prod).
@@ -110,6 +116,7 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 | Banners / backgrounds | `GET /{banners\|backgrounds}` (names), `/list` (with `preview_url`), `POST /presign` → `{url,bucket,object}`, `POST /` register after the browser PUT, `POST /backgrounds/import` `{name,note,url}` (gpu-be downloads a YouTube video ≤1080p via yt-dlp, then registers it), `PATCH/DELETE /{id}` |
 | Channels | `GET/POST /channels`, `PATCH/DELETE /channels/{id}` (`approve_mode`, `enabled`, `spec` = job template) |
 | Clips | `GET /clips?approval=pending\|approved\|rejected`, `POST /clips/{id}/approve\|reject` |
+| Watermark editor | `POST /watermark/frames` `{url}` (channel or video link) → stills of the channel's newest video (data URLs) + regions the detector suggests |
 | YouTube flows | `/youtube/flows`, `/flows/{id}/{run,sources,candidates}`, `/youtube/quota`; see `docs/YOUTUBE-FLOWS.ru.md` |
 | News | `/api/news/*` is proxied to news-collector (`NEWS_COLLECTOR_URL`, bearer `NEWS_SERVICE_TOKEN`): sources, Telegram channels, flows, posts; see `docs/NEWS-COLLECTOR.ru.md` |
 | Health | `GET /healthz` |

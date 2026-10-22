@@ -32,8 +32,10 @@ type Service struct {
 	Media domain.Media
 	// Backgrounds downloads YouTube videos for ImportBackground; nil disables the import.
 	Backgrounds BackgroundDownloader
-	TmpDir      string
-	Resources   domain.MediaResources
+	// Previews downloads the start of a YouTube video for WatermarkFrames; nil disables it.
+	Previews  PreviewDownloader
+	TmpDir    string
+	Resources domain.MediaResources
 }
 
 func (s *Service) OAuthURL(_ context.Context, q *workflow.OAuthURLRequest) (*workflow.OAuthURLResponse, error) {

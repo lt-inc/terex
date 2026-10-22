@@ -277,6 +277,26 @@ type ImportBackgroundResponse struct {
 	Object string `json:"object"`
 }
 
+// WatermarkFramesRequest asks gpu-be for still frames of a YouTube video, to draw the blur areas on,
+// and for the areas the automatic detector would blur.
+type WatermarkFramesRequest struct {
+	URL   string `json:"url"`
+	Count int    `json:"count,omitempty"` // frames to return, default 6
+}
+
+// WatermarkFrame is one still. The JPEG travels inline (base64 in JSON): a few frames are small, and
+// nothing is left in the object store to clean up.
+type WatermarkFrame struct {
+	TimeSec float64 `json:"time_sec"`
+	JPEG    []byte  `json:"jpeg"`
+}
+type WatermarkFramesResponse struct {
+	Width     int                   `json:"width"`
+	Height    int                   `json:"height"`
+	Frames    []WatermarkFrame      `json:"frames"`
+	Suggested []msg.WatermarkRegion `json:"suggested"` // empty = the detector found nothing
+}
+
 type EditorContextRequest struct {
 	JobID    string         `json:"job_id"`
 	ClipID   string         `json:"clip_id"`

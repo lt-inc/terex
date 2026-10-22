@@ -53,6 +53,31 @@ func (c *Client) DownloadBackground(ctx context.Context, url, dir string) (path 
 	return "", fmt.Errorf("yt-dlp produced no file")
 }
 
+// previewSeconds is how much of the video DownloadPreview fetches: the overlays are there from the first
+// second, and a stretch of a few minutes is enough to see them against changing pictures.
+const previewSeconds = 240
+
+// DownloadPreview fetches the first minutes of a video without audio, capped at 720p, into dir and returns
+// its path. It is for looking at the picture (stills for the watermark editor), not for rendering.
+func (c *Client) DownloadPreview(ctx context.Context, url, dir string) (path string, err error) {
+	ctx, span := telemetry.Start(ctx, "yt-dlp preview", attribute.String("youtube.url", url))
+	defer func() { telemetry.End(span, err) }()
+	start := time.Now()
+	cmd := exec.CommandContext(ctx, "yt-dlp", "--no-playlist", "-f", "bv*[height<=720][vcodec^=avc1]/bv*[height<=720]/b[height<=720]",
+		"--download-sections", fmt.Sprintf("*0-%d", previewSeconds), "--merge-output-format", "mp4", url, "-o", filepath.Join(dir, "preview.%(ext)s"))
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		return "", fmt.Errorf("yt-dlp: %w: %s", runErr, tail(out))
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "preview.*"))
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".part") && !strings.HasSuffix(f, ".ytdl") {
+			slog.InfoContext(ctx, "yt-dlp preview finished", "url", url, "took", time.Since(start).Round(time.Millisecond))
+			return f, nil
+		}
+	}
+	return "", fmt.Errorf("yt-dlp produced no file")
+}
+
 func tail(b []byte) string {
 	if len(b) > 2000 {
 		b = b[len(b)-2000:]

@@ -2,11 +2,13 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
 	"terex/main-be/internal/domain"
+	"terex/proto/msg"
 )
 
 type fakeChannels struct {
@@ -143,5 +145,84 @@ func TestFeed404RetrySurvivesServiceRestartAndRecovers(t *testing.T) {
 	}
 	if !ch.chans[0].Enabled || ch.chans[0].LastCheckedAt == nil || ch.chans[0].FeedErrorCode != "" || ch.chans[0].NextFeedCheckAt != nil {
 		t.Fatalf("recovery failed: %+v", ch.chans[0])
+	}
+}
+
+// storingChannels records what Add and Update hand to the repository.
+type storingChannels struct {
+	fakeChannels
+	created []domain.Channel
+	updates []domain.ChannelUpdate
+}
+
+func (f *storingChannels) CreateChannel(_ context.Context, c domain.Channel) (domain.Channel, error) {
+	c.ID = 7
+	f.created = append(f.created, c)
+	return c, nil
+}
+func (f *storingChannels) UpdateChannel(_ context.Context, _ int64, u domain.ChannelUpdate) (domain.Channel, error) {
+	f.updates = append(f.updates, u)
+	return domain.Channel{ID: 7}, nil
+}
+func (f *storingChannels) GetChannel(context.Context, int64) (domain.Channel, error) {
+	return domain.Channel{ID: 7}, nil
+}
+
+func newStoring() (*Service, *storingChannels) {
+	ch := &storingChannels{fakeChannels: fakeChannels{seen: map[string]bool{}}}
+	return &Service{Channels: ch, Feed: fakeFeed{}, Jobs: &fakeJobs{}}, ch
+}
+
+func TestChannelTemplateWatermarkIsValidatedAndStoredCanonical(t *testing.T) {
+	region := msg.WatermarkRegion{X: 0.7, Y: 0.05, W: 0.25, H: 0.1}
+	s, ch := newStoring()
+	// auto drops stray regions, "off" disappears altogether
+	if _, err := s.Add(context.Background(), domain.Channel{URL: "u", Spec: domain.VideoCard{Watermark: &msg.WatermarkOptions{Mode: msg.WatermarkAuto, Regions: []msg.WatermarkRegion{region}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if w := ch.created[0].Spec.Watermark; w == nil || w.Mode != msg.WatermarkAuto || len(w.Regions) != 0 {
+		t.Fatalf("stored %+v", w)
+	}
+	if _, err := s.Add(context.Background(), domain.Channel{URL: "u", Spec: domain.VideoCard{Watermark: &msg.WatermarkOptions{Mode: "off"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if ch.created[1].Spec.Watermark != nil {
+		t.Fatalf("off must be stored as nothing, got %+v", ch.created[1].Spec.Watermark)
+	}
+	// a patch is validated the same way
+	manual := &domain.VideoCard{Watermark: &msg.WatermarkOptions{Mode: msg.WatermarkManual, Regions: []msg.WatermarkRegion{region}}}
+	if _, err := s.Update(context.Background(), 7, domain.ChannelUpdate{Spec: manual}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ch.updates) != 1 || ch.updates[0].Spec.Watermark.Regions[0] != region {
+		t.Fatalf("updates %+v", ch.updates)
+	}
+}
+
+func TestChannelTemplateWithBrokenWatermarkIsRejected(t *testing.T) {
+	s, ch := newStoring()
+	broken := &msg.WatermarkOptions{Mode: msg.WatermarkManual}
+	if _, err := s.Add(context.Background(), domain.Channel{URL: "u", Spec: domain.VideoCard{Watermark: broken}}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Add: err %v, want ErrInvalid", err)
+	}
+	if _, err := s.Update(context.Background(), 7, domain.ChannelUpdate{Spec: &domain.VideoCard{Watermark: broken}}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Update: err %v, want ErrInvalid", err)
+	}
+	if len(ch.created) != 0 || len(ch.updates) != 0 {
+		t.Fatal("a channel with broken watermark settings reached the repository")
+	}
+}
+
+func TestTickPassesTheWatermarkToNewJobs(t *testing.T) {
+	now := time.Now()
+	wm := &msg.WatermarkOptions{Mode: msg.WatermarkManual, Regions: []msg.WatermarkRegion{{X: 0.7, Y: 0.05, W: 0.25, H: 0.1}}}
+	ch := &fakeChannels{seen: map[string]bool{}, chans: []domain.Channel{{ID: 1, Enabled: true, YTChannelID: "UC", LastCheckedAt: &now, Spec: domain.VideoCard{Watermark: wm}}}}
+	jobs := &fakeJobs{}
+	s := &Service{Channels: ch, Feed: fakeFeed{vids: []domain.FeedVideo{{ID: "v1", URL: "u1"}}}, Jobs: jobs}
+	if err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs.cards) != 1 || jobs.cards[0].Watermark != wm {
+		t.Fatalf("job cards %+v must carry the channel's watermark template", jobs.cards)
 	}
 }

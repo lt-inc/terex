@@ -71,6 +71,12 @@ func (s *Service) Handle(ctx context.Context, msg domain.ProcessVideo) (err erro
 		return err
 	}
 
+	// the watermark goes first: every later transform (scaling, subtitles, banner) would smear it or
+	// move it away from the regions chosen on the source frame
+	if cur, err = s.maskWatermark(ctx, dir, cur, o.Watermark); err != nil {
+		return err
+	}
+
 	if o.Brand != nil {
 		next, e := s.brand(ctx, msg.JobID, dir, cur, o)
 		if e != nil {

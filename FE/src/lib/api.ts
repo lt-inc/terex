@@ -13,6 +13,7 @@ import type {
   PublicationHistory,
   PublicationTarget,
   TikTokConnection,
+  WatermarkPreview,
 } from "@/types";
 import { formatInZone } from "./datetime";
 import type {
@@ -477,3 +478,11 @@ export const fetchTwitchDiagnostics = (id: string, signal?: AbortSignal) => requ
 export const previewTwitchReset = () => request<TwitchResetPreview>("/twitch/reset/preview",json("POST",{}));
 export const startTwitchReset = (preview_token: string, confirmation: string) => request<TwitchResetStatus>("/twitch/reset",json("POST",{preview_token,confirmation}));
 export const fetchTwitchReset = (signal?: AbortSignal) => request<TwitchResetStatus>("/twitch/reset", { signal });
+
+// Stills of a channel's newest video (or of a given video) plus the regions the detector suggests.
+export const fetchWatermarkPreview = (url: string) =>
+  request<WatermarkPreview>("/watermark/frames", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
