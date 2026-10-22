@@ -144,6 +144,7 @@ Publish time of a clip = `sub_job.publish_datetime` (or approval time) + `clip.i
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | gpu-be | — , `openai/gpt-4o-mini` |
 | `LLM_REASONING_EFFORT`, `LLM_TIMEOUT`, `LLM_CHUNK_CHARS` | gpu-be | `medium`, `240s`, `80000` |
 | `WORKERS_PER_MODULE`, `USE_NVENC` | gpu-be | `1`, `false` |
+| `YTDLP_PROXY`, `YTDLP_COOKIES_FILE`, `YTDLP_JS_RUNTIME` | gpu-be | empty ×3. Proxy URL for yt-dlp only (`--proxy`, may hold credentials; a residential one gets past the bot check that datacenter IPs hit; empty = the process `HTTPS_PROXY`). Cookies.txt of a logged-in YouTube session (copied per run, so a read-only secret mount is fine; a missing file = no cookies, with a warning) for "Sign in to confirm you're not a bot"; JS runtime name (`node`, `deno`) for yt-dlp's YouTube extraction |
 | `CLIP_MIN_SEC`, `CLIP_MAX_SEC`, `MAX_CLIPS`, `PROMPT_TAGS`, `YAMNET_CMD` | gpu-be | `15`, `180`, `12`, `energy:high,energy:spike,laugh,shout,gasp,music,fast,pause_before`, `python3 /opt/terex/yamnet.py` |
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_FORMAT`, `LOG_LEVEL` | both | service name, empty (off), `text`, `info` |
 | `BACKEND_URL` | FE | `http://localhost:8000` |
