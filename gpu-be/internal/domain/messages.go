@@ -25,15 +25,17 @@ const (
 )
 
 type (
-	SliceMode     = msg.SliceMode
-	JobOptions    = msg.JobOptions
-	ProcessVideo  = msg.ProcessVideo
-	ObjectRef     = msg.ObjectRef
-	Clip          = msg.Clip
-	ClipsReady    = msg.ClipsReady
-	JobStatus     = msg.JobStatus
-	PublishClip   = msg.PublishClip
-	PublishResult = msg.PublishResult
+	SliceMode        = msg.SliceMode
+	JobOptions       = msg.JobOptions
+	WatermarkRegion  = msg.WatermarkRegion
+	WatermarkOptions = msg.WatermarkOptions
+	ProcessVideo     = msg.ProcessVideo
+	ObjectRef        = msg.ObjectRef
+	Clip             = msg.Clip
+	ClipsReady       = msg.ClipsReady
+	JobStatus        = msg.JobStatus
+	PublishClip      = msg.PublishClip
+	PublishResult    = msg.PublishResult
 )
 
 const (

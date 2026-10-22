@@ -102,7 +102,8 @@ type VideoCard struct {
 	Schedules         map[string]PublishSchedule `json:"schedules"`
 	Banners           []BannerConfig             `json:"banners"`
 	Targets           []AccountTarget            `json:"targets"`
-	Brand             *msg.BrandOptions          `json:"brand,omitempty"` // branded layout; background/banner come from the fields above
+	Brand             *msg.BrandOptions          `json:"brand,omitempty"`     // branded layout; background/banner come from the fields above
+	Watermark         *msg.WatermarkOptions      `json:"watermark,omitempty"` // blur of the source's watermark; nil = off
 }
 
 // ── Job views ────────────────────────────────────────────────────────────────
@@ -205,8 +206,9 @@ type NewJob struct {
 	Trace            string // trace id of the request that created the job (shown in FE, look it up in Tempo)
 	SourceKind       string // empty = youtube
 	SourceID         string
-	OutputFormat     string            // empty = legacy
-	Brand            *msg.BrandOptions // nil = ordinary layout
+	OutputFormat     string                // empty = legacy
+	Brand            *msg.BrandOptions     // nil = ordinary layout
+	Watermark        *msg.WatermarkOptions // nil = the watermark stays
 	SubJobs          []NewSubJob
 }
 

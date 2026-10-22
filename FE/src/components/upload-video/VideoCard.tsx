@@ -1,6 +1,7 @@
 "use client";
 import Toggle from "@/components/ui/Toggle";
 import AccountTargets from "@/components/publications/AccountTargets";
+import WatermarkField from "@/components/watermark/WatermarkField";
 import BannerCard from "./BannerCard";
 import type {
   VideoCardData,
@@ -105,6 +106,11 @@ export default function VideoCard({
           </label>
         )}
       </div>
+      <WatermarkField
+        value={card.watermark}
+        sourceUrl={card.youtubeUrl}
+        onChange={(w) => update("watermark", w)}
+      />
       <Toggle
         label="Add background?"
         checked={card.addBackground}

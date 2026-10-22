@@ -38,6 +38,11 @@ func (s *Service) List(ctx context.Context) ([]domain.Channel, error) {
 // Add resolves the channel id from its URL and stores the channel; existing videos are baselined
 // so that only videos published after this moment trigger jobs.
 func (s *Service) Add(ctx context.Context, c domain.Channel) (domain.Channel, error) {
+	watermark, err := c.Spec.Watermark.Normalize()
+	if err != nil {
+		return c, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+	}
+	c.Spec.Watermark = watermark
 	id, err := s.Feed.ResolveChannel(ctx, c.URL)
 	if err != nil {
 		return c, err
@@ -75,6 +80,13 @@ func (s *Service) baseline(ctx context.Context, c domain.Channel) error {
 }
 
 func (s *Service) Update(ctx context.Context, id int64, u domain.ChannelUpdate) (domain.Channel, error) {
+	if u.Spec != nil {
+		watermark, err := u.Spec.Watermark.Normalize()
+		if err != nil {
+			return domain.Channel{}, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+		}
+		u.Spec.Watermark = watermark
+	}
 	return s.Channels.UpdateChannel(ctx, id, u)
 }
 

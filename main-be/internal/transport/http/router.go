@@ -19,6 +19,7 @@ import (
 	tiktokservice "terex/main-be/internal/service/tiktok"
 	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/twitchreset"
+	watermarkservice "terex/main-be/internal/service/watermark"
 	"terex/main-be/internal/service/workflow"
 	"terex/main-be/internal/service/ytflow"
 )
@@ -37,6 +38,7 @@ type API struct {
 	News      *NewsProxy
 	TikTok    *tiktokservice.Service
 	YouTube   *ytflow.Service
+	Watermark *watermarkservice.Service
 }
 
 func (a *API) Router() http.Handler {
@@ -156,6 +158,11 @@ func (a *API) Router() http.Handler {
 			r.Patch("/{id}", a.patchAsset)
 			r.Delete("/{id}", a.deleteAsset)
 		})
+
+		// manual watermark editor: stills of a channel's newest video (or a given video) + detector suggestions
+		if a.Watermark != nil {
+			r.Post("/watermark/frames", a.watermarkFrames)
+		}
 
 		// channels (monitoring)
 		r.Get("/channels", a.listChannels)
