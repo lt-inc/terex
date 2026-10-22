@@ -94,6 +94,7 @@ Tests: `cd main-be && go test ./...`, `cd gpu-be && go test ./...`, `cd stats-co
 
 `watermark` in a job card / channel template (`msg.WatermarkOptions`, stored in `jobs.watermark`): `auto` detects static overlays per video at render time, `manual` blurs rectangles drawn in the FE editor (shares of the frame, so resolution-independent). Renderer blurs the **source before** vertical/subtitles/banner (`renderer/watermark.go`); revisions blur after the cut. A job that asks for the blur but cannot get it fails; "auto found nothing" passes through.
 - Detector `gpu-be/internal/service/watermark`: 16 stills (ffmpeg seeks, 360 px luma), per-pixel persistent edges (20th percentile of |dx|+|dy| over frames), dilate → blobs → filter (compact, off-centre, not a bar). Skips near-static videos. Limits: static scene edges can look like an overlay, centre watermarks and moving ones are not found (draw them by hand / not covered).
+- Where it is set: channel template (`/admin/channels`), upload-video card, and YouTube flows (`YTFlowConfig.watermark`, applied to every job the flow creates; the flow form asks for a channel/video link to take editor frames from).
 - Editor frames: `Gateway.WatermarkFrames` (JSON-over-gRPC): yt-dlp first 4 min ≤720p → stills returned inline (nothing stored in MinIO).
 
 ## Logs and tracing (Tempo)
