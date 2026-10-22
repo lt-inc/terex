@@ -27,6 +27,7 @@ type Gateway interface {
 	ChannelStats(context.Context, *ChannelStatsRequest) (*ChannelStatsResponse, error)
 	PublicVideos(context.Context, *PublicVideosRequest) (*PublicVideosResponse, error)
 	ImportBackground(context.Context, *ImportBackgroundRequest) (*ImportBackgroundResponse, error)
+	WatermarkFrames(context.Context, *WatermarkFramesRequest) (*WatermarkFramesResponse, error)
 }
 
 type coordinatorClient struct{ conn grpc.ClientConnInterface }
@@ -48,6 +49,9 @@ func call[Q, R any](ctx context.Context, conn grpc.ClientConnInterface, method s
 	}
 	if strings.HasSuffix(method, "/ImportBackground") {
 		timeout = 10 * time.Minute
+	}
+	if strings.HasSuffix(method, "/WatermarkFrames") {
+		timeout = 5 * time.Minute
 	}
 	if strings.HasSuffix(method, "/EditorContext") {
 		timeout = 2 * time.Minute
@@ -109,6 +113,9 @@ func (c *gatewayClient) PublicVideos(ctx context.Context, q *PublicVideosRequest
 	return call[PublicVideosRequest, PublicVideosResponse](ctx, c.conn, "/terex.workflow.v1.Gateway/PublicVideos", q)
 }
 
+func (c *gatewayClient) WatermarkFrames(ctx context.Context, q *WatermarkFramesRequest) (*WatermarkFramesResponse, error) {
+	return call[WatermarkFramesRequest, WatermarkFramesResponse](ctx, c.conn, "/terex.workflow.v1.Gateway/WatermarkFrames", q)
+}
 func (c *gatewayClient) ImportBackground(ctx context.Context, q *ImportBackgroundRequest) (*ImportBackgroundResponse, error) {
 	return call[ImportBackgroundRequest, ImportBackgroundResponse](ctx, c.conn, "/terex.workflow.v1.Gateway/ImportBackground", q)
 }
@@ -151,6 +158,6 @@ func RegisterCoordinatorServer(reg grpc.ServiceRegistrar, srv Coordinator) {
 func RegisterGatewayServer(reg grpc.ServiceRegistrar, srv Gateway) {
 	const s = "terex.workflow.v1.Gateway"
 	reg.RegisterService(&grpc.ServiceDesc{ServiceName: s, HandlerType: (*Gateway)(nil), Methods: []grpc.MethodDesc{
-		method(s, "OAuthURL", Gateway.OAuthURL), method(s, "OAuthExchange", Gateway.OAuthExchange), method(s, "CheckConnection", Gateway.CheckConnection), method(s, "Disconnect", Gateway.Disconnect), method(s, "EditorContext", Gateway.EditorContext), method(s, "ChannelStats", Gateway.ChannelStats), method(s, "PublicVideos", Gateway.PublicVideos), method(s, "ImportBackground", Gateway.ImportBackground),
+		method(s, "OAuthURL", Gateway.OAuthURL), method(s, "OAuthExchange", Gateway.OAuthExchange), method(s, "CheckConnection", Gateway.CheckConnection), method(s, "Disconnect", Gateway.Disconnect), method(s, "EditorContext", Gateway.EditorContext), method(s, "ChannelStats", Gateway.ChannelStats), method(s, "PublicVideos", Gateway.PublicVideos), method(s, "ImportBackground", Gateway.ImportBackground), method(s, "WatermarkFrames", Gateway.WatermarkFrames),
 	}, Metadata: "workflow/workflow.proto"}, srv)
 }

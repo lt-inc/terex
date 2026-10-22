@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import Toggle from "@/components/ui/Toggle";
 import AccountTargets from "@/components/publications/AccountTargets";
 import BannerCard from "@/components/upload-video/BannerCard";
+import WatermarkField from "@/components/watermark/WatermarkField";
 import {
   fetchChannels,
   createChannel,
@@ -40,11 +41,13 @@ function TemplateFields({
   onChange,
   accounts,
   bannerOptions,
+  sourceUrl,
 }: {
   value: Partial<VideoCardData>;
   onChange: (s: Partial<VideoCardData>) => void;
   accounts: AccountRecord[];
   bannerOptions: string[];
+  sourceUrl: string;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -84,6 +87,11 @@ function TemplateFields({
         label="Add subtitles?"
         checked={value.addSubtitles ?? true}
         onChange={(v) => onChange({ ...value, addSubtitles: v })}
+      />
+      <WatermarkField
+        value={value.watermark}
+        sourceUrl={sourceUrl}
+        onChange={(w) => onChange({ ...value, watermark: w })}
       />
       {!value.banners?.length && (
         <AccountTargets
@@ -238,6 +246,7 @@ export default function ChannelsPage() {
           value={spec}
           onChange={setSpec}
           bannerOptions={bannerOptions}
+          sourceUrl={url}
         />
         <button
           className="self-start bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 px-4 py-2 rounded-lg text-sm"
@@ -392,6 +401,7 @@ function ChannelSettings({
             onChange={setSpec}
             accounts={accounts}
             bannerOptions={bannerOptions}
+            sourceUrl={channel.url}
           />
           <button
             disabled={busy}
@@ -406,6 +416,8 @@ function ChannelSettings({
   );
 }
 function templateError(spec: Partial<VideoCardData>): string | null {
+  if (spec.watermark?.mode === "manual" && !spec.watermark.regions?.length)
+    return "Draw at least one watermark area or switch the blur to auto";
   if (spec.banners?.length) {
     for (const banner of spec.banners) {
       if (!banner.bannerName) return "Select a file for every banner variant";

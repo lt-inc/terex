@@ -113,6 +113,9 @@ func (s *Service) fastPathReason(w workflow.RenderWork) string {
 	if o.Subtitles {
 		return "subtitles"
 	}
+	if o.Watermark != nil {
+		return "watermark"
+	}
 	if o.BackgroundID != "" {
 		return "custom_background"
 	}
@@ -213,6 +216,10 @@ func (s *Service) renderRevision(ctx context.Context, w workflow.RenderWork, loc
 	}
 	cur := filepath.Join(dir, "cut.mp4")
 	if err = s.Media.Cut(ctx, src, cur, w.StartSec, w.EndSec); err != nil {
+		return domain.ObjectRef{}, err
+	}
+	// blur after the cut: only the selected clip is encoded again, not the whole original
+	if cur, err = s.maskWatermark(ctx, dir, cur, w.Source.Options.Watermark); err != nil {
 		return domain.ObjectRef{}, err
 	}
 	o := w.Source.Options

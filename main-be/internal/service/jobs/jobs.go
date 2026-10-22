@@ -154,11 +154,15 @@ func (s *Service) create(ctx context.Context, card domain.VideoCard, channelID *
 	if minDur <= 0 {
 		minDur = 60
 	}
+	watermark, wmErr := card.Watermark.Normalize()
+	if wmErr != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrInvalid, wmErr)
+	}
 	nj := domain.NewJob{
 		JobID: jobID, ChannelID: channelID, YoutubeURL: card.YoutubeURL, IsVertical: card.MakeVertical,
 		IsSubtitles: card.AddSubtitles, SliceMode: mode, MinVideoDuration: minDur,
 		IsCircle: card.Shape == "circle", ApproveMode: approve, Trace: telemetry.TraceID(ctx),
-		SourceKind: fj.SourceKind, SourceID: fj.SourceID, OutputFormat: fj.OutputFormat, Brand: card.Brand,
+		SourceKind: fj.SourceKind, SourceID: fj.SourceID, OutputFormat: fj.OutputFormat, Brand: card.Brand, Watermark: watermark,
 	}
 	if card.AddBackground && card.BackgroundName != "" {
 		id, err := s.Assets.GetOrCreateAssetByName(ctx, domain.KindBackground, card.BackgroundName)

@@ -28,6 +28,7 @@ import (
 	twitchservice "terex/main-be/internal/service/twitch"
 	"terex/main-be/internal/service/twitchmonitor"
 	"terex/main-be/internal/service/twitchreset"
+	watermarkservice "terex/main-be/internal/service/watermark"
 	workflowservice "terex/main-be/internal/service/workflow"
 	"terex/main-be/internal/service/ytflow"
 	tamqp "terex/main-be/internal/transport/amqp"
@@ -117,6 +118,7 @@ func run() error {
 		Collector: &thttp.CollectorProxy{URL: cfg.CollectorURL, Token: cfg.CollectorToken},
 		TikTok:    tiktokSvc,
 		YouTube:   ytFlows,
+		Watermark: &watermarkservice.Service{Feed: youtube.New(), Frames: gpu.WorkflowGateway()},
 		News:      &thttp.NewsProxy{URL: cfg.NewsCollectorURL, Token: cfg.NewsCollectorToken}}
 	srv := &nethttp.Server{Addr: cfg.HTTPAddr, Handler: thttp.Traced(thttp.AccessLog(api.Router())), ReadHeaderTimeout: 10 * time.Second}
 

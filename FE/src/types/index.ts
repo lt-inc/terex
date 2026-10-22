@@ -19,6 +19,28 @@ export interface BannerConfig {
   targets?: PublicationTarget[];
 }
 
+export interface WatermarkRegion {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+// auto: detect overlays on every video; manual: blur the drawn regions (shares of the frame, 0..1)
+export interface WatermarkOptions {
+  mode: "off" | "auto" | "manual";
+  regions?: WatermarkRegion[];
+}
+
+export interface WatermarkPreview {
+  video_url: string;
+  video_title?: string;
+  width: number;
+  height: number;
+  frames: { time_sec: number; image: string }[];
+  suggested: WatermarkRegion[];
+}
+
 export interface VideoCardData {
   id: string;
   youtubeUrl: string;
@@ -37,6 +59,7 @@ export interface VideoCardData {
   schedules: Partial<Record<Platform, PublishSchedule>>;
   banners: BannerConfig[];
   targets?: PublicationTarget[];
+  watermark?: WatermarkOptions;
 }
 
 export interface AccountsResponse {

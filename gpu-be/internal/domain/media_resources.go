@@ -135,3 +135,25 @@ func WithMediaImport(ctx context.Context, id string) context.Context {
 	v.importID, v.format = id, "verification"
 	return context.WithValue(ctx, mediaIdentityKey{}, v)
 }
+
+// GrayFrame is one 8-bit luma still, W*H bytes row by row.
+type GrayFrame struct {
+	W, H int
+	Pix  []byte
+}
+
+// StillFrame is a JPEG still taken TimeSec into the video.
+type StillFrame struct {
+	TimeSec float64
+	JPEG    []byte
+}
+
+// WatermarkMedia is optional, like BrandRenderer: media clients without it cannot blur watermarks.
+type WatermarkMedia interface {
+	// BlurRegions blurs the regions (shares of the frame) in every frame of in.
+	BlurRegions(ctx context.Context, in, out string, regions []WatermarkRegion) error
+	// GrayFrames returns n small luma stills spread over the video, for the detector.
+	GrayFrames(ctx context.Context, in string, n int) ([]GrayFrame, error)
+	// StillFrames returns n JPEG stills spread over the video, for the region editor. dir is scratch space.
+	StillFrames(ctx context.Context, in, dir string, n int) ([]StillFrame, error)
+}

@@ -36,6 +36,8 @@ type JobOptions struct {
 	BannerIDs []string `json:"banner_ids,omitempty"`
 	// Brand switches on the branded layout (see BrandOptions). It replaces Vertical/Subtitles.
 	Brand *BrandOptions `json:"brand,omitempty"`
+	// Watermark blurs static overlays of the source before any other transform. nil = off.
+	Watermark *WatermarkOptions `json:"watermark,omitempty"`
 }
 
 // BrandOptions describe the "фирменный стиль" layout: the video is shrunk and pinned to the top centre of
@@ -43,8 +45,8 @@ type JobOptions struct {
 // RU+EN word-by-word subtitles go right under it, the audio pitch is shifted (Content ID) and the banner
 // (JobOptions.BannerIDs) sits at the very bottom.
 type BrandOptions struct {
-	VideoScale     float64 `json:"video_scale"`     // share of the canvas width the video occupies, (0,1]
-	PitchSemitones float64 `json:"pitch_semitones"` // audio pitch shift at the original tempo
+	VideoScale     float64 `json:"video_scale"`            // share of the canvas width the video occupies, (0,1]
+	PitchSemitones float64 `json:"pitch_semitones"`        // audio pitch shift at the original tempo
 	NoSubtitles    bool    `json:"no_subtitles,omitempty"` // skip recognition and burn no subtitles; unset = subtitles on
 }
 
