@@ -187,6 +187,11 @@ func (s *Service) Flow(ctx context.Context, id string) (domain.YTFlow, error) {
 
 func (s *Service) Save(ctx context.Context, f domain.YTFlow, create bool) (domain.YTFlow, error) {
 	f.Name = strings.TrimSpace(f.Name)
+	watermark, err := f.Config.Watermark.Normalize()
+	if err != nil {
+		return f, fmt.Errorf("%w: %v", domain.ErrInvalid, err)
+	}
+	f.Config.Watermark = watermark
 	f.Config = Defaults(f.Config)
 	if err := s.validate(ctx, f, create); err != nil {
 		return f, err
@@ -334,6 +339,7 @@ func (s *Service) schedule(ctx context.Context, f domain.YTFlow, now time.Time) 
 			SliceMode:   string(msg.SliceWhole),
 			ApproveMode: f.Config.ApproveMode,
 			Targets:     []domain.AccountTarget{{AccountID: f.AccountID, StartAt: &slot, Timezone: r.Timezone}},
+			Watermark:   f.Config.Watermark,
 		}
 		applyBrand(&card, f.Config)
 		jobID, err := s.Jobs.CreateFlowJob(ctx, card, jobs.FlowJob{SourceKind: domain.YTJobSourceKind, SourceID: c.VideoID, OutputFormat: domain.YTOutputFormat})

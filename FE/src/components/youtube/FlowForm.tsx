@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { fetchAccountsList, fetchBackgrounds, fetchBanners } from "@/lib/api";
 import { DEFAULT_YT_CONFIG, validateSlots } from "@/lib/youtube";
+import WatermarkField from "@/components/watermark/WatermarkField";
 import type { AccountRecord } from "@/types";
 import type { YTFlowConfig } from "@/types/youtube";
 
@@ -32,6 +33,7 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
   const [backgrounds, setBackgrounds] = useState<string[]>([]);
   const [banners, setBanners] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [sampleUrl, setSampleUrl] = useState("");
 
   useEffect(() => {
     if (initial) {
@@ -62,6 +64,7 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
     if (!draft.name.trim()) return setError("Укажите название потока.");
     if (!draft.account_id) return setError("Выберите YouTube-канал, на который заливаем.");
     if (parsed.error) return setError(parsed.error);
+    if (cfg.watermark?.mode === "manual" && !cfg.watermark.regions?.length) return setError("Выделите хотя бы одну область блюра или переключите блюр на автоопределение.");
     setError("");
     try {
       await onSave({ ...draft, config: { ...cfg, slots: parsed.slots } });
@@ -171,6 +174,20 @@ export default function FlowForm({ initial, onSave, saving }: { initial?: FlowDr
               </select>
             </Field>
           </>
+        )}
+      </section>
+
+      <section className={`${card} flex flex-col gap-3`}>
+        <WatermarkField
+          lang="ru"
+          value={cfg.watermark}
+          sourceUrl={sampleUrl}
+          onChange={(w) => setCfg("watermark", w)}
+        />
+        {cfg.watermark?.mode === "manual" && (
+          <Field label="Откуда взять кадры" hint="Ссылка на канал (берётся его новейшее видео) или на конкретное видео. Нарисованные области применятся ко всем видео потока.">
+            <input className={input} value={sampleUrl} onChange={(e) => setSampleUrl(e.target.value)} placeholder="https://www.youtube.com/@channel" />
+          </Field>
         )}
       </section>
 

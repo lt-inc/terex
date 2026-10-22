@@ -1,3 +1,4 @@
+import type { WatermarkOptions } from "@/types";
 export type YTApproveMode = "auto_approve" | "by_approve";
 export type YTCandidateState = "new" | "queued" | "done" | "failed" | "skipped";
 
@@ -20,6 +21,7 @@ export interface YTFlowConfig {
   brand_background: string; // "" = blur of the video
   brand_banner: string; // "" = no banner
   brand_subtitles?: boolean; // missing (older flows) = on
+  watermark?: WatermarkOptions; // blur of the source watermark; missing = off
 }
 
 export interface YTSource {

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { fetchWatermarkPreview } from "@/lib/api";
+import { TEXTS, type Lang } from "./texts";
 import type { WatermarkPreview, WatermarkRegion } from "@/types";
 
 const MIN = 0.01; // smaller than 1% of the frame is a misclick
@@ -12,12 +13,15 @@ export default function WatermarkEditor({
   initial,
   onCancel,
   onDone,
+  lang = "en",
 }: {
+  lang?: Lang;
   sourceUrl: string;
   initial: WatermarkRegion[];
   onCancel: () => void;
   onDone: (regions: WatermarkRegion[]) => void;
 }) {
+  const t = TEXTS[lang];
   const [preview, setPreview] = useState<WatermarkPreview | null>(null),
     [error, setError] = useState(""),
     [frame, setFrame] = useState(0),
@@ -71,10 +75,10 @@ export default function WatermarkEditor({
       <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 w-full max-w-3xl max-h-full overflow-auto flex flex-col gap-3">
         <div className="flex justify-between items-start gap-3">
           <div>
-            <h3 className="text-sm font-medium">Mark the areas to blur</h3>
+            <h3 className="text-sm font-medium">{t.title}</h3>
             <p className="text-xs text-slate-400">
-              {preview?.video_title ? `Frames of «${preview.video_title}». ` : ""}
-              Drag on the picture to add an area. Pick another frame if the watermark is not visible.
+              {preview?.video_title ? t.framesOf(preview.video_title) : ""}
+              {t.help}
             </p>
           </div>
           <button type="button" aria-label="Close" className="text-slate-400 hover:text-white" onClick={onCancel}>
@@ -86,7 +90,7 @@ export default function WatermarkEditor({
             {error}
           </p>
         )}
-        {!preview && !error && <p className="text-sm text-slate-400">Downloading frames… this takes up to a minute.</p>}
+        {!preview && !error && <p className="text-sm text-slate-400">{t.loading}</p>}
         {preview && (
           <>
             <div
@@ -129,24 +133,24 @@ export default function WatermarkEditor({
                 disabled={!preview.suggested.length}
                 onClick={() => setRegions(preview.suggested.map((r) => ({ ...r })))}
               >
-                {preview.suggested.length ? `Use detected (${preview.suggested.length})` : "Nothing detected"}
+                {preview.suggested.length ? t.useDetected(preview.suggested.length) : t.nothingDetected}
               </button>
               <button type="button" className="text-indigo-400" onClick={() => setBlur(!blur)}>
-                {blur ? "Show outlines" : "Preview blur"}
+                {blur ? t.outlines : t.previewBlur}
               </button>
               <button type="button" className="text-slate-400 disabled:opacity-40" disabled={!regions.length} onClick={() => setRegions((p) => p.slice(0, -1))}>
-                Undo
+                {t.undo}
               </button>
               <button type="button" className="text-red-400 disabled:opacity-40" disabled={!regions.length} onClick={() => setRegions([])}>
-                Clear
+                {t.clear}
               </button>
-              <span className="text-xs text-slate-500">{regions.length} area(s)</span>
+              <span className="text-xs text-slate-500">{t.areas(regions.length)}</span>
             </div>
           </>
         )}
         <div className="flex justify-end gap-3">
           <button type="button" className="text-sm text-slate-300 px-3 py-2" onClick={onCancel}>
-            Cancel
+            {t.cancel}
           </button>
           <button
             type="button"
@@ -154,7 +158,7 @@ export default function WatermarkEditor({
             disabled={!regions.length}
             onClick={() => onDone(regions)}
           >
-            Use these areas
+            {t.use}
           </button>
         </div>
       </div>

@@ -2,6 +2,7 @@
 import { useState } from "react";
 import Toggle from "@/components/ui/Toggle";
 import WatermarkEditor from "./WatermarkEditor";
+import { TEXTS, type Lang } from "./texts";
 import type { WatermarkOptions, WatermarkRegion } from "@/types";
 
 const btn = "text-sm text-indigo-400 disabled:opacity-40";
@@ -11,18 +12,21 @@ export default function WatermarkField({
   value,
   sourceUrl,
   onChange,
+  lang = "en",
 }: {
   value?: WatermarkOptions;
   sourceUrl: string;
   onChange: (w: WatermarkOptions | undefined) => void;
+  lang?: Lang;
 }) {
+  const t = TEXTS[lang];
   const [editing, setEditing] = useState(false);
   const mode = value?.mode ?? "off";
   const regions = value?.regions ?? [];
   return (
     <div className="flex flex-col gap-2">
       <Toggle
-        label="Blur watermark?"
+        label={t.toggle}
         checked={mode !== "off"}
         onChange={(on) => onChange(on ? { mode: "auto" } : undefined)}
       />
@@ -35,7 +39,7 @@ export default function WatermarkField({
                 checked={mode === "auto"}
                 onChange={() => onChange({ mode: "auto" })}
               />
-              Auto-detect on every video
+              {t.auto}
             </label>
             <label className="flex items-center gap-2">
               <input
@@ -43,7 +47,7 @@ export default function WatermarkField({
                 checked={mode === "manual"}
                 onChange={() => onChange({ mode: "manual", regions })}
               />
-              Draw areas by hand
+              {t.manual}
             </label>
           </div>
           {mode === "manual" && (
@@ -54,14 +58,14 @@ export default function WatermarkField({
                 disabled={!sourceUrl.trim()}
                 onClick={() => setEditing(true)}
               >
-                {regions.length ? "Edit areas" : "Draw areas"}
+                {regions.length ? t.edit : t.draw}
               </button>
               <span>
                 {regions.length
-                  ? `${regions.length} area(s) will be blurred`
+                  ? t.count(regions.length)
                   : sourceUrl.trim()
-                    ? "No areas yet: the template cannot be saved"
-                    : "Enter the channel / video URL first"}
+                    ? t.none
+                    : t.needUrl}
               </span>
             </div>
           )}
@@ -70,6 +74,7 @@ export default function WatermarkField({
       {editing && (
         <WatermarkEditor
           sourceUrl={sourceUrl}
+          lang={lang}
           initial={regions}
           onCancel={() => setEditing(false)}
           onDone={(r: WatermarkRegion[]) => {
