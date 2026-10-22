@@ -178,18 +178,26 @@ func (s *Service) scanChannel(ctx context.Context, f domain.YTFlow, src domain.Y
 	}
 	feed, err := s.Feed.Latest(ctx, src.Value)
 	if err != nil {
-		return fmt.Errorf("RSS: %w", err)
-	}
-	if err = s.Repo.TouchYTSource(ctx, src.ID, &now, nil, ""); err != nil {
+		// A due scan reads the Shorts playlist through the API and needs no RSS: do not let an RSS outage
+		// (YouTube answers 404 for feeds at times) keep a new flow empty. Without a scan the RSS is the only
+		// way to find new videos, so that error stays.
+		if !scanDue {
+			return fmt.Errorf("RSS: %w", err)
+		}
+		slog.WarnContext(ctx, "RSS unavailable, scanning without it", "flow", f.ID, "source", src.Value, "err", err)
+		feed = nil
+	} else if err = s.Repo.TouchYTSource(ctx, src.ID, &now, nil, ""); err != nil {
 		return err
 	}
 	ids := make([]string, len(feed))
 	for i, v := range feed {
 		ids[i] = v.ID
 	}
-	known, err := s.Repo.YTKnownVideos(ctx, f.ID, ids)
-	if err != nil {
-		return err
+	known := map[string]bool{}
+	if len(ids) > 0 {
+		if known, err = s.Repo.YTKnownVideos(ctx, f.ID, ids); err != nil {
+			return err
+		}
 	}
 	var unknown []string
 	for _, id := range ids {
