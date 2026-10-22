@@ -21,6 +21,10 @@ type Client struct {
 	// CookiesFile is a Netscape cookies.txt of a logged-in YouTube session. YouTube answers datacenter and
 	// proxy IPs with "Sign in to confirm you're not a bot"; the cookies are the way past that. Empty or absent file = none.
 	CookiesFile string
+	// Proxy is the proxy URL (http://user:password@host:port) for yt-dlp alone, instead of the HTTPS_PROXY of
+	// the process, which the rest of gpu-be keeps using. A residential proxy gets past the bot check that
+	// datacenter IPs run into. Empty = yt-dlp uses the environment. The URL holds credentials: never log it.
+	Proxy string
 	// JSRuntime names a JavaScript runtime installed on the host (node, deno, ...) for yt-dlp's YouTube
 	// extraction: without one some formats are missing. Empty = yt-dlp's default (deno only).
 	JSRuntime string
@@ -33,6 +37,9 @@ func New() *Client { return &Client{} }
 // one run from changing what the next one reads.
 func (c *Client) common(dir string) ([]string, error) {
 	var args []string
+	if c.Proxy != "" {
+		args = append(args, "--proxy", c.Proxy)
+	}
 	if c.JSRuntime != "" {
 		args = append(args, "--js-runtimes", c.JSRuntime)
 	}

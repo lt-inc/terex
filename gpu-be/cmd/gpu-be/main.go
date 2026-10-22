@@ -120,7 +120,7 @@ func run() error {
 	}
 
 	downloader := ytdlp.New()
-	downloader.CookiesFile, downloader.JSRuntime = cfg.YtdlpCookiesFile, cfg.YtdlpJSRuntime
+	downloader.CookiesFile, downloader.Proxy, downloader.JSRuntime = cfg.YtdlpCookiesFile, cfg.YtdlpProxy, cfg.YtdlpJSRuntime
 
 	llmClient := newLLM(cfg)
 	svcs := tamqp.Services{
