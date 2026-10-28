@@ -73,6 +73,24 @@ func (a *API) tikTokConnectPayload(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, 200, out)
 }
 
+func (a *API) tikTokProxy(rw http.ResponseWriter, r *http.Request) {
+	id, ok := idParam(rw, r)
+	if !ok {
+		return
+	}
+	var settings domain.TikTokProxySettings
+	if !decode(rw, r, &settings) {
+		return
+	}
+	out, err := a.TikTok.SetProxy(r.Context(), id, settings)
+	if err != nil {
+		fail(rw, err)
+		return
+	}
+	out.SessionRef = ""
+	writeJSON(rw, 200, out)
+}
+
 var extensionOrigin = regexp.MustCompile(`^chrome-extension://[a-p]{32}$`)
 
 func tikTokPairCORS(rw http.ResponseWriter, r *http.Request) bool {
