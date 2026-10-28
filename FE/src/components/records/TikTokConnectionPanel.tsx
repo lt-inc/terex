@@ -8,6 +8,7 @@ import {
   disconnectTikTok,
   fetchAccountsList,
   fetchTikTokStatus,
+  setTikTokProxy,
 } from "@/lib/api";
 import type { AccountRecord, TikTokConnection } from "@/types";
 
@@ -16,7 +17,7 @@ const button =
 const states: Record<string, string> = {
   connected: "Подключён — личность аккаунта проверена в TikTok",
   pairing: "Ждёт подключения через расширение браузера",
-  needs_reauth: "Сессия истекла — подключите аккаунт заново",
+  needs_reauth: "Проверьте сессию или подключите аккаунт заново",
   challenge: "TikTok просит подтверждение — откройте браузер исполнителя",
   disconnected: "Не подключён",
   auth_required: "Нужно повторно войти в TikTok",
@@ -30,6 +31,8 @@ export default function TikTokConnectionPanel({
   onUpdated: (account: AccountRecord) => void;
 }) {
   const [connection, setConnection] = useState<TikTokConnection | null>(null);
+  const [proxyMode, setProxyMode] = useState<TikTokConnection["proxy_mode"]>("default");
+  const [proxyURL, setProxyURL] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -42,11 +45,65 @@ export default function TikTokConnectionPanel({
   const status =
     connection?.status || account.connection_state || "disconnected";
   useEffect(() => {
+    let cancelled = false;
+    setBusy(true);
+    setConnection(null);
+    setProxyURL("");
+    setError("");
+    void fetchTikTokStatus(account.id)
+      .then((result) => {
+        if (!cancelled) {
+          setConnection(result);
+          setProxyMode(result.proxy_mode || "default");
+        }
+      })
+      .catch((failure: unknown) => {
+        if (!cancelled)
+          setError(failure instanceof Error ? failure.message : String(failure));
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => { cancelled = true; };
+  }, [account.id]);
+
+  useEffect(() => {
     if (!connection?.pairing_token || !expiry) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [connection?.pairing_token, expiry]);
+
+  async function refreshAccount() {
+    const updated = (await fetchAccountsList()).find(
+      (item) => item.id === account.id,
+    );
+    if (updated) onUpdated(updated);
+  }
+
+  async function saveProxy() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const url = proxyURL.trim();
+      const result = await setTikTokProxy(account.id, {
+        mode: proxyMode,
+        ...(proxyMode === "custom" && url ? { url } : {}),
+      });
+      setProxyURL("");
+      setConnection(result);
+      setProxyMode(result.proxy_mode || "default");
+      setHelp(null);
+      setNow(Date.now());
+      setNotice("Прокси сохранён. Проверьте сессию; при необходимости подключите аккаунт заново.");
+      await refreshAccount();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function action(
     kind: "connect" | "status" | "check" | "disconnect" | "help",
@@ -90,11 +147,9 @@ export default function TikTokConnectionPanel({
           ? { ...previous, ...result }
           : result,
       );
+      setProxyMode(result.proxy_mode || "default");
       setNow(Date.now());
-      const updated = (await fetchAccountsList()).find(
-        (item) => item.id === account.id,
-      );
-      if (updated) onUpdated(updated);
+      await refreshAccount();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -136,6 +191,62 @@ export default function TikTokConnectionPanel({
             ` · сессия ${connection.session_version}`}
         </p>
       )}
+      <fieldset disabled={busy || !connection} className="space-y-2 rounded-md bg-slate-900/50 p-3">
+        <legend className="px-1 text-slate-300">Прокси для этого аккаунта</legend>
+        <label className="block space-y-1">
+          <span className="text-slate-400">Подключение к TikTok</span>
+          <select
+            value={proxyMode}
+            onChange={(event) => {
+              setProxyMode(event.target.value as TikTokConnection["proxy_mode"]);
+              setProxyURL("");
+            }}
+            className="w-full rounded-md border border-slate-600 bg-slate-800 px-2 py-2 disabled:opacity-40"
+          >
+            <option value="default">По умолчанию на сервере</option>
+            <option value="direct">Без прокси</option>
+            <option value="custom">Свой прокси</option>
+          </select>
+        </label>
+        {connection?.proxy_display && (
+          <p className="break-all text-slate-400">Сохранённый адрес: {connection.proxy_display}</p>
+        )}
+        {proxyMode === "custom" && (
+          <label className="block space-y-1">
+            <span className="text-slate-400">Адрес прокси</span>
+            <input
+              type="password"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={proxyURL}
+              onChange={(event) => setProxyURL(event.target.value)}
+              placeholder="http://user:password@proxy.example:8080"
+              className="w-full rounded-md border border-slate-600 bg-slate-800 px-2 py-2 disabled:opacity-40"
+            />
+            <span className="block text-slate-400">
+              {connection?.custom_proxy_configured
+                ? "Оставьте поле пустым, чтобы использовать сохранённый прокси. Введите новый адрес для замены."
+                : "Укажите адрес прокси с логином и паролем, если они требуются."}
+            </span>
+          </label>
+        )}
+        <p className="text-slate-400">
+          После смены прокси потребуется проверить сессию или подключить аккаунт заново.
+        </p>
+        <button
+          type="button"
+          className={button}
+          disabled={
+            busy || !connection ||
+            (proxyMode === "custom" && !proxyURL.trim() && !connection.custom_proxy_configured) ||
+            (proxyMode === (connection.proxy_mode || "default") && !proxyURL.trim())
+          }
+          onClick={() => void saveProxy()}
+        >
+          Сохранить прокси
+        </button>
+      </fieldset>
       <div className="flex flex-wrap gap-2">
         <button
           className={button}

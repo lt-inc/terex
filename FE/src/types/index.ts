@@ -106,6 +106,9 @@ export interface AccountRecord {
 export interface TikTokConnection {
   account_id: number;
   status: string;
+  proxy_mode: "default" | "direct" | "custom";
+  proxy_display?: string;
+  custom_proxy_configured?: boolean;
   pairing_token?: string;
   expires_at?: string;
   pairing_expires_at?: string;

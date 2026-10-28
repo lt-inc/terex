@@ -71,6 +71,9 @@ func (s *Service) request(ctx context.Context, method, path string, payload any)
 			// Whitelist safe validation messages; never relay a Pydantic input
 			// dump containing cookies or arbitrary upstream response bodies.
 			message := "TikTok отклонил запрос: проверьте код подключения и состояние аккаунта"
+			if strings.HasSuffix(path, "/proxy") {
+				message = "TikTok отклонил запрос: проверьте настройки прокси"
+			}
 			var body struct {
 				Detail string `json:"detail"`
 			}
@@ -82,6 +85,14 @@ func (s *Service) request(ctx context.Context, method, path string, payload any)
 				message = "TikTok-аккаунт ещё не подключён. Передайте сессию через расширение"
 			case "A different TikTok account is logged in. Connect the original account.":
 				message = "В браузере открыт другой TikTok-аккаунт. Войдите в исходный аккаунт"
+			case "Proxy mode must be default, direct or custom":
+				message = "Выберите режим прокси default, direct или custom"
+			case "A proxy address is only accepted in custom mode":
+				message = "Адрес прокси допустим только для собственного прокси"
+			case "A valid proxy address is required":
+				message = "Укажите действительный адрес прокси"
+			case "Invalid proxy address or unsupported browser proxy authentication":
+				message = "Проверьте формат адреса и поддержку авторизации прокси в браузере"
 			}
 			kind := domain.ErrInvalid
 			if resp.StatusCode == http.StatusConflict {
@@ -172,6 +183,35 @@ func (s *Service) Import(ctx context.Context, payload json.RawMessage) (domain.T
 	out.PairingToken = ""
 	return out, nil
 }
+
+func (s *Service) SetProxy(ctx context.Context, id int64, settings domain.TikTokProxySettings) (domain.TikTokConnection, error) {
+	a, err := s.Repo.GetAccount(ctx, id)
+	if err != nil {
+		return domain.TikTokConnection{}, err
+	}
+	if a.Platform != "tiktok" {
+		return domain.TikTokConnection{}, domain.ErrInvalid
+	}
+	switch settings.Mode {
+	case "default", "direct":
+		if settings.URL != nil {
+			return domain.TikTokConnection{}, fmt.Errorf("%w: URL прокси допустим только в режиме custom", domain.ErrInvalid)
+		}
+	case "custom":
+		// An omitted URL reuses the uploader's existing encrypted custom proxy.
+	default:
+		return domain.TikTokConnection{}, fmt.Errorf("%w: выберите режим прокси default, direct или custom", domain.ErrInvalid)
+	}
+	out, err := s.request(ctx, "PUT", fmt.Sprintf("/v1/connections/%d/proxy", id), settings)
+	if err != nil {
+		return out, err
+	}
+	out.AccountID = id
+	// The changed route can fence a running upload and require session recheck.
+	// Persist the returned session version/state, never the proxy URL itself.
+	return out, s.Repo.SaveTikTokConnection(ctx, out)
+}
+
 func (s *Service) Claim(ctx context.Context, q *w.ClaimRequest) (*w.Lease, error) {
 	ok, err := s.Repo.TikTokPublicationAllowed(ctx, q.PublicationID)
 	if err != nil {

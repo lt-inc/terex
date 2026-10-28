@@ -53,6 +53,7 @@ func (a *API) Router() http.Handler {
 			r.Post("/tiktok/worker/{action:claim|renew|checkpoint|complete|fail|reconcile|release}", a.tikTokWorker)
 			r.Post("/accounts/{id}/tiktok/connect", a.tikTokConnect)
 			r.Get("/accounts/{id}/tiktok/status", a.tikTokConnection)
+			r.Put("/accounts/{id}/tiktok/proxy", a.tikTokProxy)
 			r.Post("/accounts/{id}/tiktok/{action:check|disconnect|browser-help}", a.tikTokConnection)
 			r.Post("/publications/{id}/tiktok/reconcile", a.tikTokReconcile)
 			r.Post("/publications/{id}/tiktok/retry-after-absence", a.tikTokRetryAfterAbsence)

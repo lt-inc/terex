@@ -243,3 +243,120 @@ func TestTikTokOnlyDispatchSurvivesWaitingAndFencesUnknownRetry(t *testing.T) {
 		t.Fatal("old upload checkpoint reused")
 	}
 }
+
+func cooldownPublication(t *testing.T, provider string) (*Store, time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := testStore(t)
+	// Keep the simulated scheduler clock beyond database DEFAULT now() values
+	// created while the fixture is built.
+	now := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
+	accounts, _, clip := fixture(t, s, []domain.AccountTarget{{StartAt: &now, IntervalSeconds: 60, Timezone: "UTC"}})
+	if provider == "tiktok" {
+		if _, err := s.pool.Exec(ctx, `UPDATE accounts SET platform='tiktok',remote_account_id=NULL WHERE id=$1`, accounts[0].ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SaveTikTokConnection(ctx, domain.TikTokConnection{AccountID: accounts[0].ID, Status: "connected", RemoteAccountID: "123456789", SessionRef: "session/test", SessionVersion: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.ApproveRevision(ctx, clip, now); err != nil {
+		t.Fatal(err)
+	}
+	return s, pubs(t, s)[0].PublishAt.Add(time.Second)
+}
+
+func TestTikTokAccountCooldownPreservesUploadRetryBudget(t *testing.T) {
+	ctx := context.Background()
+	s, now := cooldownPublication(t, "tiktok")
+	for n := 0; n < 7; n++ {
+		cmd := nextCommand(t, s, now, "publish_tiktok")
+		lease, err := s.ClaimWorkflow(ctx, &w.ClaimRequest{Command: cmd, WorkerID: "cooldown-worker"}, now)
+		if err != nil || !lease.Granted {
+			t.Fatal(lease, err)
+		}
+		lr := w.LeaseRequest{AttemptID: cmd.AttemptID, LeaseToken: lease.LeaseToken, ExpectedVersion: cmd.ExpectedVersion}
+		if ok, err := s.CheckpointWorkflow(ctx, &w.CheckpointRequest{LeaseRequest: lr, Checkpoint: w.Checkpoint{State: "uploading"}}, now); err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		// Four sibling-account waits must leave all three real upload attempts.
+		code, attemptState := "tiktok_account_cooldown", "deferred"
+		if n >= 4 {
+			code, attemptState = "tiktok_rate_limited", "failed"
+		}
+		q := w.FailRequest{LeaseRequest: lr, Code: code, Message: "account cooldown test", Retryable: true, RetryAfterSeconds: 1800}
+		if ok, err := s.FailWorkflow(ctx, &q, now); err != nil || !ok {
+			t.Fatal(ok, err)
+		}
+		var status, operation string
+		var retryAt time.Time
+		if err := s.pool.QueryRow(ctx, `SELECT a.status,p.next_attempt_at,o.state FROM publication_attempts a JOIN publications p ON p.id=a.publication_id JOIN tiktok_worker_operations o ON o.attempt_id=a.id WHERE a.id=$1`, cmd.AttemptID).Scan(&status, &retryAt, &operation); err != nil {
+			t.Fatal(err)
+		}
+		if status != attemptState || !retryAt.Equal(now.Add(30*time.Minute)) || operation != "active" {
+			t.Fatal("deferral lost history, timing or physical-operation fencing", status, retryAt, operation)
+		}
+		if ok, err := s.ReleaseTikTokOperation(ctx, cmd.AttemptID, lease.LeaseToken, now); err != nil || !ok {
+			t.Fatal("operation release rejected", ok, err)
+		}
+		if ok, err := s.FailWorkflow(ctx, &q, now); err != nil || ok {
+			t.Fatal("finished attempt accepted a duplicate failure", ok, err)
+		}
+		want := "retry_wait"
+		if n == 6 {
+			want = "needs_attention"
+		}
+		if err := s.PreparePublications(ctx, retryAt.Add(-time.Second), 10); err != nil {
+			t.Fatal(err)
+		}
+		if p := pubs(t, s)[0]; p.Status != want {
+			t.Fatalf("attempt %d: got %s, want %s", n+1, p.Status, want)
+		}
+		now = retryAt
+	}
+	var failures, deferrals int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='failed'),count(*) FILTER(WHERE status='deferred') FROM publication_attempts`).Scan(&failures, &deferrals); err != nil || failures != 3 || deferrals != 4 {
+		t.Fatal("cooldown spent or reset the upload failure budget", failures, deferrals, err)
+	}
+}
+
+func TestTikTokAccountCooldownCannotBypassFinalSendOrOtherProviderFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, wantState, wantCode string
+		retryable, finalSend                bool
+	}{
+		{"after final send", "tiktok", "needs_attention", "upload_unknown", true, true},
+		{"nonretryable", "tiktok", "failed", "tiktok_account_cooldown", false, false},
+		{"other provider", "youtube", "retry_wait", "tiktok_account_cooldown", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, now := cooldownPublication(t, tc.provider)
+			kind := "publish"
+			if tc.provider == "tiktok" {
+				kind = "publish_tiktok"
+			}
+			cmd := nextCommand(t, s, now, kind)
+			lease, err := s.ClaimWorkflow(ctx, &w.ClaimRequest{Command: cmd, WorkerID: "cooldown-worker"}, now)
+			if err != nil || !lease.Granted {
+				t.Fatal(lease, err)
+			}
+			lr := w.LeaseRequest{AttemptID: cmd.AttemptID, LeaseToken: lease.LeaseToken, ExpectedVersion: cmd.ExpectedVersion}
+			if tc.finalSend {
+				if ok, err := s.CheckpointWorkflow(ctx, &w.CheckpointRequest{LeaseRequest: lr, Checkpoint: w.Checkpoint{State: "publishing", FinalRequestStarted: true}}, now); err != nil || !ok {
+					t.Fatal(ok, err)
+				}
+			}
+			if ok, err := s.FailWorkflow(ctx, &w.FailRequest{LeaseRequest: lr, Code: "tiktok_account_cooldown", Retryable: tc.retryable, RetryAfterSeconds: 1800}, now); err != nil || !ok {
+				t.Fatal(ok, err)
+			}
+			var attemptState string
+			if err := s.pool.QueryRow(ctx, `SELECT status FROM publication_attempts WHERE id=$1`, cmd.AttemptID).Scan(&attemptState); err != nil || attemptState != "failed" {
+				t.Fatal("ineligible failure became a deferral", attemptState, err)
+			}
+			if p := pubs(t, s)[0]; p.Status != tc.wantState || p.ErrorCode != tc.wantCode {
+				t.Fatal("cooldown bypassed failure/final-send handling", p.Status, p.ErrorCode)
+			}
+		})
+	}
+}

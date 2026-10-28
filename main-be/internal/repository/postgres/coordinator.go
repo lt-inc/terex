@@ -557,6 +557,9 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 			state = "needs_attention"
 			q.Code = "upload_unknown"
 		}
+		// Waiting for another video's account cooldown sends nothing to TikTok.
+		// Keep this attempt in history without spending the upload failure budget.
+		deferred := provider == "tiktok" && !uncertain && q.Retryable && q.Code == "tiktok_account_cooldown"
 		delay := q.RetryAfterSeconds
 		if delay < 5 {
 			delay = 15
@@ -567,7 +570,7 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 		if state == "" {
 			state = "failed"
 		}
-		if q.Retryable {
+		if q.Retryable && !deferred {
 			var failures int
 			if err = tx.QueryRow(ctx, `SELECT count(*) FROM publication_attempts WHERE publication_id=$1 AND publication_version=$2 AND status='failed'`, pid, q.ExpectedVersion).Scan(&failures); err != nil {
 				return false, err
@@ -580,7 +583,11 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 				delay = backoff
 			}
 		}
-		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='failed',error=$2,updated_at=$3 WHERE id=$1`, q.AttemptID, q.Message, now); err != nil {
+		attemptStatus := "failed"
+		if deferred {
+			attemptStatus = "deferred"
+		}
+		if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status=$4,error=$2,updated_at=$3 WHERE id=$1`, q.AttemptID, q.Message, now, attemptStatus); err != nil {
 			return false, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE publications SET status=$2,error=$3,next_attempt_at=$4,error_code=$5 WHERE id=$1`, pid, state, q.Message, now.Add(time.Duration(delay)*time.Second), q.Code); err != nil {
@@ -591,7 +598,7 @@ func (s *Store) FailWorkflow(ctx context.Context, q *workflow.FailRequest, now t
 				return false, err
 			}
 		}
-		if err = insertEvent(ctx, tx, pid, q.AttemptID, "failed", state, map[string]any{"code": q.Code, "message": q.Message, "retryable": q.Retryable}); err != nil {
+		if err = insertEvent(ctx, tx, pid, q.AttemptID, attemptStatus, state, map[string]any{"code": q.Code, "message": q.Message, "retryable": q.Retryable}); err != nil {
 			return false, err
 		}
 	} else {

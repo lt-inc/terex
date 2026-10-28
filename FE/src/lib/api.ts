@@ -274,6 +274,10 @@ export const connectTikTok = (account: AccountRecord) =>
   request<TikTokConnection>(`/accounts/${account.id}/tiktok/connect`, json("POST", { expected_version: account.version }));
 export const fetchTikTokStatus = (id: number) =>
   request<TikTokConnection>(`/accounts/${id}/tiktok/status`);
+export const setTikTokProxy = (
+  id: number,
+  settings: { mode: TikTokConnection["proxy_mode"]; url?: string },
+) => request<TikTokConnection>(`/accounts/${id}/tiktok/proxy`, json("PUT", settings));
 export const checkTikTok = (id: number) =>
   request<TikTokConnection>(`/accounts/${id}/tiktok/check`, { method: "POST" });
 export const disconnectTikTok = (account: AccountRecord) =>
