@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"terex/main-be/internal/domain"
+	"terex/proto/publicationmetadata"
 	"terex/proto/workflow"
 )
 
@@ -201,6 +202,11 @@ func (s *Store) CreateManualPublication(ctx context.Context, clip string, u doma
 	}
 	if platform == "tiktok" && (!validMediaSHA(media.sha) || media.size <= 0) {
 		return out, fmt.Errorf("%w: Для TikTok нужны подтверждённые SHA и размер: выберите проверенный оригинал или сохраните новый рендер", domain.ErrConflict)
+	}
+	if platform == "youtube" {
+		if err = publicationmetadata.Validate(r.Title, publicationmetadata.Compose(u.Caption, nil)); err != nil {
+			return out, fmt.Errorf("%w: %s", domain.ErrInvalid, err)
+		}
 	}
 	// Clone without changing latest_revision_id, editor approval, flow targets or
 	// pending render attempts. Approval belongs only to this explicit click.

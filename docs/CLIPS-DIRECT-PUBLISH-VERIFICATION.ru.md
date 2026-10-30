@@ -58,3 +58,17 @@ RabbitMQ delivery integration и опциональный Linux media smoke не
 просмотреть точный вариант, выбрать private аккаунт каждой платформы и отправить
 один запрос, затем подтвердить ID/видимость и обновление статуса из worker.
 Повторить тот же UUID после разрыва HTTP и убедиться в сохранении ID, без нового поста.
+
+Дополнение после release review:
+
+- Rebuild сборки исключает manual publications и их active attempts: queued-снимок,
+  версия и метаданные сохраняются, исходная команда по-прежнему получает lease на тот же файл.
+- Approval и flow scheduler не создают повторное назначение для manual-публикации
+  того же клипа через алиас аккаунта с той же платформой и непустым remote ID.
+  Другие назначения и платформы сохраняют прежнюю семантику; cancelled uniqueness не менялась.
+- Manual YouTube submit использует общий `publicationmetadata.Validate` до создания
+  снимка и очереди: заголовки длиннее 100 символов и angle brackets отклоняются.
+- Clips page обрабатывает отказ getter `localStorage`, сохраняя доступность списка.
+- Проверки патча на той же локальной PostgreSQL 18: postgres, workflow service,
+  HTTP transport и publicationmetadata tests; `go vet ./main-be/...`; FE typecheck
+  и 42/42 tests; `git diff --check`. Удалённые серверы и внешние публикации не использовались.

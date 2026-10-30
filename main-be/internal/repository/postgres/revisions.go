@@ -198,6 +198,9 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
       FROM clips c JOIN sub_jobs sj ON sj.job_id=c.job_id LEFT JOIN banners b ON b.id=sj.banner_id
       JOIN sub_job_targets t ON t.sub_job_id=sj.sub_job_id JOIN accounts a ON a.id=t.account_id
       WHERE c.clip_id=$1 AND COALESCE(b.file_name,'')=c.banner_object
+      AND NOT EXISTS(SELECT 1 FROM publications manual JOIN accounts existing ON existing.id=manual.account_id
+        WHERE manual.clip_id=c.clip_id AND manual.manual AND existing.platform=a.platform
+        AND COALESCE(existing.remote_account_id,'')<>'' AND existing.remote_account_id=a.remote_account_id)
       ON CONFLICT(clip_id,account_id) DO UPDATE SET revision_id=EXCLUDED.revision_id,metadata=EXCLUDED.metadata,status='scheduled',version=publications.version+1,error=NULL,next_attempt_at=now()
       WHERE NOT publications.manual AND publications.started_at IS NULL AND publications.status IN ('on_hold','failed','scheduled')`, clipID, now, rid, mustJSON(r.EditSpec)); err != nil {
 		return err

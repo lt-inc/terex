@@ -36,10 +36,16 @@ export default function ClipsPage() {
   const [unconfirmed, setUnconfirmed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
+    let storage: Storage | null = null;
+    try {
+      storage = window.localStorage;
+    } catch {
+      // Browsers may block access to the storage getter itself.
+    }
     setUnconfirmed(
       new Set(
         clips
-          .filter((c) => loadPendingRequest(window.localStorage, c.clip_id))
+          .filter((c) => loadPendingRequest(storage, c.clip_id))
           .map((c) => c.clip_id),
       ),
     );

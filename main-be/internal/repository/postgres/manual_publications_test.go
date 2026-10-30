@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"terex/main-be/internal/domain"
 	workflowservice "terex/main-be/internal/service/workflow"
+	"terex/proto/twitch"
 	w "terex/proto/workflow"
 )
 
@@ -149,6 +152,129 @@ func TestManualPublicationReadiness(t *testing.T) {
 	}
 	if _, e := s.CreateManualPublication(ctx, clip, u, now); !errors.Is(e, domain.ErrConflict) {
 		t.Fatal("missing TikTok media SHA accepted", e)
+	}
+}
+
+func TestManualCompilationRebuildKeepsQueuedSnapshot(t *testing.T) {
+	s, account, _ := twitchFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	items := []twitch.CompilationItemRequest{}
+	for _, slug := range []string{"manual-a", "manual-b", "manual-c"} {
+		im := readyImport(t, s, slug, now)
+		items = append(items, twitch.CompilationItemRequest{ClipID: im.ClipID, RevisionID: im.RevisionID})
+	}
+	c, err := s.CreateCompilation(ctx, twitch.CompilationRequest{Title: "Reviewed compilation", Items: items}, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeRender(t, s, c.RevisionID, now, nil)
+	p, err := s.CreateManualPublication(ctx, c.ClipID, manualRequest(t, s, c.ClipID, account), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = time.Now().UTC().Add(time.Second)
+	cmd := nextCommand(t, s, now, "publish")
+	before, err := s.GetPublicationRecord(ctx, p.ID)
+	if err != nil || before.Status != "queued" || before.StartedAt != nil {
+		t.Fatal("expected queued unstarted manual target", before, err)
+	}
+	snapshot, err := s.RevisionByID(ctx, p.RevisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items[0], items[2] = items[2], items[0]
+	updated, err := s.UpdateCompilation(ctx, c.ClipID, domain.CompilationUpdate{ExpectedVersion: c.Version, CompilationRequest: twitch.CompilationRequest{Title: "Rebuilt compilation", Items: items}}, now)
+	if err != nil || updated.State != "pending" || updated.RevisionID == c.RevisionID {
+		t.Fatal("compilation did not rebuild", updated, err)
+	}
+	after, err := s.GetPublicationRecord(ctx, p.ID)
+	if err != nil || after.RevisionID != before.RevisionID || after.Version != before.Version || after.Status != before.Status || !reflect.DeepEqual(after.PublicationMetadata, before.PublicationMetadata) {
+		t.Fatal("rebuild changed manual target", before, after, err)
+	}
+	var attemptStatus string
+	if err = s.pool.QueryRow(ctx, `SELECT status FROM publication_attempts WHERE id=$1`, cmd.AttemptID).Scan(&attemptStatus); err != nil || attemptStatus != "active" {
+		t.Fatal("rebuild superseded manual attempt", attemptStatus, err)
+	}
+	lease, err := s.ClaimWorkflow(ctx, &w.ClaimRequest{Command: cmd, WorkerID: "manual-compilation"}, now)
+	if err != nil || !lease.Granted || lease.Publication.RevisionID != snapshot.ID || lease.Publication.Media != (w.ObjectRef{Bucket: snapshot.Bucket, Object: snapshot.Object}) {
+		t.Fatal("queued snapshot no longer dispatches", lease, err)
+	}
+}
+
+func TestManualPublicationBlocksAliasScheduling(t *testing.T) {
+	t.Run("approval", func(t *testing.T) {
+		s := testStore(t)
+		ctx := context.Background()
+		now := time.Now().UTC()
+		accounts, _, clip := fixture(t, s, make([]domain.AccountTarget, 3))
+		if _, err := s.pool.Exec(ctx, `UPDATE accounts SET remote_account_id='UC-other' WHERE id=$1`, accounts[1].ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `UPDATE accounts SET platform='tiktok' WHERE id=$1`, accounts[2].ID); err != nil {
+			t.Fatal(err)
+		}
+		alias := flowAccount(t, s, "UC-test")
+		p, err := s.CreateManualPublication(ctx, clip, manualRequest(t, s, clip, alias), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.ApproveRevision(ctx, clip, now); err != nil {
+			t.Fatal(err)
+		}
+		ps := pubs(t, s)
+		if len(ps) != 3 {
+			t.Fatal("approval duplicated manual destination or suppressed another destination", ps)
+		}
+		for _, publication := range ps {
+			if publication.ID != p.ID && (publication.AccountID == accounts[0].ID || publication.Status != "scheduled") {
+				t.Fatal("approval scheduled alias", publication)
+			}
+		}
+	})
+	t.Run("flow", func(t *testing.T) {
+		s, account, _ := twitchFixture(t)
+		ctx := context.Background()
+		now := time.Now().UTC()
+		f := flowFixture(t, s, account, true, now)
+		v := finishFlow(t, s, reserveFlow(t, s, f, flowSource("manual-before-scheduler", "123", 20, now), now), 20, "", now)
+		completeRender(t, s, v.RevisionID, now, nil)
+		alias := flowAccount(t, s, "UC-test")
+		p, err := s.CreateManualPublication(ctx, v.ClipID, manualRequest(t, s, v.ClipID, alias), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.scheduleFlowOutputs(ctx, now); err != nil {
+			t.Fatal(err)
+		}
+		ps := pubs(t, s)
+		if len(ps) != 1 || ps[0].ID != p.ID {
+			t.Fatal("scheduler duplicated manual destination", ps)
+		}
+	})
+}
+
+func TestManualPublicationYouTubeMetadataValidation(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	accounts, _, clip := fixture(t, s, nil)
+	u := manualRequest(t, s, clip, accounts[0].ID)
+	for _, tc := range []struct{ title, caption string }{
+		{strings.Repeat("я", 101), "Caption"},
+		{"Invalid <title>", "Caption"},
+		{"Valid title", "Invalid <caption>"},
+	} {
+		if _, err := s.pool.Exec(ctx, `UPDATE clip_revisions SET spec=jsonb_set(spec,'{title}',to_jsonb($2::text)) WHERE id=$1`, u.RevisionID, tc.title); err != nil {
+			t.Fatal(err)
+		}
+		u.Caption = tc.caption
+		if _, err := s.CreateManualPublication(ctx, clip, u, time.Now().UTC()); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatal("invalid YouTube metadata accepted", tc, err)
+		}
+	}
+	var snapshots, attempts, outbox int
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM clip_revisions WHERE publication_only),(SELECT count(*) FROM publication_attempts),(SELECT count(*) FROM publication_outbox)`).Scan(&snapshots, &attempts, &outbox); err != nil || snapshots != 0 || attempts != 0 || outbox != 0 || len(pubs(t, s)) != 0 {
+		t.Fatal("invalid metadata left publication work", snapshots, attempts, outbox, err)
 	}
 }
 
