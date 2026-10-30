@@ -43,6 +43,7 @@ state check. `/healthz` is public.
 
 | Route | Behavior |
 | --- | --- |
+| `GET /api/clips/{id}/publication-options`, `POST /api/clips/{id}/publish` | Operator-reviewed direct manual target, independent of flow scheduling; see [publishing](../docs/PUBLISHING.ru.md) |
 | `GET/PUT /api/twitch/settings` | Authoritative complete settings object |
 | `GET/POST/PUT /api/twitch/channels` | Proxy to collector `/api/channels` |
 | `PATCH/DELETE /api/twitch/channels/{id}` | Pause or remove one source |

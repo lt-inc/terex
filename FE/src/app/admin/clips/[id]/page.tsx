@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Toggle from "@/components/ui/Toggle";
 import ConfirmAction from "@/components/ui/ConfirmAction";
+import DirectPublishDialog from "@/components/clips/DirectPublishDialog";
 import {
   approveClip,
   ApiError,
@@ -47,6 +48,7 @@ export default function ClipEditorPage() {
     url?: string;
   } | null>(null);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
+  const [publishing, setPublishing] = useState(false);
   const [saved, setSaved] = useState<ClipEditor | null>(null),
     [draft, setDraft] = useState<ClipEditor | null>(null),
     [tags, setTags] = useState(""),
@@ -302,6 +304,9 @@ export default function ClipEditorPage() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button className={button} disabled={busy || loading || dirty} onClick={() => setPublishing(true)}>
+            Опубликовать / результат
+          </button>
           <button
             className={button}
             disabled={busy || loading}
@@ -652,6 +657,7 @@ export default function ClipEditorPage() {
           </div>
         </section>
       </fieldset>
+      {publishing && <DirectPublishDialog clipID={id} clipTitle={saved?.title || id} onClose={() => setPublishing(false)} />}
       <PreviewModal
         target={preview}
         onClose={() => setPreview(null)}

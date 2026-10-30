@@ -44,6 +44,7 @@ type Account struct {
 	ConnectionScopes    []string   `json:"scopes"`
 	CredentialExpiresAt *time.Time `json:"expires_at"`
 	ConnectionVersion   int        `json:"version"`
+	SessionVersion      int64      `json:"session_version,omitempty"`
 }
 
 type AccountUpdate struct {

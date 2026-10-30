@@ -7,6 +7,8 @@ import {
   fetchPublicationHistory,
   fetchPublicationOptions,
   publishClipDirect,
+  reconcileTikTokPublication,
+  actPublication,
 } from "@/lib/api";
 import {
   MEDIA_EXPLANATION,
@@ -49,9 +51,14 @@ const SEND_TIMEOUT_MS = 60_000;
 // A request already on the wire is never sent twice, even from a reopened dialog.
 const inFlight = new Set<string>();
 
-const storage = () =>
-  typeof window === "undefined" ? null : window.localStorage;
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const storage = () => {
+  try { return typeof window === "undefined" ? null : window.localStorage; }
+  catch { return null; }
+};
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
+  .replace(/^state or version changed; reload and retry:\s*/, "")
+  .replace(/^state or version changed; reload and retry$/, "Версия или состояние изменились. Обновите данные и проверьте публикацию.")
+  .replace(/^invalid input:\s*/, "");
 
 export default function DirectPublishDialog({
   clipID,
@@ -195,6 +202,10 @@ export default function DirectPublishDialog({
     !!account &&
     accountReadiness(account).ready &&
     !!variant?.eligible &&
+    (!variant.platforms || variant.platforms.includes(platform)) &&
+    !options.publications.some((p) => p.account_id === account.id) &&
+    caption.trim().length > 0 &&
+    visibilityAllowed &&
     reviewed;
 
   const send = useCallback(
@@ -411,9 +422,9 @@ export default function DirectPublishDialog({
                           <span className="text-xs text-slate-400">
                             {MEDIA_EXPLANATION[v.media_kind]}
                           </span>
-                          {!v.eligible && (
+                          {(!v.eligible || !!v.reason) && (
                             <span className="text-xs text-amber-300">
-                              Недоступно
+                              {!v.eligible ? "Недоступно" : "Ограничение"}
                               {readableReason(v.reason)
                                 ? `: ${readableReason(v.reason)}`
                                 : ""}
@@ -460,6 +471,9 @@ export default function DirectPublishDialog({
                       <span role="alert" className="text-red-400">
                         Не удалось загрузить аккаунты: {accountsError}
                       </span>
+                    )}
+                    {account && options.publications.some((p) => p.account_id === account.id) && (
+                      <span className="text-amber-300">Для этого аккаунта уже есть публикация. Её состояние и безопасные действия доступны ниже.</span>
                     )}
                     {accounts &&
                       !accounts.some((a) => accountReadiness(a).ready) && (
@@ -593,7 +607,7 @@ export default function DirectPublishDialog({
               </p>
             )}
             {publications.map((p) => (
-              <PublicationRow key={p.id} publication={p} />
+              <PublicationRow key={p.id} publication={p} onChanged={() => pollNow.current()} />
             ))}
           </section>
         </section>
@@ -603,26 +617,37 @@ export default function DirectPublishDialog({
   );
 }
 
-function PublicationRow({ publication: p }: { publication: PublicationEvent }) {
+function PublicationRow({ publication: p, onChanged }: { publication: PublicationEvent; onChanged: () => void }) {
   const [history, setHistory] = useState<PublicationHistory[] | null>(null);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
-  const loaded = useRef(0);
+  const loaded = useRef("");
   const state = p.state ?? p.status ?? "";
+  const [busy, setBusy] = useState(false);
+  async function act(action: "reconcile" | "retry" | "publish-now") {
+    setBusy(true); setError("");
+    try {
+      if (action === "reconcile") await reconcileTikTokPublication(p.id, p.version);
+      else await actPublication(p.id, action, p.version);
+      onChanged();
+    } catch (e) { setError(message(e)); }
+    finally { setBusy(false); }
+  }
 
   useEffect(() => {
-    if (!open || loaded.current === p.version) return;
-    loaded.current = p.version;
+    const key = `${p.version}:${state}`;
+    if (!open || loaded.current === key) return;
+    loaded.current = key;
     fetchPublicationHistory(p.id)
       .then((h) => {
         setHistory(h);
         setError("");
       })
       .catch((e) => {
-        loaded.current = 0;
+        loaded.current = "";
         setError(message(e));
       });
-  }, [open, p.id, p.version]);
+  }, [open, p.id, p.version, state]);
 
   const when = p.published_at ?? p.publish_at;
   return (
@@ -646,6 +671,13 @@ function PublicationRow({ publication: p }: { publication: PublicationEvent }) {
       {when && <p className="text-xs text-slate-500">{formatInZone(when)}</p>}
       {p.error && <p className="text-xs text-red-300">{p.error}</p>}
       <div className="flex flex-wrap gap-3 text-xs">
+        <span className="text-slate-500">Публикация #{p.id}</span>
+        {p.platform === "tiktok" && state === "needs_attention" && (
+          <button className="text-indigo-300 underline" disabled={busy} onClick={() => void act("reconcile")}>Сверить результат без новой загрузки</button>
+        )}
+        {["failed", "blocked"].includes(state) && (
+          <button className="text-indigo-300 underline" disabled={busy} onClick={() => void act(p.started_at ? "retry" : "publish-now")}>Повторить существующую публикацию</button>
+        )}
         {p.external_url && (
           <a
             href={p.external_url}
@@ -665,6 +697,8 @@ function PublicationRow({ publication: p }: { publication: PublicationEvent }) {
           {open ? "Скрыть историю" : "История"}
         </button>
       </div>
+      {state === "needs_attention" && <p className="text-xs text-amber-300">Результат требует сверки. Новую загрузку создавать нельзя; проверьте аккаунт и существующую публикацию.</p>}
+      {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
       {open && (
         <ul className="mt-1 flex flex-col gap-1 text-xs text-slate-400">
           {error && <li className="text-red-400">{error}</li>}

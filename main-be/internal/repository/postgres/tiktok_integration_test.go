@@ -153,6 +153,11 @@ func TestTikTokOnlyDispatchSurvivesWaitingAndFencesUnknownRetry(t *testing.T) {
 	if err != nil || held.Status != "scheduled" {
 		t.Fatal("reconnected account left its unsubmitted release blocked", held, err)
 	}
+	// Reconnect uses the production wall clock for next_attempt_at. This test
+	// dispatches at its injected morning clock, which may be earlier than now.
+	if _, err = s.pool.Exec(ctx, `UPDATE publications SET next_attempt_at=$2 WHERE id=$1`, p.ID, due); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.PreparePublications(ctx, due, 10); err != nil {
 		t.Fatal(err)
 	}

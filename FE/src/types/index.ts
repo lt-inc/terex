@@ -270,6 +270,7 @@ export interface DirectPublicationVariant {
   media_kind: DirectMediaKind;
   eligible: boolean;
   reason?: string;
+  platforms?: DirectPlatform[];
 }
 
 export interface DirectPublicationOptions {
