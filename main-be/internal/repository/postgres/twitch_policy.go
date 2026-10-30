@@ -901,10 +901,10 @@ func (s *Store) ApplyTwitchPolicy(ctx context.Context, now time.Time) (domain.Tw
 }
 
 func holdFlowAll(ctx context.Context, tx pgx.Tx, id, code, message string) error {
-	if _, err := tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT p.id FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=$1 AND p.started_at IS NULL AND p.status NOT IN('published','cancelled','needs_attention'))`, id); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT p.id FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id WHERE o.flow_id=$1 AND NOT p.manual AND p.started_at IS NULL AND p.status NOT IN('published','cancelled','needs_attention'))`, id); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE publications p SET status='on_hold',auto_hold=auto_flow_id IS NOT NULL,policy_hold_reason=$2,version=version+1,error=$3 FROM twitch_outputs o WHERE o.clip_id=p.clip_id AND o.flow_id=$1 AND p.started_at IS NULL AND p.status NOT IN('published','cancelled','needs_attention')`, id, code, message); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE publications p SET status='on_hold',auto_hold=auto_flow_id IS NOT NULL,policy_hold_reason=$2,version=version+1,error=$3 FROM twitch_outputs o WHERE o.clip_id=p.clip_id AND o.flow_id=$1 AND NOT p.manual AND p.started_at IS NULL AND p.status NOT IN('published','cancelled','needs_attention')`, id, code, message); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `DELETE FROM twitch_publication_slots s USING publications p WHERE p.id=s.publication_id AND p.status='on_hold'`)

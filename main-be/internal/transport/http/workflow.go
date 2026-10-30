@@ -11,6 +11,28 @@ import (
 	"terex/main-be/internal/domain"
 )
 
+func (a *API) clipPublicationOptions(w http.ResponseWriter, r *http.Request) {
+	out, err := a.Workflow.ClipPublicationOptions(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *API) publishClip(w http.ResponseWriter, r *http.Request) {
+	var in domain.ManualPublishRequest
+	if !decode(w, r, &in) {
+		return
+	}
+	out, err := a.Workflow.PublishClip(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (a *API) clipEditor(w http.ResponseWriter, r *http.Request) {
 	out, err := a.Workflow.Editor(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {

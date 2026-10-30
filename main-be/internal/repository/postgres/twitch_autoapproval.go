@@ -50,7 +50,7 @@ func autoApproveTwitchReadyTx(ctx context.Context, tx pgx.Tx, clip string, now t
 	}
 	// Only an edit-created hold can be resumed. Existing provider sessions keep
 	// their original revision because started_at must still be NULL.
-	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='scheduled',auto_hold=FALSE,policy_hold_reason='',revision_id=$2,metadata=r.spec,error=NULL,next_attempt_at=$3,version=p.version+1 FROM clip_revisions r WHERE r.id=$2 AND p.clip_id=$1 AND p.started_at IS NULL AND p.status='on_hold' AND p.policy_hold_reason='revision_changed' AND NOT p.cancel_requested AND NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=$1 AND(f.archived OR NOT f.enabled OR(p.auto_flow_id IS NOT NULL AND NOT f.auto_publish)))`, clip, rid, now); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications p SET status='scheduled',auto_hold=FALSE,policy_hold_reason='',revision_id=$2,metadata=r.spec,error=NULL,next_attempt_at=$3,version=p.version+1 FROM clip_revisions r WHERE r.id=$2 AND p.clip_id=$1 AND NOT p.manual AND p.started_at IS NULL AND p.status='on_hold' AND p.policy_hold_reason='revision_changed' AND NOT p.cancel_requested AND NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=$1 AND(f.archived OR NOT f.enabled OR(p.auto_flow_id IS NOT NULL AND NOT f.auto_publish)))`, clip, rid, now); err != nil {
 		return err
 	}
 	return nil

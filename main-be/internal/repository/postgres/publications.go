@@ -13,12 +13,12 @@ import (
 	"terex/proto/twitch"
 )
 
-const publicationCols = `p.id,p.clip_id,COALESCE(p.revision_id,0),p.account_id,a.name,p.platform,p.publish_at,p.timezone,p.status,p.version,p.metadata,p.cancel_requested,p.upload_id,p.external_url,p.error,p.uploaded_at,p.processed_at,p.published_at,p.last_verified_at,p.started_at,p.error_code`
+const publicationCols = `p.id,p.clip_id,COALESCE(p.revision_id,0),p.account_id,a.name,p.platform,p.publish_at,p.timezone,p.status,p.version,p.metadata,p.cancel_requested,p.upload_id,p.external_url,p.error,p.uploaded_at,p.processed_at,p.published_at,p.last_verified_at,p.started_at,p.error_code,p.manual`
 
 func scanPublication(row pgx.Row) (domain.PublicationRecord, error) {
 	var p domain.PublicationRecord
 	var meta []byte
-	err := row.Scan(&p.ID, &p.ClipID, &p.RevisionID, &p.AccountID, &p.AccountName, &p.Platform, &p.PublishAt, &p.Timezone, &p.Status, &p.Version, &meta, &p.CancelRequested, &p.UploadID, &p.ExternalURL, &p.Error, &p.UploadedAt, &p.ProcessedAt, &p.PublishedAt, &p.LastVerifiedAt, &p.StartedAt, &p.ErrorCode)
+	err := row.Scan(&p.ID, &p.ClipID, &p.RevisionID, &p.AccountID, &p.AccountName, &p.Platform, &p.PublishAt, &p.Timezone, &p.Status, &p.Version, &meta, &p.CancelRequested, &p.UploadID, &p.ExternalURL, &p.Error, &p.UploadedAt, &p.ProcessedAt, &p.PublishedAt, &p.LastVerifiedAt, &p.StartedAt, &p.ErrorCode, &p.Manual)
 	if err == nil {
 		err = json.Unmarshal(meta, &p.PublicationMetadata)
 	}
@@ -322,7 +322,7 @@ func manualTwitchPublicationReadyTx(ctx context.Context, tx pgx.Tx, p domain.Pub
 	var reason string
 	err := tx.QueryRow(ctx, `SELECT j.source_kind IN('twitch','twitch_compilation'),
  EXISTS(SELECT 1 FROM clip_revisions r WHERE r.id=$2 AND r.clip_id=c.clip_id AND r.render_state='ready' AND r.approved_at IS NOT NULL AND COALESCE(r.bucket,'')<>'' AND COALESCE(r.object,'')<>'' AND c.approval<>'rejected'),
- NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=c.clip_id AND(f.archived OR NOT f.enabled)),COALESCE(p.policy_hold_reason,'')
+ p.manual OR NOT EXISTS(SELECT 1 FROM twitch_outputs o JOIN twitch_flows f ON f.id=o.flow_id WHERE o.clip_id=c.clip_id AND(f.archived OR NOT f.enabled)),COALESCE(p.policy_hold_reason,'')
  FROM publications p JOIN clips c ON c.clip_id=p.clip_id JOIN jobs j ON j.job_id=c.job_id WHERE p.id=$1`, p.ID, p.RevisionID).Scan(&twitch, &ready, &flowAllowed, &reason)
 	if err != nil || !twitch {
 		return false, err
@@ -475,7 +475,7 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 			}
 			deadline := now.Add(24 * time.Hour)
 			var sourceDeadline *time.Time
-			if err = tx.QueryRow(ctx, `SELECT min((i.request->'source'->>'created_at')::timestamptz+make_interval(hours=>COALESCE((f.config->>'max_source_age_hours')::int,72))) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id JOIN twitch_flows f ON f.id=o.flow_id JOIN twitch_imports i ON i.id=o.source_id WHERE p.id=$1`, d.id).Scan(&sourceDeadline); err != nil {
+			if err = tx.QueryRow(ctx, `SELECT min((i.request->'source'->>'created_at')::timestamptz+make_interval(hours=>COALESCE((f.config->>'max_source_age_hours')::int,72))) FROM publications p JOIN twitch_outputs o ON o.clip_id=p.clip_id JOIN twitch_flows f ON f.id=o.flow_id JOIN twitch_imports i ON i.id=o.source_id WHERE p.id=$1 AND NOT(p.manual AND p.freshness_override_revision_id=p.revision_id AND p.freshness_override_publish_at=p.publish_at)`, d.id).Scan(&sourceDeadline); err != nil {
 				return err
 			}
 			if sourceDeadline != nil && sourceDeadline.Before(deadline) {
@@ -555,6 +555,13 @@ func (s *Store) PreparePublications(ctx context.Context, now time.Time, limit in
 	return tx.Commit(ctx)
 }
 func manualPublication(ctx context.Context, tx pgx.Tx, id int64) error {
+	var independent bool
+	if err := tx.QueryRow(ctx, `SELECT manual FROM publications WHERE id=$1`, id).Scan(&independent); err != nil {
+		return err
+	}
+	if independent {
+		return nil
+	}
 	if _, err := tx.Exec(ctx, `UPDATE twitch_preparation_reservations SET state='consumed' WHERE state='active' AND clip_id=(SELECT clip_id FROM publications WHERE id=$1)`, id); err != nil {
 		return err
 	}

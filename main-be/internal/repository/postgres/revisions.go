@@ -31,7 +31,7 @@ func (s *Store) InitializeRevision(ctx context.Context, clipID string) error {
 	var id int64
 	err = tx.QueryRow(ctx, `INSERT INTO clip_revisions(clip_id,revision_no,spec,bucket,object)
       SELECT clip_id,1,jsonb_build_object('start_sec',start_sec,'end_sec',end_sec,'title',title,'description','','hashtags',hashtags,'cues','[]'::jsonb),bucket,object FROM clips WHERE clip_id=$1
-      ON CONFLICT(clip_id,revision_no) DO UPDATE SET clip_id=EXCLUDED.clip_id RETURNING id`, clipID).Scan(&id)
+      ON CONFLICT(clip_id,revision_no) WHERE NOT publication_only DO UPDATE SET clip_id=EXCLUDED.clip_id RETURNING id`, clipID).Scan(&id)
 	if err != nil {
 		return mapErr(err)
 	}
@@ -111,10 +111,10 @@ func (s *Store) SaveRevision(ctx context.Context, clipID string, u domain.EditRe
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal,source_id,media_id) SELECT $1,source_revision_id,source_clip_id,ordinal,source_id,media_id FROM twitch_compilation_items WHERE compilation_revision_id=$2`, r.ID, prev.ID); err != nil {
 		return domain.Revision{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL,updated_at=now() WHERE publication_id IN (SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, clipID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL,updated_at=now() WHERE publication_id IN (SELECT id FROM publications WHERE clip_id=$1 AND NOT manual AND started_at IS NULL) AND status='active'`, clipID); err != nil {
 		return domain.Revision{}, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait') THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,metadata=$3,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('cancelled','published','needs_attention')`, clipID, r.ID, spec); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait') THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,metadata=$3,error=NULL WHERE clip_id=$1 AND NOT manual AND started_at IS NULL AND status NOT IN ('cancelled','published','needs_attention')`, clipID, r.ID, spec); err != nil {
 		return domain.Revision{}, err
 	}
 	if rerender {
@@ -198,17 +198,20 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
       FROM clips c JOIN sub_jobs sj ON sj.job_id=c.job_id LEFT JOIN banners b ON b.id=sj.banner_id
       JOIN sub_job_targets t ON t.sub_job_id=sj.sub_job_id JOIN accounts a ON a.id=t.account_id
       WHERE c.clip_id=$1 AND COALESCE(b.file_name,'')=c.banner_object
+      AND NOT EXISTS(SELECT 1 FROM publications manual JOIN accounts existing ON existing.id=manual.account_id
+        WHERE manual.clip_id=c.clip_id AND manual.manual AND existing.platform=a.platform
+        AND COALESCE(existing.remote_account_id,'')<>'' AND existing.remote_account_id=a.remote_account_id)
       ON CONFLICT(clip_id,account_id) DO UPDATE SET revision_id=EXCLUDED.revision_id,metadata=EXCLUDED.metadata,status='scheduled',version=publications.version+1,error=NULL,next_attempt_at=now()
-      WHERE publications.started_at IS NULL AND publications.status IN ('on_hold','failed','scheduled')`, clipID, now, rid, mustJSON(r.EditSpec)); err != nil {
+      WHERE NOT publications.manual AND publications.started_at IS NULL AND publications.status IN ('on_hold','failed','scheduled')`, clipID, now, rid, mustJSON(r.EditSpec)); err != nil {
 		return err
 	}
 	if err = enforceTwitchCaps(ctx, tx); err != nil {
 		return err
 	}
 	if autoFlow != "" {
-		_, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=$2,auto_hold=FALSE WHERE clip_id=$1 AND started_at IS NULL`, clipID, autoFlow)
+		_, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=$2,auto_hold=FALSE WHERE clip_id=$1 AND NOT manual AND started_at IS NULL`, clipID, autoFlow)
 	} else {
-		_, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=NULL,auto_hold=FALSE WHERE clip_id=$1 AND started_at IS NULL`, clipID)
+		_, err = tx.Exec(ctx, `UPDATE publications SET auto_flow_id=NULL,auto_hold=FALSE WHERE clip_id=$1 AND NOT manual AND started_at IS NULL`, clipID)
 		if err == nil {
 			_, err = tx.Exec(ctx, `UPDATE twitch_outputs SET auto_eligible=FALSE WHERE clip_id=$1`, clipID)
 		}
@@ -216,7 +219,7 @@ func approveRevisionTx(ctx context.Context, tx pgx.Tx, clipID string, version in
 	if err != nil {
 		return err
 	}
-	rows, e := tx.Query(ctx, `SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL`, clipID)
+	rows, e := tx.Query(ctx, `SELECT id FROM publications WHERE clip_id=$1 AND NOT manual AND started_at IS NULL`, clipID)
 	if e != nil {
 		return e
 	}
@@ -382,7 +385,7 @@ func (s *Store) ReplaceTargets(ctx context.Context, id string, version int, targ
 }
 
 func (s *Store) RevisionHistory(ctx context.Context, clipID string) ([]domain.Revision, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE clip_id=$1 ORDER BY revision_no DESC LIMIT 100`, clipID)
+	rows, err := s.pool.Query(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE clip_id=$1 AND NOT publication_only ORDER BY revision_no DESC LIMIT 100`, clipID)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +471,7 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	if current.Version != version {
 		return domain.ErrConflict
 	}
-	old, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1 AND clip_id=$2`, targetID, clipID))
+	old, err := scanRevision(tx.QueryRow(ctx, `SELECT `+revisionCols+` FROM clip_revisions WHERE id=$1 AND clip_id=$2 AND NOT publication_only`, targetID, clipID))
 	if err != nil {
 		return err
 	}
@@ -492,10 +495,10 @@ func (s *Store) RestoreRevision(ctx context.Context, clipID string, version int,
 	if _, err = tx.Exec(ctx, `INSERT INTO twitch_compilation_items(compilation_revision_id,source_revision_id,source_clip_id,ordinal,source_id,media_id) SELECT $1,source_revision_id,source_clip_id,ordinal,source_id,media_id FROM twitch_compilation_items WHERE compilation_revision_id=$2`, nextID, targetID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL)`, clipID); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE status='active' AND publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND NOT manual AND started_at IS NULL)`, clipID); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,metadata=$3,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait')THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN ('published','cancelled','needs_attention')`, clipID, nextID, spec); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,metadata=$3,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait')THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,error=NULL WHERE clip_id=$1 AND NOT manual AND started_at IS NULL AND status NOT IN ('published','cancelled','needs_attention')`, clipID, nextID, spec); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

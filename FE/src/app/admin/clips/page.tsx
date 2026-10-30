@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { approveClip, rejectClip, fetchClips } from "@/lib/api";
+import { loadPendingRequest } from "@/lib/direct-publish";
 import type { Clip } from "@/types";
 import PreviewModal, {
   type PreviewTarget,
 } from "@/components/media/PreviewModal";
+import DirectPublishDialog from "@/components/clips/DirectPublishDialog";
 
 const TABS = [
   { key: "pending", label: "Pending approval" },
@@ -27,7 +29,27 @@ export default function ClipsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
+  const [publishing, setPublishing] = useState<{
+    clip: Clip;
+    section: "publish" | "history";
+  } | null>(null);
+  const [unconfirmed, setUnconfirmed] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    let storage: Storage | null = null;
+    try {
+      storage = window.localStorage;
+    } catch {
+      // Browsers may block access to the storage getter itself.
+    }
+    setUnconfirmed(
+      new Set(
+        clips
+          .filter((c) => loadPendingRequest(storage, c.clip_id))
+          .map((c) => c.clip_id),
+      ),
+    );
+  }, [clips, publishing]);
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -139,6 +161,26 @@ export default function ClipsPage() {
                   </span>
                 )}
               </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setPublishing({ clip: c, section: "publish" })}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Опубликовать напрямую
+                </button>
+                <button
+                  onClick={() => setPublishing({ clip: c, section: "history" })}
+                  className="bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm px-3 py-1.5 rounded-lg border border-slate-600 transition-colors"
+                >
+                  Публикации
+                </button>
+              </div>
+              {unconfirmed.has(c.clip_id) && (
+                <p className="text-xs text-amber-300">
+                  Запрос на публикацию не подтверждён — откройте «Опубликовать
+                  напрямую» и повторите его.
+                </p>
+              )}
               {c.approval === "pending" && (
                 <div className="flex gap-2">
                   <Link
@@ -161,6 +203,15 @@ export default function ClipsPage() {
         ))}
       </div>
       <PreviewModal target={preview} onClose={() => setPreview(null)} />
+      {publishing && (
+        <DirectPublishDialog
+          key={publishing.clip.clip_id}
+          clipID={publishing.clip.clip_id}
+          clipTitle={publishing.clip.title || "Клип"}
+          initialSection={publishing.section}
+          onClose={() => setPublishing(null)}
+        />
+      )}
     </div>
   );
 }

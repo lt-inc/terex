@@ -335,10 +335,10 @@ func (s *Store) UpdateCompilation(ctx context.Context, id string, u domain.Compi
 	if _, err = tx.Exec(ctx, `UPDATE clips SET latest_revision_id=$2,approval='pending',start_sec=0,end_sec=$3,title=$4 WHERE clip_id=$1`, id, rid, m.DurationSec, u.Title); err != nil {
 		return prev, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND started_at IS NULL) AND status='active'`, id); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publication_attempts SET status='superseded',lease_token=NULL,lease_until=NULL WHERE publication_id IN(SELECT id FROM publications WHERE clip_id=$1 AND NOT manual AND started_at IS NULL) AND status='active'`, id); err != nil {
 		return prev, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait')THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,metadata=$3,error=NULL WHERE clip_id=$1 AND started_at IS NULL AND status NOT IN('cancelled','published','needs_attention')`, id, rid, mustJSON(spec)); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE publications SET revision_id=$2,policy_hold_reason=CASE WHEN status IN('scheduled','queued','retry_wait')THEN 'revision_changed' ELSE policy_hold_reason END,status='on_hold',version=version+1,metadata=$3,error=NULL WHERE clip_id=$1 AND NOT manual AND started_at IS NULL AND status NOT IN('cancelled','published','needs_attention')`, id, rid, mustJSON(spec)); err != nil {
 		return prev, err
 	}
 	if err = saveAssemblyItems(ctx, tx, rid, m.Assembly); err != nil {

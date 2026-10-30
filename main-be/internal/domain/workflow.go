@@ -99,6 +99,7 @@ type PublicationMetadata struct {
 }
 
 type PublicationRecord struct {
+	Manual      bool      `json:"manual"`
 	ID          int64     `json:"id"`
 	ClipID      string    `json:"clip_id"`
 	RevisionID  int64     `json:"revision_id"`
@@ -184,6 +185,7 @@ type RevisionRepo interface {
 
 type WorkflowRepo interface {
 	RevisionRepo
+	ManualPublicationRepo
 	Targets(context.Context, string) ([]AccountTarget, error)
 	ReplaceTargets(context.Context, string, int, []AccountTarget) error
 	TargetVersion(context.Context, string) (int, error)
