@@ -258,6 +258,41 @@ export interface PublicationEvent {
   error_code?: string;
   legacy?: boolean;
   history?: PublicationHistory[];
+  status?: string;
+  manual?: boolean;
+}
+
+export type DirectMediaKind = "rendered" | "source";
+export type DirectPlatform = "youtube" | "tiktok";
+export type DirectVisibility = "private" | "unlisted" | "public";
+
+export interface DirectPublicationVariant {
+  media_kind: DirectMediaKind;
+  eligible: boolean;
+  reason?: string;
+}
+
+export interface DirectPublicationOptions {
+  revision_id: number;
+  expected_version: number;
+  title: string;
+  caption: string;
+  variants: DirectPublicationVariant[];
+  publications: PublicationEvent[];
+}
+
+// Persisted verbatim while unconfirmed: a replay must send the same bytes.
+export interface DirectPublishRequest {
+  request_id: string;
+  revision_id: number;
+  expected_version: number;
+  media_kind: DirectMediaKind;
+  account_id: number;
+  platform: DirectPlatform;
+  caption: string;
+  visibility: DirectVisibility;
+  reviewed: true;
+  freshness_override?: boolean;
 }
 
 export interface PublicationHistory {

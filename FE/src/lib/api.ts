@@ -9,6 +9,8 @@ import type {
   Channel,
   Clip,
   ClipEditor,
+  DirectPublicationOptions,
+  DirectPublishRequest,
   PublicationEvent,
   PublicationHistory,
   PublicationTarget,
@@ -204,6 +206,24 @@ export const fetchClipPreview = (
     kind: string;
   }>(`/clips/${encodeURIComponent(id)}/preview?${query}`);
 };
+export const fetchPublicationOptions = (id: string, signal?: AbortSignal) =>
+  request<DirectPublicationOptions>(
+    `/clips/${encodeURIComponent(id)}/publication-options`,
+    { signal },
+  ).then((data) => ({
+    ...data,
+    variants: data.variants ?? [],
+    publications: data.publications ?? [],
+  }));
+export const publishClipDirect = (
+  id: string,
+  data: DirectPublishRequest,
+  signal?: AbortSignal,
+) =>
+  request<PublicationEvent>(`/clips/${encodeURIComponent(id)}/publish`, {
+    ...json("POST", data),
+    signal,
+  });
 export async function approveClip(id: string, version?: number) {
   await request(
     `/clips/${encodeURIComponent(id)}/approve`,
