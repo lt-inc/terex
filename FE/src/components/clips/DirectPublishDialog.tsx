@@ -623,6 +623,9 @@ function PublicationRow({ publication: p, onChanged }: { publication: Publicatio
   const [error, setError] = useState("");
   const loaded = useRef("");
   const state = p.state ?? p.status ?? "";
+  // Exhausted pre-submit failures may require attention without an uncertain
+  // final send. The retry endpoint still checks the durable final-send fence.
+  const preflightFailed = state === "needs_attention" && p.error_code === "upload_preflight_failed";
   const [busy, setBusy] = useState(false);
   async function act(action: "reconcile" | "retry" | "publish-now") {
     setBusy(true); setError("");
@@ -672,11 +675,11 @@ function PublicationRow({ publication: p, onChanged }: { publication: Publicatio
       {p.error && <p className="text-xs text-red-300">{p.error}</p>}
       <div className="flex flex-wrap gap-3 text-xs">
         <span className="text-slate-500">Публикация #{p.id}</span>
-        {p.platform === "tiktok" && state === "needs_attention" && (
+        {p.platform === "tiktok" && state === "needs_attention" && !preflightFailed && (
           <button className="text-indigo-300 underline" disabled={busy} onClick={() => void act("reconcile")}>Сверить результат без новой загрузки</button>
         )}
-        {["failed", "blocked"].includes(state) && (
-          <button className="text-indigo-300 underline" disabled={busy} onClick={() => void act(p.started_at ? "retry" : "publish-now")}>Повторить существующую публикацию</button>
+        {(["failed", "blocked"].includes(state) || preflightFailed) && (
+          <button className="text-indigo-300 underline" disabled={busy} onClick={() => void act(preflightFailed || p.started_at ? "retry" : "publish-now")}>Повторить существующую публикацию</button>
         )}
         {p.external_url && (
           <a
@@ -697,7 +700,8 @@ function PublicationRow({ publication: p, onChanged }: { publication: Publicatio
           {open ? "Скрыть историю" : "История"}
         </button>
       </div>
-      {state === "needs_attention" && <p className="text-xs text-amber-300">Результат требует сверки. Новую загрузку создавать нельзя; проверьте аккаунт и существующую публикацию.</p>}
+      {preflightFailed && <p className="text-xs text-amber-300">Подготовка завершилась ошибкой до публикации. Можно повторить эту запись; сервер проверит, что отправка ещё не начиналась.</p>}
+      {state === "needs_attention" && !preflightFailed && <p className="text-xs text-amber-300">Результат требует сверки. Новую загрузку создавать нельзя; проверьте аккаунт и существующую публикацию.</p>}
       {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
       {open && (
         <ul className="mt-1 flex flex-col gap-1 text-xs text-slate-400">
