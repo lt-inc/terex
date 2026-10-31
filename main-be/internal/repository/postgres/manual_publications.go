@@ -104,7 +104,8 @@ func (s *Store) ClipPublicationOptions(ctx context.Context, clip string) (domain
 			v.Platforms = []string{}
 		} else if !validMediaSHA(media.sha) || media.size <= 0 {
 			v.Platforms = []string{"youtube"}
-			v.Reason = "Доступно только для YouTube: TikTok требует подтверждённые SHA и размер. Измените медиа в редакторе и сохраните новый рендер либо выберите проверенный скачанный оригинал."
+			v.NeedsVerification = kind == "rendered"
+			v.Reason = "Для TikTok сначала нажмите «Подготовить для TikTok»: сервер проверит уже готовый видеофайл. Повторный рендер не нужен."
 		}
 		out.Variants = append(out.Variants, v)
 	}
@@ -201,7 +202,7 @@ func (s *Store) CreateManualPublication(ctx context.Context, clip string, u doma
 		return out, fmt.Errorf("%w: Аккаунт нужно подключить и подтвердить перед публикацией", domain.ErrConflict)
 	}
 	if platform == "tiktok" && (!validMediaSHA(media.sha) || media.size <= 0) {
-		return out, fmt.Errorf("%w: Для TikTok нужны подтверждённые SHA и размер: выберите проверенный оригинал или сохраните новый рендер", domain.ErrConflict)
+		return out, fmt.Errorf("%w: Сначала нажмите «Подготовить для TikTok» в окне публикации клипа", domain.ErrConflict)
 	}
 	if platform == "youtube" {
 		if err = publicationmetadata.Validate(r.Title, publicationmetadata.Compose(u.Caption, nil)); err != nil {

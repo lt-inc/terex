@@ -9,6 +9,7 @@ import {
   publishClipDirect,
   reconcileTikTokPublication,
   actPublication,
+  verifyPublicationMedia,
 } from "@/lib/api";
 import {
   MEDIA_EXPLANATION,
@@ -96,6 +97,8 @@ export default function DirectPublishDialog({
   const sending = useRef(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
   const optionsRef = useRef<DirectPublicationOptions | null>(null);
   const pollNow = useRef<() => void>(() => {});
 
@@ -197,6 +200,7 @@ export default function DirectPublishDialog({
   const canPublish =
     !locked &&
     !submitting &&
+    !verifying &&
     !!options &&
     !!platform &&
     !!account &&
@@ -273,6 +277,32 @@ export default function DirectPublishDialog({
       reviewed: true,
       ...(freshness ? { freshness_override: true } : {}),
     });
+  }
+
+  async function verifyMedia() {
+    if (!options || !mediaKind || verifying || locked || submitting) return;
+    setVerifying(true);
+    setVerifyError("");
+    setError("");
+    setNotice("");
+    try {
+      const updated = await verifyPublicationMedia(clipID, {
+        revision_id: options.revision_id,
+        expected_version: options.expected_version,
+        media_kind: mediaKind,
+      });
+      optionsRef.current = updated;
+      setOptions(updated);
+      setConfirmed("");
+      setPreviewed((p) => p.filter((k) => k !== reviewKey));
+      setNotice(
+        "Видео проверено. Посмотрите его и подтвердите публикацию.",
+      );
+    } catch (e) {
+      setVerifyError(message(e));
+    } finally {
+      setVerifying(false);
+    }
   }
 
   function openPreview() {
@@ -439,6 +469,32 @@ export default function DirectPublishDialog({
                       </p>
                     )}
                   </fieldset>
+
+                  {variant?.needs_verification && (
+                    <div className="flex flex-col gap-2 rounded-lg border border-amber-700 bg-amber-950/30 p-3">
+                      <p className="text-sm text-amber-200">
+                        Для публикации на TikTok требуется проверка существующего файла
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Сервер проверит готовый файл без повторного рендера. После проверки файл станет доступен для TikTok.
+                      </p>
+                      <div>
+                        <button
+                          type="button"
+                          className={`${button} bg-indigo-600 hover:bg-indigo-500`}
+                          disabled={verifying || locked || submitting}
+                          onClick={verifyMedia}
+                        >
+                          {verifying ? "Проверяем видео…" : "Подготовить для TikTok"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {verifyError && (
+                    <p role="alert" className="text-sm text-red-400">
+                      {verifyError}
+                    </p>
+                  )}
 
                   <label className="flex flex-col gap-1 text-xs text-slate-400">
                     Аккаунт
