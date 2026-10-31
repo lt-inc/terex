@@ -33,6 +33,19 @@ func (a *API) publishClip(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (a *API) verifyClipPublicationMedia(w http.ResponseWriter, r *http.Request) {
+	var in domain.VerifyPublicationMediaRequest
+	if !decode(w, r, &in) {
+		return
+	}
+	out, err := a.Workflow.VerifyPublicationMedia(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (a *API) clipEditor(w http.ResponseWriter, r *http.Request) {
 	out, err := a.Workflow.Editor(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {

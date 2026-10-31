@@ -19,6 +19,7 @@ type Coordinator interface {
 	Fail(context.Context, *FailRequest) (*Result, error)
 }
 type Gateway interface {
+	VerifyPublicationMedia(context.Context, *VerifyPublicationMediaRequest) (*MediaDigest, error)
 	OAuthURL(context.Context, *OAuthURLRequest) (*OAuthURLResponse, error)
 	OAuthExchange(context.Context, *OAuthExchangeRequest) (*Connection, error)
 	CheckConnection(context.Context, *ConnectionRequest) (*Connection, error)
@@ -38,7 +39,7 @@ func NewGatewayClient(conn grpc.ClientConnInterface) Gateway         { return &g
 
 func call[Q, R any](ctx context.Context, conn grpc.ClientConnInterface, method string, req *Q) (*R, error) {
 	timeout := 15 * time.Second
-	if strings.HasSuffix(method, "/VerifyUpload") {
+	if strings.HasSuffix(method, "/VerifyUpload") || strings.HasSuffix(method, "/VerifyPublicationMedia") {
 		timeout = 5 * time.Minute
 	}
 	if strings.HasSuffix(method, "/ChannelStats") {
@@ -92,6 +93,9 @@ func (c *coordinatorClient) Fail(ctx context.Context, q *FailRequest) (*Result, 
 }
 func (c *gatewayClient) OAuthURL(ctx context.Context, q *OAuthURLRequest) (*OAuthURLResponse, error) {
 	return call[OAuthURLRequest, OAuthURLResponse](ctx, c.conn, "/terex.workflow.v1.Gateway/OAuthURL", q)
+}
+func (c *gatewayClient) VerifyPublicationMedia(ctx context.Context, q *VerifyPublicationMediaRequest) (*MediaDigest, error) {
+	return call[VerifyPublicationMediaRequest, MediaDigest](ctx, c.conn, "/terex.workflow.v1.Gateway/VerifyPublicationMedia", q)
 }
 func (c *gatewayClient) OAuthExchange(ctx context.Context, q *OAuthExchangeRequest) (*Connection, error) {
 	return call[OAuthExchangeRequest, Connection](ctx, c.conn, "/terex.workflow.v1.Gateway/OAuthExchange", q)
@@ -158,6 +162,7 @@ func RegisterCoordinatorServer(reg grpc.ServiceRegistrar, srv Coordinator) {
 func RegisterGatewayServer(reg grpc.ServiceRegistrar, srv Gateway) {
 	const s = "terex.workflow.v1.Gateway"
 	reg.RegisterService(&grpc.ServiceDesc{ServiceName: s, HandlerType: (*Gateway)(nil), Methods: []grpc.MethodDesc{
+		method(s, "VerifyPublicationMedia", Gateway.VerifyPublicationMedia),
 		method(s, "OAuthURL", Gateway.OAuthURL), method(s, "OAuthExchange", Gateway.OAuthExchange), method(s, "CheckConnection", Gateway.CheckConnection), method(s, "Disconnect", Gateway.Disconnect), method(s, "EditorContext", Gateway.EditorContext), method(s, "ChannelStats", Gateway.ChannelStats), method(s, "PublicVideos", Gateway.PublicVideos), method(s, "ImportBackground", Gateway.ImportBackground), method(s, "WatermarkFrames", Gateway.WatermarkFrames),
 	}, Metadata: "workflow/workflow.proto"}, srv)
 }

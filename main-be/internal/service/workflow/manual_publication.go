@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"terex/main-be/internal/domain"
+	w "terex/proto/workflow"
 )
 
 func (s *Service) ClipPublicationOptions(ctx context.Context, clip string) (domain.ClipPublicationOptions, error) {
@@ -17,6 +18,30 @@ func (s *Service) ClipPublicationOptions(ctx context.Context, clip string) (doma
 			return domain.ClipPublicationOptions{}, err
 		}
 	} else if err != nil {
+		return domain.ClipPublicationOptions{}, err
+	}
+	return s.Repo.ClipPublicationOptions(ctx, clip)
+}
+
+func (s *Service) VerifyPublicationMedia(ctx context.Context, clip string, q domain.VerifyPublicationMediaRequest) (domain.ClipPublicationOptions, error) {
+	if q.RevisionID <= 0 || q.Version <= 0 || q.MediaKind != "rendered" {
+		return domain.ClipPublicationOptions{}, fmt.Errorf("%w: Выберите готовую версию клипа", domain.ErrInvalid)
+	}
+	ref, err := s.Repo.PublicationMediaForVerification(ctx, clip, q)
+	if err != nil {
+		return domain.ClipPublicationOptions{}, err
+	}
+	if s.Gateway == nil {
+		return domain.ClipPublicationOptions{}, fmt.Errorf("Проверка видео временно недоступна")
+	}
+	proof, err := s.Gateway.VerifyPublicationMedia(ctx, &w.VerifyPublicationMediaRequest{Media: ref})
+	if err != nil {
+		return domain.ClipPublicationOptions{}, fmt.Errorf("Не удалось проверить видео: %w", err)
+	}
+	if proof == nil {
+		return domain.ClipPublicationOptions{}, fmt.Errorf("Проверка видео не вернула результат")
+	}
+	if err = s.Repo.RecordPublicationMediaVerification(ctx, clip, q, ref, *proof); err != nil {
 		return domain.ClipPublicationOptions{}, err
 	}
 	return s.Repo.ClipPublicationOptions(ctx, clip)

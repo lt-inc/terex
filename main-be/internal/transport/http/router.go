@@ -177,6 +177,7 @@ func (a *API) Router() http.Handler {
 		r.Post("/clips/{id}/reject", a.rejectClip)
 		if a.Workflow != nil {
 			r.Get("/clips/{id}/publication-options", a.clipPublicationOptions)
+			r.Post("/clips/{id}/verify-publication-media", a.verifyClipPublicationMedia)
 			r.Post("/clips/{id}/publish", a.publishClip)
 			r.Get("/clips/{id}/editor", a.clipEditor)
 			r.Put("/clips/{id}/editor", a.saveClipEditor)

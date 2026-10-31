@@ -11,6 +11,7 @@ service Coordinator {
   rpc Fail(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
 }
 service Gateway {
+	rpc VerifyPublicationMedia(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
   rpc OAuthURL(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
   rpc OAuthExchange(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
   rpc CheckConnection(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
