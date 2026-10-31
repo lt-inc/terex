@@ -117,8 +117,11 @@ YouTube также поддерживает unlisted, TikTok — private/public.
 imports). Он публикуется целиком, без обрезки и оформления из редактора.
 Обычные готовые клипы доступны через rendered-версию. Для TikTok обязательны SHA
 и размер: старый rendered-файл без этих данных доступен только YouTube; для TikTok
-нужно выбрать verified-оригинал либо изменить медиа в редакторе и сохранить новый
-рендер. Варианты и причины недоступности указаны в окне публикации.
+сервер предложит кнопку "Подготовить для TikTok", которая проверит существующий
+файл без повторного рендера. После успешной проверки файл станет доступен для
+публикации на TikTok. Если проверка недоступна, нужно выбрать verified-оригинал
+либо изменить медиа в редакторе и сохранить новый рендер. Варианты и причины
+недоступности указаны в окне публикации.
 
 После сетевого тайм-аута браузер сохраняет тот же UUID и payload для безопасного
 повтора. Сервер хранит соответствие UUID → публикация; другой payload под тем же
@@ -127,7 +130,10 @@ UUID отклоняется. Новый UUID также не разрешает 
 публикацию нужно открыть и обработать отдельно. Произвольные media URL API не принимает.
 
 API: `GET /api/clips/{id}/publication-options` возвращает pinned revision/version,
-варианты с `eligible`, `platforms`, `reason` и публикации клипа;
+варианты с `eligible`, `platforms`, `reason`, `needs_verification` и публикации клипа;
+`POST /api/clips/{id}/verify-publication-media` принимает `revision_id`,
+`expected_version`, `media_kind` и возвращает обновлённые `DirectPublicationOptions`
+после проверки существующего файла без повторного рендера;
 `POST /api/clips/{id}/publish` принимает `request_id`, `revision_id`,
 `expected_version`, `media_kind`, `account_id`, `platform`, `caption`, `visibility`,
 `reviewed: true` и опциональный `freshness_override`. GET не выдаёт видео-URL;

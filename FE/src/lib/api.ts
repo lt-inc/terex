@@ -9,6 +9,7 @@ import type {
   Channel,
   Clip,
   ClipEditor,
+  DirectMediaKind,
   DirectPublicationOptions,
   DirectPublishRequest,
   PublicationEvent,
@@ -210,6 +211,23 @@ export const fetchPublicationOptions = (id: string, signal?: AbortSignal) =>
   request<DirectPublicationOptions>(
     `/clips/${encodeURIComponent(id)}/publication-options`,
     { signal },
+  ).then((data) => ({
+    ...data,
+    variants: data.variants ?? [],
+    publications: data.publications ?? [],
+  }));
+export const verifyPublicationMedia = (
+  id: string,
+  data: {
+    revision_id: number;
+    expected_version: number;
+    media_kind: DirectMediaKind;
+  },
+  signal?: AbortSignal,
+) =>
+  request<DirectPublicationOptions>(
+    `/clips/${encodeURIComponent(id)}/verify-publication-media`,
+    { ...json("POST", data), signal },
   ).then((data) => ({
     ...data,
     variants: data.variants ?? [],

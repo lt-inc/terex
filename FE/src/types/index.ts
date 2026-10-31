@@ -271,6 +271,7 @@ export interface DirectPublicationVariant {
   eligible: boolean;
   reason?: string;
   platforms?: DirectPlatform[];
+  needs_verification?: boolean;
 }
 
 export interface DirectPublicationOptions {
