@@ -85,6 +85,10 @@ func (s *Service) request(ctx context.Context, method, path string, payload any)
 				message = "TikTok-аккаунт ещё не подключён. Передайте сессию через расширение"
 			case "A different TikTok account is logged in. Connect the original account.":
 				message = "В браузере открыт другой TikTok-аккаунт. Войдите в исходный аккаунт"
+			case "Connect/export the account before opening browser help":
+				message = "Браузер аккаунта ещё не инициализирован. Подключите аккаунт и повторите"
+			case "Another operator browser is open; close it first":
+				message = "Уже открыт браузер другого оператора. Закройте его и повторите"
 			case "Proxy mode must be default, direct or custom":
 				message = "Выберите режим прокси default, direct или custom"
 			case "A proxy address is only accepted in custom mode":
@@ -156,6 +160,19 @@ func (s *Service) Connection(ctx context.Context, id int64, action string) (doma
 		method = "DELETE"
 	}
 	if action == "browser-help" {
+		// The uploader refuses help for an account with no encrypted state. Read
+		// the real status first and initialize only a disconnected account via
+		// the normal pairing start (immutable expected identity, no cookies);
+		// pairing/connected/needs_reauth keep their generation, session and route.
+		current, err := s.request(ctx, "GET", path, nil)
+		if err != nil {
+			return current, err
+		}
+		if current.Status == "disconnected" {
+			if _, err = s.Connect(ctx, id); err != nil {
+				return domain.TikTokConnection{}, err
+			}
+		}
 		method = "POST"
 		path += "/browser-help"
 	}
